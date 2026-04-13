@@ -948,8 +948,16 @@ export async function resolveServiceCandidatesFromText(
 
   const bestResolvableOverlapCount = bestResolvableOverlapTokens.length;
 
+    const hasDirectServiceEvidence = bestNameEvidenceCount >= 2;
+
+  const hasStrongVariantEvidence =
+    bestVariantEvidenceCount >= 2 &&
+    bestResolvableOverlapCount >= 2 &&
+    (best?.score || 0) >= ENTITY_STRONG_THRESHOLD &&
+    marginVsSecond >= ENTITY_CLEAR_MARGIN;
+
   const exactEntityMatch =
-    bestNameEvidenceCount >= 2 || bestVariantEvidenceCount >= 1;
+    hasDirectServiceEvidence || hasStrongVariantEvidence;
 
   const strongSingleEntityCandidate =
     Boolean(best?.hasResolvableEntityEvidence) &&
@@ -958,7 +966,6 @@ export async function resolveServiceCandidatesFromText(
     bestResolvableOverlapCount >= MIN_RESOLVABLE_OVERLAP &&
     (
       bestNameEvidenceCount >= 1 ||
-      bestVariantEvidenceCount >= 1 ||
       (best?.dominantOverlapCount || 0) >= 2
     );
 
@@ -966,6 +973,42 @@ export async function resolveServiceCandidatesFromText(
     Boolean(best?.hasResolvableEntityEvidence) &&
     bestResolvableOverlapCount >= MIN_RESOLVABLE_OVERLAP &&
     (exactEntityMatch || strongSingleEntityCandidate);
+
+  const bestOnlyVariantDriven =
+    Boolean(best) &&
+    bestNameEvidenceCount === 0 &&
+    bestVariantEvidenceCount > 0 &&
+    (best?.overlapNameTokens?.length || 0) === 0 &&
+    (best?.overlapVariantTokens?.length || 0) > 0;
+
+  const bestVariants = Array.isArray(best?.cand.variants) ? best.cand.variants : [];
+  const bestHasMultipleVariants = bestVariants.length > 1;
+
+  const familyLikeQuery =
+    observedQueryTokens.length >= 2 &&
+    bestResolvableOverlapCount < observedQueryTokens.length;
+
+  if (best && bestOnlyVariantDriven && bestHasMultipleVariants && familyLikeQuery) {
+    console.log(
+      "[RESOLVE-SERVICE] evidencia solo de variante en query amplia, evitando auto-resolver entidad",
+      {
+        userText,
+        label: best.cand.label,
+        score: best.score,
+        bestNameEvidenceCount,
+        bestVariantEvidenceCount,
+        bestResolvableOverlapCount,
+        observedQueryTokens,
+      }
+    );
+
+    return {
+      kind: "ambiguous",
+      hit: null,
+      candidates:
+        ambiguousCandidates.length > 0 ? ambiguousCandidates : topCandidates,
+    };
+  }
 
   if (!best || best.score < BASE_THRESHOLD || !enoughEvidence) {
     console.log("[RESOLVE-SERVICE] evidencia insuficiente, devolviendo null", {
@@ -1127,7 +1170,6 @@ export async function resolveServiceCandidatesFromText(
     };
   }
 
-  const bestVariants = Array.isArray(best?.cand.variants) ? best.cand.variants : [];
   const hasMultipleVariants = bestVariants.length > 1;
   const hasExplicitVariantEvidence =
     (best?.exactVariantHits || 0) > 0 ||

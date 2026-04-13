@@ -607,16 +607,52 @@ export function classifyCatalogReferenceTurn(
   // 2) EXPLICIT ENTITY CANDIDATE
   // =========================================================
   if (explicitEntityCandidate?.id) {
+    const explicitEntityScore = Number(explicitEntityCandidate.score || 0);
+    const lowConfidenceEntityCandidate = explicitEntityScore < 0.6;
+
     notes.push("explicit_entity_candidate_from_catalog_matcher");
-    notes.push(
-      `explicit_entity_score:${Number(explicitEntityCandidate.score || 0)}`
-    );
+    notes.push(`explicit_entity_score:${explicitEntityScore}`);
+
+    if (lowConfidenceEntityCandidate) {
+      notes.push("explicit_entity_candidate_not_authoritative_due_to_low_score");
+
+      result.kind = "catalog_overview";
+      result.confidence = Math.max(0.58, Math.min(0.72, explicitEntityScore));
+
+      result.signals.hasCatalogScope = true;
+      result.signals.hasSpecificEntityCandidate = false;
+      result.signals.hasVariantCandidate = false;
+      result.signals.hasFamilyCandidate = false;
+
+      result.shouldUseContextFirst = false;
+      result.shouldResolvePluralCatalog = true;
+      result.shouldResolveFamily = false;
+      result.shouldResolveEntity = false;
+      result.shouldResolveVariant = false;
+      result.shouldAskDisambiguation = false;
+
+      result.targetLevel = "catalog";
+      result.targetServiceId = null;
+      result.targetServiceName = null;
+      result.targetVariantId = null;
+      result.targetVariantName = null;
+      result.targetFamilyKey = null;
+      result.targetFamilyName = null;
+
+      if (result.intent === "unknown") {
+        result.intent = "price_or_plan";
+      }
+
+      result.debug.notes = notes;
+      return result;
+    }
+
     notes.push("explicit_entity_candidate_accepted_as_authoritative_signal");
 
     result.kind = "entity_specific";
     result.confidence = Math.max(
       0.8,
-      Math.min(0.96, Number(explicitEntityCandidate.score || 0))
+      Math.min(0.96, explicitEntityScore)
     );
 
     result.signals.hasCatalogScope = true;
