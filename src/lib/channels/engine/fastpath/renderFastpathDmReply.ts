@@ -368,6 +368,7 @@ async function buildGroundedFrameOnly(input: {
   isInfoGeneralOverviewTurn: boolean;
   isResolvedCatalogAnswer: boolean;
   isCatalogChoiceReply: boolean;
+  isActionLinkResolvedCatalogReply: boolean;
 }): Promise<{ intro: string | null; closing: string | null }> {
   const frameTaskRules = input.isCatalogChoiceReply
     ? [
@@ -395,7 +396,9 @@ async function buildGroundedFrameOnly(input: {
     ? [
         "This is a resolved grounded catalog answer.",
         "Return exactly one short intro before the canonical body.",
-        "Return exactly one short closing after the canonical body.",
+        input.isActionLinkResolvedCatalogReply
+          ? "For action-link continuation turns, closing must be null."
+          : "Return exactly one short closing after the canonical body.",
         "You are only framing the canonical body. The body itself is already resolved and grounded by the system.",
         "The intro must be brief, neutral-to-consultative, and natural.",
         "The closing must be brief, consultative, and natural.",
@@ -410,7 +413,9 @@ async function buildGroundedFrameOnly(input: {
         "The closing must never ask for more information, more details, or more explanation about the same plan, service, or variant already explained.",
         "The closing must never imply that the system still owes the user basic information about the same item.",
         "The closing should only help the user do one of these: proceed, compare another option, book, or talk to a person.",
-        "If there is no strong next step, return null for closing.",
+        input.isActionLinkResolvedCatalogReply
+          ? "For action-link continuation turns, always return null for closing."
+          : "If there is no strong next step, return null for closing.",
         "If in doubt, return null for intro and/or closing rather than inventing content.",
         "The closing must not use phrases equivalent to asking for more details or more information about the same item.",
       ]
@@ -651,6 +656,15 @@ export async function renderFastpathDmReply(
 
   const catalogPayload = fp?.catalogPayload;
 
+  const resolvedCatalogPresentationMode =
+    catalogPayload?.kind === "resolved_catalog_answer"
+      ? String(catalogPayload.presentationMode || "full_detail").trim().toLowerCase()
+      : "full_detail";
+
+  const isActionLinkResolvedCatalogReply =
+    catalogPayload?.kind === "resolved_catalog_answer" &&
+    resolvedCatalogPresentationMode === "action_link";
+
   const isServiceChoiceReply = catalogPayload?.kind === "service_choice";
   const isVariantChoiceReply = catalogPayload?.kind === "variant_choice";
   const isCatalogChoiceReply = isServiceChoiceReply || isVariantChoiceReply;
@@ -789,6 +803,7 @@ export async function renderFastpathDmReply(
     );
 
   const shouldAllowOutro =
+    !isActionLinkResolvedCatalogReply &&
     (!bypassWriterModel ||
       isResolvedCatalogAnswer ||
       isCatalogListReply ||
@@ -805,6 +820,7 @@ export async function renderFastpathDmReply(
     );
 
   const shouldEndWithSalesQuestion =
+    !isActionLinkResolvedCatalogReply &&
     !replyPolicy.canonicalBodyOwnsClosing &&
     !isCatalogChoiceReply &&
     (
@@ -911,14 +927,17 @@ export async function renderFastpathDmReply(
           "The intro must not repeat the exact title or heading of the plan or variant if the canonical body already starts with it.",
           "Do not restate, preview, summarize, or paraphrase facts already contained in the canonical body.",
           "Do not mention prices, numbers, includes, service details, schedules, locations, policies, or links outside the canonical body.",
-          "After the canonical body, add exactly one short closing move only if it helps the user take a real next step.",
-          "The closing must be consultative, natural, and sales-oriented.",
-          "Do not ask whether the user wants more information, more details, or more explanation about the same plan or variant that was just explained.",
+          isActionLinkResolvedCatalogReply
+            ? "This is an action-link continuation turn. Do not add any closing question, CTA, or follow-up after the canonical body. Closing must be null."
+            : "After the canonical body, add exactly one short closing move only if it helps the user take a real next step.",
+          isActionLinkResolvedCatalogReply
+            ? "Do not ask whether the user wants to proceed, reserve, book, or receive the link if the canonical body already contains the action link."
+            : "The closing must be consultative, natural, and sales-oriented.",
+          isActionLinkResolvedCatalogReply
+            ? "Do not ask any question after the canonical body for action-link continuation turns."
+            : "Do not ask whether the user wants more information, more details, or more explanation about the same plan or variant that was just explained.",
           "Do not use generic closings that reopen the same informational question already answered.",
-          "Prefer a closing that helps the user proceed, compare another option, book, or talk to a person.",
-          "If no real next step is available, closing should be null.",
           "If PROMPT_BASE contains a tenant-specific closing policy, follow it only if it does not conflict with the rules above.",
-          "The closing must not use phrases equivalent to asking for more details or more information about the same item.",
           "The body itself must remain unchanged and in the same order.",
           tenantClosingPolicyInstruction,
           commercialClosingInstruction,
@@ -998,6 +1017,7 @@ export async function renderFastpathDmReply(
       isInfoGeneralOverviewTurn,
       isResolvedCatalogAnswer,
       isCatalogChoiceReply,
+      isActionLinkResolvedCatalogReply,
     });
 
     if (isCatalogChoiceReply && !String(frame.intro || "").trim()) {
@@ -1014,6 +1034,7 @@ export async function renderFastpathDmReply(
         isInfoGeneralOverviewTurn,
         isResolvedCatalogAnswer,
         isCatalogChoiceReply,
+        isActionLinkResolvedCatalogReply,
       });
     }
 
