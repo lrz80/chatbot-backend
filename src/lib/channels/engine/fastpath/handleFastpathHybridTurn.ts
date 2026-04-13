@@ -452,6 +452,52 @@ function extractCanonicalCatalogResolutionMeta(input: {
   };
 }
 
+function buildPendingCatalogChoiceClassification(convoCtx: any) {
+  const pending = convoCtx?.pendingCatalogChoice;
+
+  if (!pending?.kind) return null;
+
+  if (pending.kind === "service_choice") {
+    return {
+      kind: "entity_specific",
+      targetLevel: "service",
+      targetServiceId: String(
+        pending.selectedServiceId || pending.serviceId || ""
+      ).trim() || null,
+      targetServiceName: String(
+        pending.selectedServiceName || pending.serviceName || ""
+      ).trim() || null,
+      targetVariantId: null,
+      targetVariantName: null,
+      targetFamilyKey: null,
+      shouldResolveEntity: true,
+      shouldAskDisambiguation: false,
+      disambiguationType: "none",
+    };
+  }
+
+  if (pending.kind === "variant_choice") {
+    return {
+      kind: "variant_specific",
+      targetLevel: "variant",
+      targetServiceId: String(
+        pending.selectedServiceId || pending.serviceId || ""
+      ).trim() || null,
+      targetServiceName: String(
+        pending.selectedServiceName || pending.serviceName || ""
+      ).trim() || null,
+      targetVariantId: null,
+      targetVariantName: null,
+      targetFamilyKey: null,
+      shouldResolveEntity: false,
+      shouldAskDisambiguation: false,
+      disambiguationType: "variant",
+    };
+  }
+
+  return null;
+}
+
 export async function handleFastpathHybridTurn(
   args: FastpathHybridArgs
 ): Promise<FastpathHybridResult> {
