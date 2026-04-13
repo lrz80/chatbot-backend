@@ -393,9 +393,7 @@ function buildIntentRoutingHints(args: {
     scope === "entity" || scope === "family" || scope === "variant";
 
   const isCatalogOverviewIntent =
-    intent === "precio" ||
-    intent === "info_servicio" ||
-    intent === "info_general";
+    intent === "precio" || intent === "info_servicio";
 
   const catalogScope: IntentRoutingHints["catalogScope"] =
     isCatalogTargetedScope
@@ -405,9 +403,9 @@ function buildIntentRoutingHints(args: {
       : "none";
 
   const businessInfoScope: IntentRoutingHints["businessInfoScope"] =
-    scope === "general" && hasBusinessInfoFacet
+    hasBusinessInfoFacet
       ? "facet"
-      : scope === "general" && intent === "info_general"
+      : intent === "info_general" && scope === "general"
       ? "overview"
       : "none";
 
