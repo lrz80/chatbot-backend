@@ -92,6 +92,7 @@ function shouldUseConversationAnchor(input: {
   canonicalCatalogRouteDecision: {
     resolutionKind?: string | null;
   };
+  hasCurrentTurnCatalogEvidence: boolean;
 }): boolean {
   if (!input.conversationAnchor?.domain) {
     return false;
@@ -138,6 +139,10 @@ function shouldUseConversationAnchor(input: {
     return false;
   }
 
+  if (!input.hasCurrentTurnCatalogEvidence) {
+    return false;
+  }
+
   if (input.conversationAnchor.domain === "catalog") {
     return true;
   }
@@ -163,6 +168,7 @@ function decideHybridDomain(input: {
   asksLocation: boolean;
   asksAvailability: boolean;
   previewShouldRouteCatalog: boolean;
+  previewClassificationKind: string;
   detectedFacets?: IntentFacets | null;
   detectedRoutingHints?: IntentRoutingHints | null;
   canonicalCatalogRouteDecision: {
@@ -225,6 +231,17 @@ function decideHybridDomain(input: {
     };
   }
 
+  const canonicalResolutionKind = String(
+    input.canonicalCatalogRouteDecision?.resolutionKind || "none"
+  ).trim();
+
+  const hasCurrentTurnCatalogEvidence =
+    canonicalResolutionKind === "resolved_single" ||
+    canonicalResolutionKind === "resolved_service_variant_ambiguous" ||
+    canonicalResolutionKind === "ambiguous" ||
+    input.previewClassificationKind === "entity_specific" ||
+    input.previewClassificationKind === "catalog_family";
+
   if (
     shouldUseConversationAnchor({
       conversationAnchor: input.conversationAnchor,
@@ -238,6 +255,7 @@ function decideHybridDomain(input: {
       asksAvailability: input.asksAvailability,
       detectedRoutingHints: input.detectedRoutingHints || null,
       canonicalCatalogRouteDecision: input.canonicalCatalogRouteDecision,
+      hasCurrentTurnCatalogEvidence,
     })
   ) {
     return {
@@ -641,6 +659,7 @@ export async function handleFastpathHybridTurn(
     asksLocation,
     asksAvailability,
     previewShouldRouteCatalog: previewPolicy.shouldRouteCatalog === true,
+    previewClassificationKind: previewClassification.kind,
     detectedFacets: detectedFacets || null,
     detectedRoutingHints: detectedRoutingHints || null,
     canonicalCatalogRouteDecision: rawCanonicalCatalogRouteDecision,
