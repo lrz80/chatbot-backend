@@ -287,16 +287,24 @@ export async function runCatalogDomainTurn(
     args.catalogRouteContext?.canonicalCatalogResolution || null
   );
 
-  const effectiveCatalogReferenceClassification =
+  const hasPendingCatalogChoice =
+    Boolean(initialConvoCtx?.pendingCatalogChoice) &&
+    (initialConvoCtx?.pendingCatalogChoice?.kind === "service_choice" ||
+        initialConvoCtx?.pendingCatalogChoice?.kind === "variant_choice");
+
+  const baseEffectiveCatalogReferenceClassification =
     buildEffectiveCatalogReferenceClassificationFromCanonical({
-      baseClassification: catalogReferenceClassification,
-      canonicalResolution: canonicalCatalogResolution,
+        baseClassification: catalogReferenceClassification,
+        canonicalResolution: canonicalCatalogResolution,
     });
 
-  const hasPendingCatalogChoice =
-    Boolean(convoCtx?.pendingCatalogChoice) &&
-    (convoCtx?.pendingCatalogChoice?.kind === "service_choice" ||
-      convoCtx?.pendingCatalogChoice?.kind === "variant_choice");
+  const normalizedUserInput = String(userInput || "").trim();
+  const isExplicitPendingChoiceSelection = /^[1-9]\d*$/.test(normalizedUserInput);
+
+  const effectiveCatalogReferenceClassification =
+    hasPendingCatalogChoice && isExplicitPendingChoiceSelection
+      ? undefined
+      : baseEffectiveCatalogReferenceClassification;
 
   const q = userInput.toLowerCase().trim();
 
