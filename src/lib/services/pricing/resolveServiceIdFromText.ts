@@ -988,6 +988,55 @@ export async function resolveServiceCandidatesFromText(
     observedQueryTokens.length >= 2 &&
     bestResolvableOverlapCount < observedQueryTokens.length;
 
+    const structuralAmbiguousCandidates = scored
+    .map((s): ResolveServiceCandidate | null => {
+      const observedNameOverlap = uniqueOverlapTokens(
+        observedQueryTokens,
+        s.cand.serviceNameTokens
+      );
+
+      const observedCategoryOverlap = uniqueOverlapTokens(
+        observedQueryTokens,
+        s.cand.categoryTokens
+      );
+
+      const observedTipoOverlap = uniqueOverlapTokens(
+        observedQueryTokens,
+        s.cand.tipoTokens
+      );
+
+      const hasStructuralEvidence =
+        observedNameOverlap.length > 0 ||
+        observedCategoryOverlap.length > 0 ||
+        observedTipoOverlap.length > 0;
+
+      if (!hasStructuralEvidence) {
+        return null;
+      }
+
+      const candidate: ResolveServiceCandidate = {
+        id: s.cand.serviceId,
+        name: s.cand.label,
+        score: s.score,
+        category: s.cand.category || null,
+        tipo: s.cand.tipo || null,
+        parentServiceId: s.cand.parentServiceId || null,
+        catalogRole: s.cand.catalogRole || null,
+        overlapNameTokens: observedNameOverlap,
+        overlapTipoTokens: observedTipoOverlap,
+        overlapSupportTokens: s.overlapSupportTokens || [],
+        dominantOverlapTokens: s.dominantOverlapTokens || [],
+      };
+
+      return candidate;
+    })
+    .filter((item): item is ResolveServiceCandidate => item !== null)
+    .filter(
+      (item, index, arr) =>
+        arr.findIndex((x) => x.id === item.id) === index
+    )
+    .slice(0, 5);
+
   if (best && bestOnlyVariantDriven && bestHasMultipleVariants && familyLikeQuery) {
     console.log(
       "[RESOLVE-SERVICE] evidencia solo de variante en query amplia, evitando auto-resolver entidad",
@@ -999,14 +1048,27 @@ export async function resolveServiceCandidatesFromText(
         bestVariantEvidenceCount,
         bestResolvableOverlapCount,
         observedQueryTokens,
+        structuralAmbiguousCandidates: structuralAmbiguousCandidates.map((c) => ({
+          id: c.id,
+          name: c.name,
+          overlapNameTokens: c.overlapNameTokens,
+          overlapTipoTokens: c.overlapTipoTokens,
+        })),
       }
     );
 
+    if (structuralAmbiguousCandidates.length >= 2) {
+      return {
+        kind: "ambiguous",
+        hit: null,
+        candidates: structuralAmbiguousCandidates,
+      };
+    }
+
     return {
-      kind: "ambiguous",
+      kind: "none",
       hit: null,
-      candidates:
-        ambiguousCandidates.length > 0 ? ambiguousCandidates : topCandidates,
+      candidates: [],
     };
   }
 
