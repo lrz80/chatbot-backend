@@ -160,10 +160,9 @@ router.get("/connect", authenticateUser, async (req: Request, res: Response) => 
       redirect_uri: redirectUri,
       response_type: "code",
       scope: [
-        "https://www.googleapis.com/auth/calendar",
-        "openid",
-        "email",
-        "profile",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.events.freebusy",
+        "https://www.googleapis.com/auth/userinfo.email",
       ].join(" "),
       access_type: "offline",
       prompt: "consent",
@@ -261,24 +260,7 @@ router.get("/callback", async (req: Request, res: Response) => {
 
     let refreshEncToStore: string | null = null;
 
-    // ✅ 1) Buscar el calendarId real del "primary"
-    let calendarIdReal: string = "primary";
-
-    try {
-      const calListRes = await fetch("https://www.googleapis.com/calendar/v3/users/me/calendarList", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      const calListJson: any = await calListRes.json();
-
-      const primary = Array.isArray(calListJson?.items)
-        ? calListJson.items.find((c: any) => c?.primary === true)
-        : null;
-
-      if (primary?.id) calendarIdReal = String(primary.id);
-    } catch (e) {
-      console.log("⚠️ Could not fetch calendarList, using primary fallback");
-    }
+    const calendarIdReal = "primary";
 
     if (refreshToken) {
       refreshEncToStore = encryptToken(String(refreshToken));

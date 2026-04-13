@@ -26,6 +26,50 @@ function toNullableNumber(value: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function normalizeDetailLine(value: string): string {
+  return String(value || "").trim().replace(/^[-•*]\s*/, "");
+}
+
+function buildCanonicalDetailBlock(params: {
+  idiomaDestino: string;
+  serviceDescription: string;
+}): string {
+  const rawLines = String(params.serviceDescription || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!rawLines.length) {
+    return "";
+  }
+
+  const normalizedLines = rawLines.map(normalizeDetailLine);
+
+  const headingIndex = normalizedLines.findIndex((line) => {
+    const lowered = line.toLowerCase();
+    return lowered === "incluye:" || lowered === "includes:";
+  });
+
+  if (headingIndex >= 0) {
+    const heading = params.idiomaDestino === "en" ? "Includes:" : "Incluye:";
+    const detailItems = normalizedLines
+      .slice(headingIndex + 1)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (!detailItems.length) {
+      return heading;
+    }
+
+    return [
+      heading,
+      ...detailItems.map((line) => `• ${line}`),
+    ].join("\n");
+  }
+
+  return normalizedLines.map((line) => `• ${line}`).join("\n");
+}
+
 export async function handleSingleServiceCatalog(
   input: HandleSingleServiceCatalogInput
 ): Promise<FastpathResult> {
@@ -301,7 +345,7 @@ export async function handleSingleServiceCatalog(
       );
 
       let priceText =
-        input.idiomaDestino === "en" ? "price available" : "precio disponible";
+        input.idiomaDestino === "es" ? "precio disponible" : "price available";
 
       if (priceNum !== null) {
         priceText =
@@ -310,31 +354,71 @@ export async function handleSingleServiceCatalog(
             : `${priceNum.toFixed(2)} ${resolvedCurrency}`;
       }
 
-      const detailLines = serviceDescription
-        ? serviceDescription
-            .split(/\r?\n/)
-            .map((l: string) => l.trim())
-            .filter((l: string) => l.length > 0)
-        : [];
+      const variantUrl = toTrimmedString(chosenVariant.variant_url);
 
-      const bulletsText = detailLines.length
-        ? detailLines.map((l: string) => `• ${l}`).join("\n")
-        : "";
+      const detailBlock = buildCanonicalDetailBlock({
+        idiomaDestino: input.idiomaDestino,
+        serviceDescription,
+      });
+
+      const lastVariantId = toTrimmedString(input.convoCtx?.last_variant_id);
+      const lastReplySource = toTrimmedString(input.convoCtx?.last_reply_source).toLowerCase();
+
+      const isContinuationOnSameVariant =
+        referenceKind === "referential_followup" &&
+        Boolean(targetVariantId) &&
+        targetVariantId === toTrimmedString(chosenVariant.id) &&
+        lastVariantId === toTrimmedString(chosenVariant.id) &&
+        (
+          lastReplySource === "catalog_db" ||
+          lastReplySource === "price_fastpath_db"
+        );
+
+      const presentationMode =
+        isContinuationOnSameVariant && variantUrl
+          ? "action_link"
+          : "full_detail";
 
       const canonicalBody =
-        input.idiomaDestino === "en"
-          ? `${baseName} — ${variantName}\nPrice: ${priceText}${
-              bulletsText ? `\n\nIncludes:\n${bulletsText}` : ""
-            }`
-          : `${baseName} — ${variantName}\nPrecio: ${priceText}${
-              bulletsText ? `\n\nIncluye:\n${bulletsText}` : ""
-            }`;
+        presentationMode === "action_link"
+          ? variantUrl
+          : [
+              `${baseName} — ${variantName}`,
+              input.idiomaDestino === "es"
+                ? `Precio: ${priceText}`
+                : `Price: ${priceText}`,
+              detailBlock || "",
+              variantUrl || "",
+            ]
+              .filter(Boolean)
+              .join("\n\n");
 
       return {
         handled: true,
         reply: canonicalBody,
         source: "price_fastpath_db",
         intent: "precio",
+        catalogPayload: {
+          kind: "resolved_catalog_answer",
+          scope: "variant",
+          presentationMode,
+          serviceId: targetServiceId,
+          serviceName: baseName || null,
+          variantId: toTrimmedString(chosenVariant.id),
+          variantName: variantName || null,
+          canonicalBlocks: {
+            servicesBlock: `${baseName} — ${variantName}`,
+            priceBlock:
+              input.idiomaDestino === "es"
+                ? `Precio: ${priceText}`
+                : `Price: ${priceText}`,
+            includesBlock: detailBlock || null,
+            scheduleBlock: null,
+            locationBlock: null,
+            availabilityBlock: null,
+            linkBlock: variantUrl || null,
+          },
+        },
         ctxPatch: {
           last_service_id: targetServiceId,
           last_service_name: baseName || null,
@@ -342,7 +426,7 @@ export async function handleSingleServiceCatalog(
 
           last_variant_id: toTrimmedString(chosenVariant.id),
           last_variant_name: variantName || null,
-          last_variant_url: null,
+          last_variant_url: variantUrl || null,
           last_variant_at: Date.now(),
 
           last_price_option_label: variantName || null,

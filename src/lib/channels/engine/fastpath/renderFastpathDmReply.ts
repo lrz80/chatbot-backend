@@ -178,6 +178,7 @@ type CatalogPayload =
   | {
       kind: "resolved_catalog_answer";
       scope: "service" | "variant" | "family" | "overview";
+      presentationMode?: "full_detail" | "action_link";
       serviceId?: string | null;
       serviceName?: string | null;
       variantId?: string | null;
@@ -229,6 +230,18 @@ function buildResolvedCatalogCanonicalBody(input: {
   catalogPayload: Extract<CatalogPayload, { kind: "resolved_catalog_answer" }>;
 }): string {
   const blocks = input.catalogPayload.canonicalBlocks || {};
+  const presentationMode = String(
+    input.catalogPayload.presentationMode || "full_detail"
+  ).trim().toLowerCase();
+
+  if (presentationMode === "action_link") {
+    return [
+      normalizeText(blocks.linkBlock),
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+  }
 
   return [
     normalizeText(blocks.servicesBlock),
