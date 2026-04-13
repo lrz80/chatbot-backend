@@ -117,17 +117,24 @@ function stripJsonCodeFences(value: string): string {
     .trim();
 }
 
-function parseFrameJson(value: string): { intro: string | null; closing: string | null } {
+type FrameClosingType = "availability_statement" | "question" | "none";
+
+function parseFrameJson(value: string): {
+  intro: string | null;
+  closing: string | null;
+  closingType: FrameClosingType;
+} {
   const raw = stripJsonCodeFences(value);
 
   if (!raw) {
-    return { intro: null, closing: null };
+    return { intro: null, closing: null, closingType: "none" };
   }
 
   try {
     const parsed = JSON.parse(raw) as {
       intro?: unknown;
       closing?: unknown;
+      closingType?: unknown;
     };
 
     const intro =
@@ -140,9 +147,20 @@ function parseFrameJson(value: string): { intro: string | null; closing: string 
         ? parsed.closing.trim()
         : null;
 
-    return { intro, closing };
+    const closingTypeRaw =
+      typeof parsed?.closingType === "string"
+        ? parsed.closingType.trim().toLowerCase()
+        : "none";
+
+    const closingType: FrameClosingType =
+      closingTypeRaw === "availability_statement" ||
+      closingTypeRaw === "question"
+        ? closingTypeRaw
+        : "none";
+
+    return { intro, closing, closingType };
   } catch {
-    return { intro: null, closing: null };
+    return { intro: null, closing: null, closingType: "none" };
   }
 }
 
@@ -371,7 +389,11 @@ async function buildGroundedFrameOnly(input: {
   isCatalogChoiceReply: boolean;
   isActionLinkResolvedCatalogReply: boolean;
   resolvedCatalogClosingMode: "default" | "availability_statement" | "none";
-}): Promise<{ intro: string | null; closing: string | null }> {
+}): Promise<{
+  intro: string | null;
+  closing: string | null;
+  closingType: FrameClosingType;
+}> {
   const frameTaskRules = input.isCatalogChoiceReply
     ? [
         "This is a catalog choice turn.",
@@ -418,8 +440,14 @@ async function buildGroundedFrameOnly(input: {
         input.resolvedCatalogClosingMode === "none"
           ? "Always return null for closing."
           : input.resolvedCatalogClosingMode === "availability_statement"
-          ? "Return one short declarative closing. It must not be a question. It must not ask the user to proceed, reserve, book, click, or confirm. It should simply leave the conversation open for further help."
+          ? "Return one short declarative closing that leaves the conversation open for further help. closingType must be availability_statement. The closing must not be a question."
           : "If there is no strong next step, return null for closing.",
+        input.resolvedCatalogClosingMode === "availability_statement"
+          ? "For availability_statement turns, never use closingType question."
+          : null,
+        input.resolvedCatalogClosingMode === "availability_statement"
+          ? "If you cannot produce a valid availability-style closing, return closing as null and closingType as none."
+          : null,
         input.resolvedCatalogClosingMode === "availability_statement"
           ? "The closing must be declarative, low-pressure, and non-interrogative."
           : null,
@@ -447,7 +475,7 @@ async function buildGroundedFrameOnly(input: {
     "",
     "TASK:",
     "- Return STRICT JSON only.",
-    '- Use exactly this shape: {"intro":string|null,"closing":string|null}.',
+    '- Use exactly this shape: {"intro":string|null,"closing":string|null,"closingType":"availability_statement"|"question"|"none"}.',
     "- You may generate only intro and closing.",
     "- Do not generate, rewrite, summarize, compress, paraphrase, reorder, or replace the canonical body.",
     "- The canonical body will be inserted by the system exactly as-is after your output.",
@@ -478,6 +506,7 @@ async function buildGroundedFrameOnly(input: {
       isInfoGeneralOverviewTurn: input.isInfoGeneralOverviewTurn,
       isResolvedCatalogAnswer: input.isResolvedCatalogAnswer,
       isCatalogChoiceReply: input.isCatalogChoiceReply,
+      resolvedCatalogClosingMode: input.resolvedCatalogClosingMode,
       purchaseIntent: input.commercialPolicy.purchaseIntent,
       wantsBooking: input.commercialPolicy.wantsBooking,
       wantsQuote: input.commercialPolicy.wantsQuote,
@@ -942,14 +971,17 @@ export async function renderFastpathDmReply(
           "The intro must not repeat the exact title or heading of the plan or variant if the canonical body already starts with it.",
           "Do not restate, preview, summarize, or paraphrase facts already contained in the canonical body.",
           "Do not mention prices, numbers, includes, service details, schedules, locations, policies, or links outside the canonical body.",
-          isActionLinkResolvedCatalogReply
-            ? "This is an action-link continuation turn. Do not add any closing question, CTA, or follow-up after the canonical body. Closing must be null."
+          resolvedCatalogClosingMode === "none"
+            ? "Do not add any closing after the canonical body. Closing must be null."
+            : resolvedCatalogClosingMode === "availability_statement"
+            ? "After the canonical body, add one short declarative availability-style closing only if you can do so without asking a question. The closing must not be a CTA."
             : "After the canonical body, add exactly one short closing move only if it helps the user take a real next step.",
-          isActionLinkResolvedCatalogReply
-            ? "Do not ask whether the user wants to proceed, reserve, book, or receive the link if the canonical body already contains the action link."
+          resolvedCatalogClosingMode === "availability_statement"
+            ? "The closing must be declarative, low-pressure, and availability-oriented."
             : "The closing must be consultative, natural, and sales-oriented.",
-          isActionLinkResolvedCatalogReply
-            ? "Do not ask any question after the canonical body for action-link continuation turns."
+
+          resolvedCatalogClosingMode === "availability_statement"
+            ? "Do not ask any question after the canonical body. Do not reopen booking, reservation, or process guidance."
             : "Do not ask whether the user wants more information, more details, or more explanation about the same plan or variant that was just explained.",
           "Do not use generic closings that reopen the same informational question already answered.",
           "If PROMPT_BASE contains a tenant-specific closing policy, follow it only if it does not conflict with the rules above.",
@@ -1065,40 +1097,32 @@ export async function renderFastpathDmReply(
       });
     }
 
-    if (resolvedCatalogClosingMode === "none") {
-      frame = {
-        intro: String(frame.intro || "").trim() || null,
-        closing: null,
-      };
-    }
-
-    if (
-      resolvedCatalogClosingMode === "availability_statement" &&
-      /[?¿]/.test(String(frame.closing || ""))
-    ) {
-      frame = {
-        intro: String(frame.intro || "").trim() || null,
-        closing: null,
-      };
-    }
-
+    const normalizedIntro = String(frame.intro || "").trim();
     const normalizedClosing = String(frame.closing || "").trim();
 
     if (resolvedCatalogClosingMode === "none") {
       frame = {
-        intro: String(frame.intro || "").trim() || null,
+        intro: normalizedIntro || null,
         closing: null,
+        closingType: "none",
       };
     } else if (resolvedCatalogClosingMode === "availability_statement") {
-      const hasQuestionMark =
-        normalizedClosing.includes("?") || normalizedClosing.includes("¿");
-
       frame = {
-        intro: String(frame.intro || "").trim() || null,
+        intro: normalizedIntro || null,
         closing:
-          normalizedClosing && !hasQuestionMark
+          frame.closingType === "availability_statement" && normalizedClosing
             ? normalizedClosing
             : null,
+        closingType:
+          frame.closingType === "availability_statement" && normalizedClosing
+            ? "availability_statement"
+            : "none",
+      };
+    } else {
+      frame = {
+        intro: normalizedIntro || null,
+        closing: normalizedClosing || null,
+        closingType: frame.closingType || "none",
       };
     }
 
