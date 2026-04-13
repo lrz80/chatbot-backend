@@ -1082,10 +1082,23 @@ export async function renderFastpathDmReply(
       };
     }
 
-    if (isActionLinkResolvedCatalogReply) {
+    const normalizedClosing = String(frame.closing || "").trim();
+
+    if (resolvedCatalogClosingMode === "none") {
       frame = {
         intro: String(frame.intro || "").trim() || null,
         closing: null,
+      };
+    } else if (resolvedCatalogClosingMode === "availability_statement") {
+      const hasQuestionMark =
+        normalizedClosing.includes("?") || normalizedClosing.includes("¿");
+
+      frame = {
+        intro: String(frame.intro || "").trim() || null,
+        closing:
+          normalizedClosing && !hasQuestionMark
+            ? normalizedClosing
+            : null,
       };
     }
 
