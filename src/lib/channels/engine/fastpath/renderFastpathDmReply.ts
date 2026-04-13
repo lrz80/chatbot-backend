@@ -436,11 +436,13 @@ async function buildGroundedFrameOnly(input: {
         "The closing must work only as a light conversational bridge to the next step.",
         "The closing must never ask for more information, more details, or more explanation about the same plan, service, or variant already explained.",
         "The closing must never imply that the system still owes the user basic information about the same item.",
-        "The closing should only help the user do one of these: proceed, compare another option, book, or talk to a person.",
+        input.resolvedCatalogClosingMode === "availability_statement"
+          ? "The closing should only communicate continued availability to help the user further."
+          : "The closing should only help the user do one of these: proceed, compare another option, book, or talk to a person.",
         input.resolvedCatalogClosingMode === "none"
           ? "Always return null for closing."
-          : input.resolvedCatalogClosingMode === "availability_statement"
-          ? "Return one short declarative closing that leaves the conversation open for further help. closingType must be availability_statement. The closing must not be a question."
+        : input.resolvedCatalogClosingMode === "availability_statement"
+          ? "Return one short declarative closing that leaves the conversation open for further help. closingType must be availability_statement. The closing must not be a question. The closing must not invite booking, proceeding, reserving, clicking, confirming, or continuing a process."
           : "If there is no strong next step, return null for closing.",
         input.resolvedCatalogClosingMode === "availability_statement"
           ? "For availability_statement turns, never use closingType question."
@@ -506,6 +508,7 @@ async function buildGroundedFrameOnly(input: {
       isInfoGeneralOverviewTurn: input.isInfoGeneralOverviewTurn,
       isResolvedCatalogAnswer: input.isResolvedCatalogAnswer,
       isCatalogChoiceReply: input.isCatalogChoiceReply,
+      isActionLinkResolvedCatalogReply: input.isActionLinkResolvedCatalogReply,
       resolvedCatalogClosingMode: input.resolvedCatalogClosingMode,
       purchaseIntent: input.commercialPolicy.purchaseIntent,
       wantsBooking: input.commercialPolicy.wantsBooking,
