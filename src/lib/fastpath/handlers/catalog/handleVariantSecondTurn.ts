@@ -372,25 +372,14 @@ export async function handleVariantSecondTurn(
   const numericSelectionIndex = parseSingleDigitSelection(input.userInput);
   const isSelectionTurn = isExplicitVariantSelectionTurn(input.userInput);
 
-  const selectedServiceIdFromServiceChoice =
+  const selectedServiceOptionFromChoice =
     pendingServiceChoice && numericSelectionIndex !== null
-      ? String(
-          pendingServiceChoice.options[numericSelectionIndex - 1]?.serviceId || ""
-        ).trim() || null
-      : null;
-
-  const selectedServiceLabelFromServiceChoice =
-    pendingServiceChoice && numericSelectionIndex !== null
-      ? String(
-          pendingServiceChoice.options[numericSelectionIndex - 1]?.serviceName ||
-            pendingServiceChoice.options[numericSelectionIndex - 1]?.label ||
-            ""
-        ).trim() || null
+      ? pendingServiceChoice.options[numericSelectionIndex - 1] ?? null
       : null;
 
   const selectedServiceId =
     String(
-      selectedServiceIdFromServiceChoice ||
+      selectedServiceOptionFromChoice?.serviceId ||
         pendingVariantChoice?.serviceId ||
         structuredTargetServiceId ||
         input.convoCtx?.selectedServiceId ||
@@ -400,7 +389,8 @@ export async function handleVariantSecondTurn(
 
   const selectedServiceName =
     String(
-      selectedServiceLabelFromServiceChoice ||
+      selectedServiceOptionFromChoice?.serviceName ||
+        selectedServiceOptionFromChoice?.label ||
         pendingVariantChoice?.serviceName ||
         input.convoCtx?.last_service_name ||
         ""
@@ -434,9 +424,10 @@ export async function handleVariantSecondTurn(
   console.log("[VARIANT_SECOND_TURN][ENTRY]", {
     userInput: input.userInput,
     expectingVariant: input.convoCtx?.expectingVariant,
+    numericSelectionIndex,
+    selectedServiceOptionFromChoice,
     selectedServiceId,
     selectedServiceName,
-    numericSelectionIndex,
     targetVariantId,
     presentedVariantOptionsCount: presentedVariantOptions.length,
     pendingVariantChoiceKind: pendingVariantChoice?.kind || null,
@@ -487,36 +478,75 @@ export async function handleVariantSecondTurn(
   }
 
   if (pendingServiceChoice) {
+    const originalIntent = String(
+      pendingServiceChoice.originalIntent || "info_servicio"
+    )
+      .trim()
+      .toLowerCase();
+
+    const shouldIncludePricesInVariantChoice =
+      originalIntent === "precio" ||
+      originalIntent === "price_or_plan" ||
+      originalIntent === "combination_and_price";
+
     const variantOptions = variants
-    .map((variant: any) => {
-      const variantId = String(variant.id || "").trim();
-      const label = String(variant.variant_name || "").trim();
+      .map((variant: any) => {
+        const variantId = String(variant.id || "").trim();
+        const variantName = String(variant.variant_name || "").trim();
 
-      if (!variantId || !label) {
-        return null;
-      }
+        if (!variantId || !variantName) {
+          return null;
+        }
 
-      return {
-        kind: "variant" as const,
-        serviceId,
-        variantId,
-        label,
-        serviceName: selectedServiceName || null,
-        variantName: label,
-      };
-    })
-    .filter(
-      (
-        option
-      ): option is {
-        kind: "variant";
-        serviceId: string;
-        variantId: string;
-        label: string;
-        serviceName: string | null;
-        variantName: string;
-      } => option !== null
-    );
+        const priceNum =
+          variant.price === null ||
+          variant.price === undefined ||
+          variant.price === ""
+            ? null
+            : Number(variant.price);
+
+        const currency = String(variant.currency || "USD").trim();
+
+        const hasValidPrice = typeof priceNum === "number" && Number.isFinite(priceNum);
+
+        const displayPrice = hasValidPrice
+          ? currency === "USD"
+            ? `$${priceNum.toFixed(2)}`
+            : `${priceNum.toFixed(2)} ${currency}`
+          : null;
+
+        const label =
+          shouldIncludePricesInVariantChoice && displayPrice
+            ? `${variantName} ${displayPrice}`
+            : variantName;
+
+        return {
+          kind: "variant" as const,
+          serviceId,
+          variantId,
+          label,
+          serviceName: selectedServiceName || null,
+          variantName,
+          price: hasValidPrice ? priceNum : null,
+          currency,
+          displayPrice,
+        };
+      })
+      .filter(
+        (
+          option
+        ): option is {
+          kind: "variant";
+          serviceId: string;
+          variantId: string;
+          label: string;
+          serviceName: string | null;
+          variantName: string;
+          price: number | null;
+          currency: string;
+          displayPrice: string | null;
+        } => option !== null
+      );
 
     if (variantOptions.length > 1) {
       return {
@@ -563,8 +593,11 @@ export async function handleVariantSecondTurn(
             index: idx + 1,
             id: option.variantId,
             variantId: option.variantId,
-            variant_name: option.label,
+            variant_name: option.variantName,
             label: option.label,
+            displayPrice: option.displayPrice,
+            price: option.price,
+            currency: option.currency,
           })),
           last_variant_options_at: Date.now(),
 
