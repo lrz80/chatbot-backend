@@ -785,9 +785,16 @@ export async function resolveServiceCandidatesFromText(
       : null,
   });
 
-  const BASE_THRESHOLD = mode === "strict" ? 0.16 : 0.12;
-  const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.45 : 0.25;
-  const MARGIN = mode === "strict" ? 0.08 : 0.05;
+  const BASE_THRESHOLD = mode === "strict" ? 0.2 : 0.14;
+  const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.52 : 0.3;
+  const MARGIN = mode === "strict" ? 0.1 : 0.06;
+
+  const ENTITY_STRONG_THRESHOLD = mode === "strict" ? 0.58 : 0.42;
+  const ENTITY_CLEAR_MARGIN = mode === "strict" ? 0.14 : 0.08;
+  const MIN_RESOLVABLE_OVERLAP =
+    mode === "strict"
+      ? (observedQueryTokens.length >= 2 ? 2 : 1)
+      : 1;
 
   const topCandidates: ResolveServiceCandidate[] = scored
     .filter((s) => s.allOverlapTokens.length > 0)
@@ -917,9 +924,11 @@ export async function resolveServiceCandidatesFromText(
     };
   }
 
+  const bestNameEvidenceCount = best?.exactNameHits || 0;
+  const bestVariantEvidenceCount = best?.exactVariantHits || 0;
   const bestEvidenceCount = Math.max(
-    best?.exactNameHits || 0,
-    best?.exactVariantHits || 0
+    bestNameEvidenceCount,
+    bestVariantEvidenceCount
   );
 
   const secondScore = second?.score || 0;
@@ -930,24 +939,33 @@ export async function resolveServiceCandidatesFromText(
       ? discriminativeQueryTokens
       : observedQueryTokens;
 
-  const bestResolvableOverlapCount =
-    best
-      ? uniqueUnion([
-          best.overlapNameTokens,
-          best.overlapVariantTokens,
-        ]).filter((token) => resolvableEvidenceQueryTokens.includes(token)).length
-      : 0;
+  const bestResolvableOverlapTokens = best
+    ? uniqueUnion([
+        best.overlapNameTokens,
+        best.overlapVariantTokens,
+      ]).filter((token) => resolvableEvidenceQueryTokens.includes(token))
+    : [];
+
+  const bestResolvableOverlapCount = bestResolvableOverlapTokens.length;
+
+  const exactEntityMatch =
+    bestNameEvidenceCount >= 2 || bestVariantEvidenceCount >= 1;
+
+  const strongSingleEntityCandidate =
+    Boolean(best?.hasResolvableEntityEvidence) &&
+    (best?.score || 0) >= ENTITY_STRONG_THRESHOLD &&
+    marginVsSecond >= ENTITY_CLEAR_MARGIN &&
+    bestResolvableOverlapCount >= MIN_RESOLVABLE_OVERLAP &&
+    (
+      bestNameEvidenceCount >= 1 ||
+      bestVariantEvidenceCount >= 1 ||
+      (best?.dominantOverlapCount || 0) >= 2
+    );
 
   const enoughEvidence =
     Boolean(best?.hasResolvableEntityEvidence) &&
-    bestResolvableOverlapCount > 0 &&
-    (
-      bestEvidenceCount >= 1 ||
-      ((best?.score || 0) >= 0.24 && bestResolvableOverlapCount >= 1) ||
-      ((best?.score || 0) >= 0.18 &&
-        marginVsSecond >= 0.04 &&
-        bestResolvableOverlapCount >= 1)
-    );
+    bestResolvableOverlapCount >= MIN_RESOLVABLE_OVERLAP &&
+    (exactEntityMatch || strongSingleEntityCandidate);
 
   if (!best || best.score < BASE_THRESHOLD || !enoughEvidence) {
     console.log("[RESOLVE-SERVICE] evidencia insuficiente, devolviendo null", {
