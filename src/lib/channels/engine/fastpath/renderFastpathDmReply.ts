@@ -418,12 +418,14 @@ function buildTenantClosingPolicyInstruction(promptBaseMem: string): string | nu
   if (!text) return null;
 
   return [
-    "If PROMPT_BASE contains a tenant-specific closing policy, follow that policy for the closing only.",
-    "Treat the tenant closing policy in PROMPT_BASE as higher priority than generic closing style defaults only for the closing.",
-    "Use the tenant's preferred closing style, wording pattern, and next-step format when present, but only in the closing.",
-    "Do not let the tenant closing policy modify the intro.",
-    "Do not let the tenant closing policy replace the canonical body with a vague question or generic opener.",
-    "Never let the tenant closing policy alter, weaken, summarize, or rewrite the canonical body facts.",
+    "If PROMPT_BASE contains a tenant-specific CTA or preferred closing instruction, it must be treated as the authoritative closing policy.",
+    "When a closing is allowed for the turn, prefer the tenant CTA from PROMPT_BASE over generic closing rewrites.",
+    "If PROMPT_BASE includes an explicit next-step sentence or an exact phrase the user should send, preserve that CTA wording in the closing.",
+    "Do not paraphrase, soften, translate away, or replace the tenant CTA unless required by the target output language.",
+    "Keep the tenant CTA in the closing only.",
+    "Do not let the tenant CTA modify the intro.",
+    "Do not let the tenant CTA replace the canonical body with a vague question or generic opener.",
+    "Never let the tenant CTA alter, weaken, summarize, or rewrite the canonical body facts.",
   ].join(" ");
 }
 
@@ -526,7 +528,7 @@ async function buildGroundedFrameOnly(input: {
           : "Return exactly one short closing after the canonical body.",
         "You are only framing the canonical body. The body itself is already resolved and grounded by the system.",
         "The intro must be brief, neutral-to-consultative, and natural.",
-        "The closing must be brief, consultative, and natural.",
+        "The closing must be brief and must respect the tenant CTA from PROMPT_BASE when one exists.",
         "Do not rewrite, summarize, paraphrase, compress, expand, or replace the canonical body.",
         "Do not mention any fact, benefit, positioning, suitability claim, audience claim, recommendation, promise, or interpretation that is not explicitly present in the canonical body.",
         "Do not infer who this plan is ideal for.",
@@ -535,6 +537,8 @@ async function buildGroundedFrameOnly(input: {
         "Do not repeat the exact title or heading if the canonical body already starts with it.",
         "The intro must work only as a light conversational bridge into the body.",
         "The closing must work only as a light conversational bridge to the next step.",
+        "If PROMPT_BASE contains an explicit tenant CTA, use that CTA in the closing instead of inventing a different next-step wording.",
+        "Do not replace an explicit tenant CTA with a generic variant.",
         "The closing must never ask for more information, more details, or more explanation about the same plan, service, or variant already explained.",
         "The closing must never imply that the system still owes the user basic information about the same item.",
         input.resolvedCatalogClosingMode === "availability_statement"
@@ -566,7 +570,9 @@ async function buildGroundedFrameOnly(input: {
         "Intro must be null.",
         "Do not ask a broad discovery question before the canonical body.",
         "Do not restate, summarize, or paraphrase the canonical body.",
-        "Return one short closing that keeps the conversation moving naturally.",
+        "If PROMPT_BASE contains an explicit tenant CTA, use that CTA as the closing.",
+        "Do not replace an explicit tenant CTA with a generic closing.",
+        "Return one short closing that keeps the conversation moving naturally only when there is no explicit tenant CTA.",
       ]
     : [
         "Return optional framing only when it improves the DM reply.",
@@ -1089,7 +1095,7 @@ export async function renderFastpathDmReply(
             ? "Do not ask any question after the canonical body. Do not reopen booking, reservation, or process guidance."
             : "Do not ask whether the user wants more information, more details, or more explanation about the same plan or variant that was just explained.",
           "Do not use generic closings that reopen the same informational question already answered.",
-          "If PROMPT_BASE contains a tenant-specific closing policy, follow it only if it does not conflict with the rules above.",
+          "If PROMPT_BASE contains an explicit tenant CTA or closing instruction, use it as the preferred closing whenever a closing is allowed and it does not conflict with the rules above.",
           "The body itself must remain unchanged and in the same order.",
           tenantClosingPolicyInstruction,
           commercialClosingInstruction,

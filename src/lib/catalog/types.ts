@@ -33,6 +33,7 @@ export type CatalogDisambiguationType =
   | "entity"
   | "family"
   | "variant"
+  | "service_choice"
   | "none";
 
 export type CatalogAnchorShift =

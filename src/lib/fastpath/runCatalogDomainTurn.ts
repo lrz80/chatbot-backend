@@ -210,10 +210,10 @@ function buildEffectiveCatalogReferenceClassificationFromCanonical(input: {
     };
   }
 
-  if (canonical.resolutionKind === "ambiguous") {
+if (canonical.resolutionKind === "ambiguous") {
     return {
       ...seed,
-      kind: "catalog_family",
+      kind: "referential_followup",
       targetLevel: "multi_service",
       shouldResolveEntity: false,
       shouldAskDisambiguation: true,
@@ -221,8 +221,9 @@ function buildEffectiveCatalogReferenceClassificationFromCanonical(input: {
       targetServiceName: null,
       targetVariantId: null,
       targetVariantName: null,
-      targetFamilyKey: "canonical_ambiguous_family",
-      targetFamilyName: "canonical_ambiguous_family",
+      targetFamilyKey: null,
+      targetFamilyName: null,
+      disambiguationType: "service_choice",
       anchorShift: "none",
     };
   }
@@ -691,6 +692,40 @@ export async function runCatalogDomainTurn(
       })()
     : [];
 
+  if (
+    canonicalCatalogResolution?.resolutionKind === "ambiguous" &&
+    candidateOptionsFromTurn.length > 0
+  ) {
+    return {
+      handled: true,
+      source: "catalog_disambiguation_db",
+      intent: "service_choice",
+      reply: "",
+      catalogPayload: {
+        kind: "service_choice",
+        options: candidateOptionsFromTurn.map((item, index) => ({
+          index: index + 1,
+          serviceId: item.serviceId,
+          label: item.label,
+        })),
+      },
+      ctxPatch: {
+        pendingCatalogChoice: {
+          kind: "service_choice",
+          options: candidateOptionsFromTurn.map((item, index) => ({
+            index: index + 1,
+            serviceId: item.serviceId,
+            variantId: null,
+            label: item.label,
+            serviceName: item.label,
+          })),
+        },
+        pendingCatalogChoiceAt: Date.now(),
+        last_bot_action: "catalog_service_choice",
+      },
+    } as any;
+  }
+
   const baseCatalogRoutingSignal = buildCatalogRoutingSignal({
     intentOut,
     catalogReferenceClassification: effectiveCatalogReferenceClassification,
@@ -722,15 +757,15 @@ export async function runCatalogDomainTurn(
       ? {
           ...baseCatalogRoutingSignal,
           shouldRouteCatalog: true,
-          referenceKind: "catalog_family",
+          referenceKind: "referential_followup",
           source: "canonical_catalog_resolution",
           targetServiceId: null,
           targetServiceName: null,
           targetVariantId: null,
           targetVariantName: null,
-          targetFamilyKey: "canonical_ambiguous_family",
-          targetFamilyName: "canonical_ambiguous_family",
-          targetLevel: "family",
+          targetFamilyKey: null,
+          targetFamilyName: null,
+          targetLevel: "multi_service",
           disambiguationType: "service_choice",
           anchorShift: "none",
         }
