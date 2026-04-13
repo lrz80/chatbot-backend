@@ -962,12 +962,6 @@ export async function runCatalogFastpath(
       }
     | null = null;
 
-  const shouldForceResolvedVariant =
-    shouldSkipVariantDisambiguation({
-      catalogRoutingSignal,
-      pendingSelectedVariant,
-    });
-
   const pendingOriginalIntent = String(
     pendingCatalogChoice?.originalIntent || ""
   )
@@ -1004,6 +998,12 @@ export async function runCatalogFastpath(
     }
   }
 
+  const shouldForceResolvedVariant =
+    shouldSkipVariantDisambiguation({
+      catalogRoutingSignal,
+      pendingSelectedVariant,
+    });
+
   const rawRouteIntent = String(catalogRoutingSignal.routeIntent || "").trim();
 
   const shouldUsePendingRouteIntentOverride =
@@ -1020,24 +1020,141 @@ export async function runCatalogFastpath(
     ? pendingRouteIntentOverride
     : rawRouteIntent;
 
-  const structuredTargetServiceId =
-    hasIncomingCanonicalResolvedSingle || hasIncomingCanonicalVariantAmbiguous
-      ? String(incomingCanonicalResolution.resolvedServiceId || "").trim()
-      : hasIncomingCanonicalAmbiguous
-      ? ""
-      : String(catalogRoutingSignal.targetServiceId || "").trim();
+  const routingReferenceKind = String(
+    input.catalogReferenceClassification?.kind || "none"
+  )
+    .trim()
+    .toLowerCase();
 
-  const structuredTargetServiceName =
-    hasIncomingCanonicalResolvedSingle || hasIncomingCanonicalVariantAmbiguous
-      ? String(incomingCanonicalResolution.resolvedServiceName || "").trim()
-      : hasIncomingCanonicalAmbiguous
-      ? ""
-      : String(catalogRoutingSignal.targetServiceName || "").trim();
+  const routingTargetServiceId = String(
+    catalogRoutingSignal.targetServiceId || ""
+  ).trim();
 
-    const executionRouteIntent =
-      routeIntent === "referential_followup" && structuredTargetServiceId
-        ? "entity_detail"
-        : routeIntent;
+  const routingTargetServiceName = String(
+    catalogRoutingSignal.targetServiceName || ""
+  ).trim();
+
+  const routingTargetVariantId = String(
+    catalogRoutingSignal.targetVariantId || ""
+  ).trim();
+
+  const routingTargetVariantName = String(
+    catalogRoutingSignal.targetVariantName || ""
+  ).trim();
+
+  const routingTargetFamilyKey = String(
+    catalogRoutingSignal.targetFamilyKey || ""
+  ).trim();
+
+  const effectiveAuthority = pendingSelectedVariant
+    ? {
+        source: "pending_variant" as const,
+        status: "resolved_single" as const,
+        serviceId: pendingSelectedVariant.serviceId,
+        serviceName: pendingSelectedVariant.serviceName || "",
+        variantId: pendingSelectedVariant.variantId,
+        variantName: pendingSelectedVariant.variantName || "",
+        familyKey: "",
+        referenceKind: "variant_specific",
+      }
+    : pendingSelectedService
+    ? {
+        source: "pending_service" as const,
+        status: "resolved_single" as const,
+        serviceId: pendingSelectedService.serviceId,
+        serviceName: pendingSelectedService.serviceName || "",
+        variantId: "",
+        variantName: "",
+        familyKey: "",
+        referenceKind: "entity_specific",
+      }
+    : hasIncomingCanonicalVariantAmbiguous
+    ? {
+        source: "canonical_variant_ambiguous" as const,
+        status: "resolved_service_variant_ambiguous" as const,
+        serviceId: String(incomingCanonicalResolution.resolvedServiceId || "").trim(),
+        serviceName: String(incomingCanonicalResolution.resolvedServiceName || "").trim(),
+        variantId: "",
+        variantName: "",
+        familyKey: "",
+        referenceKind: "entity_specific",
+      }
+    : hasIncomingCanonicalResolvedSingle
+    ? {
+        source: "canonical_single" as const,
+        status: "resolved_single" as const,
+        serviceId: String(incomingCanonicalResolution.resolvedServiceId || "").trim(),
+        serviceName: String(incomingCanonicalResolution.resolvedServiceName || "").trim(),
+        variantId: "",
+        variantName: "",
+        familyKey: "",
+        referenceKind: "entity_specific",
+      }
+    : hasIncomingCanonicalAmbiguous
+    ? {
+        source: "canonical_ambiguous" as const,
+        status: "ambiguous" as const,
+        serviceId: "",
+        serviceName: "",
+        variantId: "",
+        variantName: "",
+        familyKey: "canonical_ambiguous_family",
+        referenceKind: "catalog_family",
+      }
+    : routingTargetVariantId
+    ? {
+        source: "routing_variant" as const,
+        status: "resolved_single" as const,
+        serviceId: routingTargetServiceId,
+        serviceName: routingTargetServiceName,
+        variantId: routingTargetVariantId,
+        variantName: routingTargetVariantName,
+        familyKey: "",
+        referenceKind: "variant_specific",
+      }
+    : routingTargetServiceId || routingReferenceKind === "entity_specific"
+    ? {
+        source: "routing_service" as const,
+        status: "resolved_single" as const,
+        serviceId: routingTargetServiceId,
+        serviceName: routingTargetServiceName,
+        variantId: "",
+        variantName: "",
+        familyKey: "",
+        referenceKind: "entity_specific",
+      }
+    : routingTargetFamilyKey || routingReferenceKind === "catalog_family"
+    ? {
+        source: "routing_family" as const,
+        status: "ambiguous" as const,
+        serviceId: "",
+        serviceName: "",
+        variantId: "",
+        variantName: "",
+        familyKey: routingTargetFamilyKey || "canonical_ambiguous_family",
+        referenceKind: "catalog_family",
+      }
+    : {
+        source: "none" as const,
+        status: "not_found" as const,
+        serviceId: "",
+        serviceName: "",
+        variantId: "",
+        variantName: "",
+        familyKey: "",
+        referenceKind: routingReferenceKind || "none",
+      };
+
+  const structuredTargetServiceId = effectiveAuthority.serviceId;
+  const structuredTargetServiceName = effectiveAuthority.serviceName;
+  const structuredTargetVariantId = effectiveAuthority.variantId;
+  const structuredTargetFamilyKey = effectiveAuthority.familyKey;
+  const referenceKind = effectiveAuthority.referenceKind;
+
+  const executionRouteIntent =
+    routeIntent === "referential_followup" && structuredTargetServiceId
+      ? "entity_detail"
+      : routeIntent;
 
   console.log("[CATALOG][ROUTING_SIGNAL]", {
     userInput: input.userInput,
@@ -1094,23 +1211,9 @@ export async function runCatalogFastpath(
   void hasRecentCatalogContext;
   void hasStructuredCatalogState;
 
-  const referenceKind = String(
-    input.catalogReferenceClassification?.kind || "none"
-  )
-    .trim()
-    .toLowerCase();
-
-  const targetServiceId = String(
-    catalogRoutingSignal.targetServiceId || ""
-  ).trim();
-
-  const targetVariantId = String(
-    catalogRoutingSignal.targetVariantId || ""
-  ).trim();
-
-  const targetFamilyKey = String(
-    catalogRoutingSignal.targetFamilyKey || ""
-  ).trim();
+  const targetServiceId = structuredTargetServiceId;
+  const targetVariantId = structuredTargetVariantId;
+  const targetFamilyKey = structuredTargetFamilyKey;
 
   const isStructuredComparisonTurn =
     routeIntent === "catalog_compare";
@@ -1296,13 +1399,14 @@ export async function runCatalogFastpath(
     hasFacetDrivenCatalogIntent;
 
   let canonicalCatalogResolution: CanonicalCatalogResolution | null =
-    hasIncomingCanonicalResolvedSingle || hasIncomingCanonicalVariantAmbiguous
+    effectiveAuthority.status === "resolved_single" &&
+    effectiveAuthority.serviceId
       ? {
           status: "resolved_single",
-          serviceId: String(incomingCanonicalResolution.resolvedServiceId || "").trim(),
-          serviceName: String(incomingCanonicalResolution.resolvedServiceName || "").trim(),
+          serviceId: effectiveAuthority.serviceId,
+          serviceName: effectiveAuthority.serviceName || "",
         }
-      : hasIncomingCanonicalAmbiguous
+      : effectiveAuthority.status === "ambiguous"
       ? {
           status: "ambiguous",
           options: [],
@@ -1324,62 +1428,10 @@ export async function runCatalogFastpath(
       ? pendingCatalogChoice.options.map((option) => option.serviceId)
       : null;
 
-  if (pendingSelectedService) {
-    canonicalCatalogResolution = {
-      status: "resolved_single",
-      serviceId: pendingSelectedService.serviceId,
-      serviceName: pendingSelectedService.serviceName || "",
-    };
-  } else if (
-    !hasIncomingCanonicalAmbiguous &&
-    !hasIncomingCanonicalResolvedSingle &&
-    !hasIncomingCanonicalVariantAmbiguous &&
-    structuredTargetServiceId
-  ) {
-    canonicalCatalogResolution = {
-      status: "resolved_single",
-      serviceId: structuredTargetServiceId,
-      serviceName: structuredTargetServiceName,
-    };
-  } else if (
-    !hasIncomingCanonicalAmbiguous &&
-    !hasIncomingCanonicalResolvedSingle &&
-    !hasIncomingCanonicalVariantAmbiguous &&
+  if (
+    effectiveAuthority.source === "none" &&
     shouldResolveCanonicalTargetEarly
   ) {
-    if (hasIncomingCanonicalAmbiguous) {
-      const familyResolution = await resolveServiceCandidatesFromText(
-        input.pool,
-        input.tenantId,
-        input.userInput,
-        { mode: "loose" }
-      );
-
-      if (familyResolution.kind === "ambiguous") {
-        const normalizedOptions = normalizeCatalogDisambiguationOptions(
-          familyResolution.candidates
-        );
-
-        const serviceOptions = normalizedOptions.filter(
-          (option): option is CatalogServiceDisambiguationOption =>
-            option.kind === "service"
-        );
-
-        if (serviceOptions.length > 1) {
-          return buildCatalogDisambiguationResult({
-            routeIntent: executionRouteIntent || routeIntent,
-            kind: "service_choice",
-            options: serviceOptions,
-            originalIntent: disambiguationOriginalIntent,
-          });
-        }
-      }
-
-      return {
-        handled: false,
-      };
-    }
-    
     canonicalCatalogResolution = await resolveCanonicalCatalogTarget({
       pool: input.pool,
       tenantId: input.tenantId,
@@ -1406,10 +1458,9 @@ export async function runCatalogFastpath(
         normalizedOptions.length > 1 &&
         variantOptions.length === normalizedOptions.length;
 
-      const singleServiceId =
-        allAreVariants
-          ? Array.from(new Set(variantOptions.map((option) => option.serviceId)))
-          : [];
+      const singleServiceId = allAreVariants
+        ? Array.from(new Set(variantOptions.map((option) => option.serviceId)))
+        : [];
 
       if (allAreVariants && singleServiceId.length === 1) {
         const serviceId = singleServiceId[0];
