@@ -30,6 +30,87 @@ function getFirstNonEmptyLine(text: string): string {
   );
 }
 
+function getTokenSet(text: string): Set<string> {
+  return new Set(
+    normalizeComparableText(text)
+      .split(" ")
+      .map((token) => token.trim())
+      .filter(Boolean)
+  );
+}
+
+function getTokenOverlapRatio(a: string, b: string): number {
+  const aSet = getTokenSet(a);
+  const bSet = getTokenSet(b);
+
+  if (!aSet.size || !bSet.size) return 0;
+
+  let overlap = 0;
+  for (const token of aSet) {
+    if (bSet.has(token)) overlap += 1;
+  }
+
+  return overlap / Math.min(aSet.size, bSet.size);
+}
+
+function shouldStripFirstCanonicalLineFromBody(args: {
+  intro?: string | null;
+  canonicalBody: string;
+}): boolean {
+  const intro = String(args.intro || "").trim();
+  const canonicalBody = String(args.canonicalBody || "").trim();
+
+  if (!intro || !canonicalBody) return false;
+
+  const firstCanonicalLine = getFirstNonEmptyLine(canonicalBody);
+  if (!firstCanonicalLine) return false;
+
+  const normalizedIntro = normalizeComparableText(intro);
+  const normalizedFirstLine = normalizeComparableText(firstCanonicalLine);
+
+  if (!normalizedIntro || !normalizedFirstLine) return false;
+
+  if (
+    normalizedIntro === normalizedFirstLine ||
+    normalizedIntro.includes(normalizedFirstLine) ||
+    normalizedFirstLine.includes(normalizedIntro)
+  ) {
+    return true;
+  }
+
+  const overlapRatio = getTokenOverlapRatio(intro, firstCanonicalLine);
+  return overlapRatio >= 0.9;
+}
+
+function stripFirstCanonicalLineIfDuplicated(args: {
+  intro?: string | null;
+  canonicalBody: string;
+}): string {
+  const canonicalBody = String(args.canonicalBody || "").trim();
+  if (!canonicalBody) return "";
+
+  if (!shouldStripFirstCanonicalLineFromBody(args)) {
+    return canonicalBody;
+  }
+
+  const lines = canonicalBody.split("\n");
+  let removed = false;
+  const nextLines: string[] = [];
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || "").trim();
+
+    if (!removed && line) {
+      removed = true;
+      continue;
+    }
+
+    nextLines.push(rawLine);
+  }
+
+  return nextLines.join("\n").trim();
+}
+
 function looksLikeResolvedHeading(line: string): boolean {
   const value = String(line || "").trim();
   if (!value) return false;
@@ -462,9 +543,10 @@ async function buildGroundedFrameOnly(input: {
     : input.isInfoGeneralOverviewTurn
     ? [
         "This is a grounded business overview turn.",
-        "intro should usually be null.",
+        "Intro must be null.",
+        "Do not ask a broad discovery question before the canonical body.",
+        "Do not restate, summarize, or paraphrase the canonical body.",
         "Return one short closing that keeps the conversation moving naturally.",
-        "Do not restate or summarize the canonical body.",
       ]
     : [
         "Return optional framing only when it improves the DM reply.",
@@ -1103,27 +1185,30 @@ export async function renderFastpathDmReply(
     const normalizedIntro = String(frame.intro || "").trim();
     const normalizedClosing = String(frame.closing || "").trim();
 
+    const safeIntro =
+      isInfoGeneralOverviewTurn ? "" : normalizedIntro;
+
     if (resolvedCatalogClosingMode === "none") {
       frame = {
-        intro: normalizedIntro || null,
+        intro: safeIntro || null,
         closing: null,
         closingType: "none",
       };
     } else if (resolvedCatalogClosingMode === "availability_statement") {
-      frame = {
-        intro: normalizedIntro || null,
-        closing:
-          frame.closingType === "availability_statement" && normalizedClosing
-            ? normalizedClosing
-            : null,
-        closingType:
-          frame.closingType === "availability_statement" && normalizedClosing
-            ? "availability_statement"
-            : "none",
-      };
+        frame = {
+          intro: safeIntro || null,
+          closing:
+            frame.closingType === "availability_statement" && normalizedClosing
+              ? normalizedClosing
+              : null,
+          closingType:
+            frame.closingType === "availability_statement" && normalizedClosing
+              ? "availability_statement"
+              : "none",
+        };
     } else {
       frame = {
-        intro: normalizedIntro || null,
+        intro: safeIntro || null,
         closing: normalizedClosing || null,
         closingType: frame.closingType || "none",
       };
@@ -1138,9 +1223,17 @@ export async function renderFastpathDmReply(
           })
         : canonicalReply;
 
+    const dedupedCanonicalBody =
+      isInfoGeneralOverviewTurn || isResolvedCatalogAnswer
+        ? stripFirstCanonicalLineIfDuplicated({
+            intro: frame.intro,
+            canonicalBody: renderedCanonicalBody,
+          })
+        : renderedCanonicalBody;
+
     const finalGroundedReply = [
       String(frame.intro || "").trim(),
-      renderedCanonicalBody,
+      dedupedCanonicalBody,
       String(frame.closing || "").trim(),
     ]
       .filter(Boolean)
