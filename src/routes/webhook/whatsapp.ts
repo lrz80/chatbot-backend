@@ -1527,20 +1527,67 @@ export async function procesarMensajeWhatsApp(
       });
 
     if (hybridRes.routeTarget === "catalog") {
+      const catalogReferenceClassification =
+        hybridRes.routeContext?.catalogReferenceClassification ||
+        (signals as any)?.catalogReferenceClassification ||
+        undefined;
+
+      const canonicalCatalogResolution =
+        hybridRes.routeContext?.canonicalCatalogResolution || undefined;
+
       const handledCatalog = await tryCatalogOutsideHybridDecision({
         intent: nextIntent,
         detectedFacets: nextDetectedFacets,
         convoCtxForCatalog: convoCtx,
-        catalogReferenceClassification:
-          hybridRes.routeContext?.catalogReferenceClassification ||
-          (signals as any)?.catalogReferenceClassification ||
-          undefined,
-        canonicalCatalogResolution:
-          hybridRes.routeContext?.canonicalCatalogResolution || undefined,
+        catalogReferenceClassification,
+        canonicalCatalogResolution,
       });
 
       if (handledCatalog) {
         return;
+      }
+
+      const isAmbiguousCatalogFamilyTurn =
+        canonicalCatalogResolution?.resolutionKind === "ambiguous" &&
+        (
+          catalogReferenceClassification?.kind === "catalog_family" ||
+          catalogReferenceClassification?.targetLevel === "family" ||
+          catalogReferenceClassification?.targetLevel === "multi_service" ||
+          catalogReferenceClassification?.routeIntent === "catalog_family"
+        );
+
+      if (isAmbiguousCatalogFamilyTurn) {
+        const composed = await composeFacetReply({
+          pool,
+          tenantId: tenant.id,
+          canal,
+          idiomaDestino,
+          userInput,
+          contactoNorm,
+          messageId: messageId || null,
+          promptBaseMem,
+          infoClave: String(tenant?.info_clave || ""),
+          detectedIntent: "precio",
+          intentFallback: "precio",
+          detectedFacets: {
+            ...(nextDetectedFacets || {}),
+            asksPrices: true,
+          },
+          detectedCommercial,
+          normalizeCatalogRole,
+          traducirTexto: async (texto: string, idioma: string, modo?: any) => {
+            return await traducirMensaje(texto, idioma);
+          },
+          renderGenericPriceSummaryReply,
+        });
+
+        if (composed.handled && composed.reply) {
+          return await replyAndExit(
+            composed.reply,
+            composed.source || "catalog_family_ambiguous_composed",
+            composed.intent || "precio"
+          );
+        }
       }
     }
 
