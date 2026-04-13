@@ -668,6 +668,35 @@ export async function procesarMensajeWhatsApp(
     );
   }
 
+  function shouldAcknowledgePostEstimateCompletion(params: {
+    activeFlow: string | null;
+    activeStep: string | null;
+    detectedIntent: string | null;
+    intentFallback: string | null;
+    userInput: string;
+  }): boolean {
+    const activeFlow = String(params.activeFlow || "").trim().toLowerCase();
+    const activeStep = String(params.activeStep || "").trim().toLowerCase();
+    const resolvedIntent = String(
+      params.intentFallback || params.detectedIntent || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    if (activeFlow !== "estimate_flow") {
+      return false;
+    }
+
+    if (activeStep !== "scheduled") {
+      return false;
+    }
+
+    if (resolvedIntent === "saludo" || resolvedIntent === "despedida") {
+      return true;
+    }
+
+    return false;
+  }
 
   async function tryBusinessInfoOutsideFastpath(params: {
     intent: string | null;
@@ -1827,6 +1856,21 @@ export async function procesarMensajeWhatsApp(
       detectedFacets: detectedFacets || null,
       detectedCommercial: detectedCommercial || null,
       ctxPatch: finalCtxPatch || {},
+
+      conversationState: {
+        activeFlow,
+        activeStep,
+      },
+
+      fallbackKind:
+        activeFlow === "estimate_flow" &&
+        activeStep === "scheduled" &&
+        (
+          INTENCION_FINAL_CANONICA === "saludo" ||
+          detectedIntent === "saludo"
+        )
+          ? "post_completion_courtesy"
+          : "default",
     });
 
     if (fallback.ctxPatch) {
