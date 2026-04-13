@@ -118,20 +118,29 @@ function buildSystemPrompt(params: {
           "- Return a guided options-oriented overview, not a generic company summary.",
           "- Prefer compact customer-facing options supported by BUSINESS_SOURCE.",
           "- Do not return a cold descriptive paragraph about the business.",
-          "- Help the final DM writer continue the conversation naturally.",
+          "- canonicalBody must contain content only, not conversational framing.",
+          "- Do not ask questions in canonicalBody.",
+          "- Do not include greetings, discovery questions, transition phrases, or next-step prompts in canonicalBody.",
+          "- guided_entry must still be declarative and grounded.",
         ]
       : [
           "- This is a general business-information overview turn.",
           "- Return a concise grounded overview only.",
+          "- canonicalBody must be declarative and must not ask questions.",
         ]),
     "OUTPUT STYLE:",
     "- Keep canonicalBody useful, compact, direct, and faithful to source truth.",
     "- For broad discovery turns, canonicalBody must be short and easy to scan in a messaging app.",
     "- Do not produce long narrative paragraphs for broad discovery turns.",
     "- Do not include schedule, location, contact, policy details, or company overview in broad discovery turns unless the USER_MESSAGE explicitly asks for them.",
-    "- For guided commercial overview, prefer 1 short introductory line followed by up to 2 or 3 grounded option lines when BUSINESS_SOURCE supports that structure.",
+    "- For guided commercial overview, prefer a short declarative intro line followed by up to 2 or 3 grounded option lines when BUSINESS_SOURCE supports that structure.",
     "- For broad informational overview, a short bullet list is allowed when it is the clearest grounded format.",
     "- Do not force bullet-only output for every broad turn.",
+    "- canonicalBody must be declarative, not interrogative.",
+    "- canonicalBody must not contain discovery questions.",
+    "- canonicalBody must not contain closing language or invitation language.",
+    "- canonicalBody must not contain any question marks.",
+    "- canonicalBody must be presentation-ready source content for the DM renderer, not the final conversational wrapper.",
     "- Preserve the user's output language.",
     `- Output language must be: ${idiomaDestino}.`,
     "",
@@ -167,10 +176,47 @@ function buildUserPrompt(params: {
     "  c) a specific business-information question.",
     "- Return only the grounded canonicalBody for business-info scope.",
     "- If the turn is an early commercial-interest opening, do not return a cold encyclopedic service list.",
-    "- If the turn is an early commercial-interest opening, prefer a short guided overview of the main service categories or offer paths supported by BUSINESS_SOURCE.",
-    "- If the turn is a broad informational discovery turn, you may return a concise overview of the main services.",
+    "- If the turn is an early commercial-interest opening, return a short declarative overview of the main grounded service categories or offer paths supported by BUSINESS_SOURCE.",
+    "- Do not ask the user a question inside canonicalBody.",
+    "- Do not include greetings, hooks, prompts, CTAs, or next-step invitations inside canonicalBody.",
+    "- If the turn is a broad informational discovery turn, you may return a concise declarative overview of the main services.",
     "- Do not output pricing detail or catalog detail.",
     "- Do not output long paragraphs for broad discovery turns.",
+  ].join("\n");
+}
+
+function buildRetryUserPrompt(params: {
+  userInput: string;
+  businessSource: string;
+  previousRawOutput: string;
+  overviewMode: "general_overview" | "guided_entry";
+}): string {
+  const { userInput, businessSource, previousRawOutput, overviewMode } = params;
+
+  return [
+    "USER_MESSAGE:",
+    toTrimmedString(userInput),
+    "",
+    "BUSINESS_SOURCE:",
+    businessSource,
+    "",
+    "PREVIOUS_INVALID_OUTPUT:",
+    toTrimmedString(previousRawOutput),
+    "",
+    "VALIDATION_ERROR:",
+    "- The previous canonicalBody was invalid for overview resolution.",
+    "- canonicalBody must be declarative.",
+    "- canonicalBody must not contain questions.",
+    "- canonicalBody must not contain greetings, hooks, prompts, CTAs, or next-step invitations.",
+    `- overviewMode is ${overviewMode}.`,
+    "",
+    "TASK:",
+    "- Regenerate the JSON strictly.",
+    "- Keep only grounded business-information content.",
+    "- Return a clean canonicalBody with no question marks.",
+    "- Do not add framing for the DM writer.",
+    "- Do not add conversational transitions.",
+    "- Do not output prices or catalog detail.",
   ].join("\n");
 }
 
@@ -219,6 +265,117 @@ function parseResolverOutput(raw: string): BusinessInfoResolverOutput | null {
   }
 }
 
+function isValidOverviewCanonicalBody(input: {
+  canonicalBody: string;
+  overviewMode: "general_overview" | "guided_entry";
+}): boolean {
+  const canonicalBody = toTrimmedString(input.canonicalBody);
+  if (!canonicalBody) return false;
+
+  if (
+    input.overviewMode === "general_overview" ||
+    input.overviewMode === "guided_entry"
+  ) {
+    if (canonicalBody.includes("?")) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function resolveOverviewWithRetry(input: {
+  tenantId: string;
+  canal: Canal;
+  idiomaDestino: LangCode;
+  overviewMode: "general_overview" | "guided_entry";
+  userMessage: string;
+  businessSource: string;
+}): Promise<BusinessInfoResolverOutput | null> {
+  const model = getBusinessInfoResolverModel();
+
+  const systemPrompt = buildSystemPrompt({
+    tenantId: input.tenantId,
+    canal: input.canal,
+    idiomaDestino: input.idiomaDestino,
+    overviewMode: input.overviewMode,
+  });
+
+  const firstCompletion = await openai.chat.completions.create({
+    model,
+    temperature: 0.1,
+    messages: [
+      {
+        role: "system",
+        content: systemPrompt,
+      },
+      {
+        role: "user",
+        content: buildUserPrompt({
+          userInput: input.userMessage,
+          businessSource: input.businessSource,
+        }),
+      },
+    ],
+  });
+
+  const firstRaw = toTrimmedString(firstCompletion.choices[0]?.message?.content);
+  const firstParsed = parseResolverOutput(firstRaw);
+
+  if (
+    firstParsed &&
+    firstParsed.strategy !== "insufficient_grounding" &&
+    isValidOverviewCanonicalBody({
+      canonicalBody: firstParsed.canonicalBody,
+      overviewMode: input.overviewMode,
+    })
+  ) {
+    return firstParsed;
+  }
+
+  const retryCompletion = await openai.chat.completions.create({
+    model,
+    temperature: 0,
+    messages: [
+      {
+        role: "system",
+        content: systemPrompt,
+      },
+      {
+        role: "user",
+        content: buildRetryUserPrompt({
+          userInput: input.userMessage,
+          businessSource: input.businessSource,
+          previousRawOutput: firstRaw,
+          overviewMode: input.overviewMode,
+        }),
+      },
+    ],
+  });
+
+  const retryRaw = toTrimmedString(retryCompletion.choices[0]?.message?.content);
+  const retryParsed = parseResolverOutput(retryRaw);
+
+  if (!retryParsed) {
+    return null;
+  }
+
+  if (retryParsed.strategy === "insufficient_grounding") {
+    return retryParsed;
+  }
+
+  if (
+    !isValidOverviewCanonicalBody({
+      canonicalBody: retryParsed.canonicalBody,
+      overviewMode: input.overviewMode,
+    })
+  ) {
+    return null;
+  }
+
+  return retryParsed;
+}
+
 export async function resolveBusinessInfoOverviewCanonicalBody(
   args: ResolveBusinessInfoOverviewCanonicalBodyArgs
 ): Promise<string> {
@@ -245,31 +402,16 @@ export async function resolveBusinessInfoOverviewCanonicalBody(
     return "";
   }
 
-  const completion = await openai.chat.completions.create({
-    model: getBusinessInfoResolverModel(),
-    temperature: 0.1,
-    messages: [
-      {
-        role: "system",
-        content: buildSystemPrompt({
-          tenantId,
-          canal,
-          idiomaDestino,
-          overviewMode: args.overviewMode ?? "general_overview",
-        }),
-      },
-      {
-        role: "user",
-        content: buildUserPrompt({
-          userInput: userMessage,
-          businessSource,
-        }),
-      },
-    ],
-  });
+  const overviewMode = args.overviewMode ?? "general_overview";
 
-  const content = completion.choices[0]?.message?.content;
-  const parsed = parseResolverOutput(toTrimmedString(content));
+  const parsed = await resolveOverviewWithRetry({
+    tenantId,
+    canal,
+    idiomaDestino,
+    overviewMode,
+    userMessage,
+    businessSource,
+  });
 
   if (!parsed) {
     return "";

@@ -53,43 +53,48 @@ function getTokenOverlapRatio(a: string, b: string): number {
   return overlap / Math.min(aSet.size, bSet.size);
 }
 
-function shouldStripFirstCanonicalLineFromBody(args: {
-  intro?: string | null;
+function isSemanticallyDuplicatedAgainstCanonicalLead(args: {
+  frameText?: string | null;
   canonicalBody: string;
 }): boolean {
-  const intro = String(args.intro || "").trim();
+  const frameText = String(args.frameText || "").trim();
   const canonicalBody = String(args.canonicalBody || "").trim();
 
-  if (!intro || !canonicalBody) return false;
+  if (!frameText || !canonicalBody) return false;
 
   const firstCanonicalLine = getFirstNonEmptyLine(canonicalBody);
   if (!firstCanonicalLine) return false;
 
-  const normalizedIntro = normalizeComparableText(intro);
+  const normalizedFrameText = normalizeComparableText(frameText);
   const normalizedFirstLine = normalizeComparableText(firstCanonicalLine);
 
-  if (!normalizedIntro || !normalizedFirstLine) return false;
+  if (!normalizedFrameText || !normalizedFirstLine) return false;
 
   if (
-    normalizedIntro === normalizedFirstLine ||
-    normalizedIntro.includes(normalizedFirstLine) ||
-    normalizedFirstLine.includes(normalizedIntro)
+    normalizedFrameText === normalizedFirstLine ||
+    normalizedFrameText.includes(normalizedFirstLine) ||
+    normalizedFirstLine.includes(normalizedFrameText)
   ) {
     return true;
   }
 
-  const overlapRatio = getTokenOverlapRatio(intro, firstCanonicalLine);
+  const overlapRatio = getTokenOverlapRatio(frameText, firstCanonicalLine);
   return overlapRatio >= 0.9;
 }
 
 function stripFirstCanonicalLineIfDuplicated(args: {
-  intro?: string | null;
+  frameText?: string | null;
   canonicalBody: string;
 }): string {
   const canonicalBody = String(args.canonicalBody || "").trim();
   if (!canonicalBody) return "";
 
-  if (!shouldStripFirstCanonicalLineFromBody(args)) {
+  if (
+    !isSemanticallyDuplicatedAgainstCanonicalLead({
+      frameText: args.frameText,
+      canonicalBody,
+    })
+  ) {
     return canonicalBody;
   }
 
@@ -109,6 +114,21 @@ function stripFirstCanonicalLineIfDuplicated(args: {
   }
 
   return nextLines.join("\n").trim();
+}
+
+function nullifyFrameTextIfDuplicated(args: {
+  frameText?: string | null;
+  canonicalBody: string;
+}): string | null {
+  const frameText = String(args.frameText || "").trim();
+  if (!frameText) return null;
+
+  return isSemanticallyDuplicatedAgainstCanonicalLead({
+    frameText,
+    canonicalBody: args.canonicalBody,
+  })
+    ? null
+    : frameText;
 }
 
 function looksLikeResolvedHeading(line: string): boolean {
@@ -1226,15 +1246,23 @@ export async function renderFastpathDmReply(
     const dedupedCanonicalBody =
       isInfoGeneralOverviewTurn || isResolvedCatalogAnswer
         ? stripFirstCanonicalLineIfDuplicated({
-            intro: frame.intro,
+            frameText: frame.intro,
             canonicalBody: renderedCanonicalBody,
           })
         : renderedCanonicalBody;
 
+    const safeClosing =
+      isInfoGeneralOverviewTurn || isResolvedCatalogAnswer
+        ? nullifyFrameTextIfDuplicated({
+            frameText: frame.closing,
+            canonicalBody: dedupedCanonicalBody || renderedCanonicalBody,
+          })
+        : String(frame.closing || "").trim() || null;
+
     const finalGroundedReply = [
       String(frame.intro || "").trim(),
       dedupedCanonicalBody,
-      String(frame.closing || "").trim(),
+      String(safeClosing || "").trim(),
     ]
       .filter(Boolean)
       .join("\n\n")
