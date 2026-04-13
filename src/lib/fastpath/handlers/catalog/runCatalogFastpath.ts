@@ -1101,7 +1101,7 @@ export async function runCatalogFastpath(
         familyKey: "canonical_ambiguous_family",
         referenceKind: "catalog_family",
       }
-    : routingTargetVariantId
+    : routingTargetVariantId && routingTargetServiceId
     ? {
         source: "routing_variant" as const,
         status: "resolved_single" as const,
@@ -1112,7 +1112,7 @@ export async function runCatalogFastpath(
         familyKey: "",
         referenceKind: "variant_specific",
       }
-    : routingTargetServiceId || routingReferenceKind === "entity_specific"
+    : routingTargetServiceId
     ? {
         source: "routing_service" as const,
         status: "resolved_single" as const,
@@ -1220,24 +1220,15 @@ export async function runCatalogFastpath(
 
   const hasServiceStructuredCatalogTarget =
     !isStructuredComparisonTurn &&
-    (
-      Boolean(targetServiceId) ||
-      referenceKind === "entity_specific"
-    );
+    Boolean(targetServiceId);
 
   const hasVariantStructuredCatalogTarget =
     !isStructuredComparisonTurn &&
-    (
-      Boolean(targetVariantId) ||
-      referenceKind === "variant_specific"
-    );
+    Boolean(targetVariantId);
 
   const hasFamilyStructuredCatalogTarget =
     !isStructuredComparisonTurn &&
-    (
-      Boolean(targetFamilyKey) ||
-      referenceKind === "catalog_family"
-    );
+    Boolean(targetFamilyKey);
 
   const hasAnyStructuredCatalogTarget =
     hasServiceStructuredCatalogTarget ||
@@ -1248,7 +1239,10 @@ export async function runCatalogFastpath(
 
   const isGenericCatalogOverviewByIntent =
     !hasAnyStructuredCatalogTarget &&
-    (referenceKind === "none" || referenceKind === "catalog_overview") &&
+    (
+      effectiveAuthority.referenceKind === "none" ||
+      effectiveAuthority.referenceKind === "catalog_overview"
+    ) &&
     (
       intentOutNorm === "precio" ||
       intentOutNorm === "planes_precios" ||
