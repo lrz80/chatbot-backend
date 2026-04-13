@@ -318,6 +318,12 @@ export async function finalizeReply(
     last_resolved_intent: canonicalLastResolvedIntent,
   };
 
+  console.log("[FINALIZE_REPLY][OUTBOUND_REPLY_DEBUG]", {
+    tenantId,
+    canal,
+    replyPreview: String(reply || "").slice(0, 300),
+  });
+
   const ok = await deps.safeSend(tenantId, canal, messageId, fromNumber, reply);
 
   if (!ok) {

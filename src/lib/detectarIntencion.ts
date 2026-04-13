@@ -605,6 +605,13 @@ Reglas:
   - asksAvailability
 - Puede haber varios facets en true al mismo tiempo.
 - Si el mensaje es ambiguo, devuelve la intención ambigua permitida por el catálogo.
+- Si el mensaje consiste principalmente en el nombre de un servicio, categoría de servicio, tipo de proyecto, material, instalación, remodelación, o una referencia corta a una oferta del negocio, no lo clasifiques como "duda" por defecto.
+- En esos casos, si la mejor intención permitida corresponde a pedir información sobre un servicio u oferta, usa esa intención.
+- Para menciones cortas de servicio u oferta:
+  - usa "scope": "entity" cuando el mensaje parece apuntar a una sola oferta o servicio
+  - usa "scope": "family" cuando parece una familia o categoría amplia
+- Usa "duda" solo cuando el mensaje sea realmente insuficiente para inferir una dirección de negocio o servicio.
+- Una referencia corta a una oferta del negocio puede seguir siendo una señal válida de interés aunque no tenga verbo, pregunta explícita o contexto adicional.
 - Señal comercial:
   - purchaseIntent: "unknown" | "low" | "medium" | "high"
   - wantsBooking

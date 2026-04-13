@@ -17,6 +17,14 @@ export async function saveAssistantMessageAndEmit(opts: {
   try {
     const finalMessageId = messageId ? `${messageId}-bot` : null;
 
+    console.log("[SAVE_ASSISTANT_MESSAGE_AND_EMIT][INPUT_DEBUG]", {
+      tenantId,
+      canal,
+      fromNumber,
+      messageId,
+      contentPreview: String(content || "").slice(0, 300),
+    });
+
     const { rows } = await pool.query(
       `INSERT INTO messages (
         tenant_id, role, content, timestamp, canal, from_number, message_id, intent, interest_level
