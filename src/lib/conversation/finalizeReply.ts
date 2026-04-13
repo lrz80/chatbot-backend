@@ -146,33 +146,47 @@ export async function finalizeReply(
   };
 
   const canonicalLastEntityId =
-    baseCtx.lastEntityId ??
-    baseCtx.last_entity_id ??
-    baseCtx.last_service_id ??
-    baseCtx.selectedServiceId ??
-    baseCtx.structuredService?.serviceId ??
-    baseCtx.last_service_ref?.service_id ??
+    patchCtx.last_service_id ??
+    patchCtx.selectedServiceId ??
+    patchCtx.lastEntityId ??
+    patchCtx.last_entity_id ??
+    patchCtx.structuredService?.serviceId ??
+    rawBaseCtx.last_service_id ??
+    rawBaseCtx.selectedServiceId ??
+    rawBaseCtx.lastEntityId ??
+    rawBaseCtx.last_entity_id ??
+    rawBaseCtx.structuredService?.serviceId ??
+    rawBaseCtx.last_service_ref?.service_id ??
     capturedRef?.service_id ??
     null;
 
   const canonicalLastEntityName =
-    baseCtx.lastEntityName ??
-    baseCtx.last_entity_name ??
-    baseCtx.last_service_name ??
-    baseCtx.structuredService?.serviceName ??
-    baseCtx.structuredService?.serviceLabel ??
-    baseCtx.last_service_ref?.label ??
+    patchCtx.last_service_name ??
+    patchCtx.lastEntityName ??
+    patchCtx.last_entity_name ??
+    patchCtx.structuredService?.serviceName ??
+    patchCtx.structuredService?.serviceLabel ??
+    rawBaseCtx.last_service_name ??
+    rawBaseCtx.lastEntityName ??
+    rawBaseCtx.last_entity_name ??
+    rawBaseCtx.structuredService?.serviceName ??
+    rawBaseCtx.structuredService?.serviceLabel ??
+    rawBaseCtx.last_service_ref?.label ??
     capturedRef?.label ??
     null;
 
   const canonicalLastFamilyKey =
-    baseCtx.lastFamilyKey ??
-    baseCtx.last_family_key ??
+    patchCtx.lastFamilyKey ??
+    patchCtx.last_family_key ??
+    rawBaseCtx.lastFamilyKey ??
+    rawBaseCtx.last_family_key ??
     null;
 
   const canonicalLastFamilyName =
-    baseCtx.lastFamilyName ??
-    baseCtx.last_family_name ??
+    patchCtx.lastFamilyName ??
+    patchCtx.last_family_name ??
+    rawBaseCtx.lastFamilyName ??
+    rawBaseCtx.last_family_name ??
     null;
 
   const canonicalLastPresentedEntityIds = Array.isArray(baseCtx.lastPresentedEntityIds)
@@ -225,19 +239,26 @@ export async function finalizeReply(
   const canonicalLastResolvedIntent =
     lastIntent ??
     intentFallback ??
-    baseCtx.lastResolvedIntent ??
-    baseCtx.last_resolved_intent ??
-    baseCtx.last_intent ??
+    patchCtx.lastResolvedIntent ??
+    patchCtx.last_resolved_intent ??
+    patchCtx.last_intent ??
+    rawBaseCtx.lastResolvedIntent ??
+    rawBaseCtx.last_resolved_intent ??
+    rawBaseCtx.last_intent ??
     null;
 
   const canonicalLastVariantId =
-    baseCtx.last_variant_id ??
-    baseCtx.lastVariantId ??
+    patchCtx.last_variant_id ??
+    patchCtx.lastVariantId ??
+    rawBaseCtx.last_variant_id ??
+    rawBaseCtx.lastVariantId ??
     null;
 
   const canonicalLastVariantName =
-    baseCtx.last_variant_name ??
-    baseCtx.lastVariantName ??
+    patchCtx.last_variant_name ??
+    patchCtx.lastVariantName ??
+    rawBaseCtx.last_variant_name ??
+    rawBaseCtx.lastVariantName ??
     null;
 
   const conversationAnchorDomain =
