@@ -317,60 +317,70 @@ function normalizeCatalogDisambiguationOptions(
     const kind: "service" | "variant" =
       rawKind === "variant" ? "variant" : "service";
 
-    const serviceId = String(item?.serviceId || item?.id || "").trim();
-    const variantId = String(item?.variantId || "").trim();
-    const label = String(
-      item?.label ||
-      item?.variantName ||
-      item?.variant_name ||
-      item?.name ||
-      ""
-    ).trim();
-
-    const serviceName = String(
-      item?.serviceName ||
-      item?.service_name ||
-      ""
-    ).trim();
-
-    const variantName = String(
-      item?.variantName ||
-      item?.variant_name ||
-      item?.label ||
-      item?.name ||
-      ""
-    ).trim();
-
-    if (!serviceId || !label) continue;
-
     if (kind === "variant") {
-      if (!variantId) continue;
+      const serviceId = String(item?.serviceId || item?.id || "").trim();
+      const variantId = String(item?.variantId || "").trim();
+      const variantName = String(
+        item?.variantName ||
+        item?.variant_name ||
+        item?.label ||
+        item?.name ||
+        ""
+      ).trim();
+      const serviceName = String(
+        item?.serviceName ||
+        item?.service_name ||
+        ""
+      ).trim();
+
+      if (!serviceId || !variantId || !variantName) {
+        continue;
+      }
 
       const dedupeKey = `${serviceId}::${variantId}`;
       if (seen.has(dedupeKey)) continue;
-
       seen.add(dedupeKey);
+
       result.push({
         kind: "variant",
         serviceId,
         variantId,
-        label,
+        label: variantName,
         serviceName: serviceName || null,
-        variantName: variantName || null,
+        variantName,
       });
+
+      continue;
+    }
+
+    const serviceId = String(
+      item?.id ||
+      item?.serviceId ||
+      ""
+    ).trim();
+
+    const serviceName = String(
+      item?.name ||
+      item?.serviceName ||
+      item?.service_name ||
+      item?.label ||
+      ""
+    ).trim();
+
+    if (!serviceId || !serviceName) {
       continue;
     }
 
     const dedupeKey = serviceId;
     if (seen.has(dedupeKey)) continue;
-
     seen.add(dedupeKey);
+
     result.push({
       kind: "service",
       serviceId,
       variantId: null,
-      label,
-      serviceName: serviceName || label || null,
+      label: serviceName,
+      serviceName,
     });
   }
 
