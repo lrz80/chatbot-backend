@@ -402,6 +402,10 @@ export async function handleSingleServiceCatalog(
           kind: "resolved_catalog_answer",
           scope: "variant",
           presentationMode,
+          closingMode:
+            presentationMode === "action_link"
+              ? "availability_statement"
+              : "default",
           serviceId: targetServiceId,
           serviceName: baseName || null,
           variantId: toTrimmedString(chosenVariant.id),

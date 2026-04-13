@@ -179,6 +179,7 @@ type CatalogPayload =
       kind: "resolved_catalog_answer";
       scope: "service" | "variant" | "family" | "overview";
       presentationMode?: "full_detail" | "action_link";
+      closingMode?: "default" | "availability_statement" | "none";
       serviceId?: string | null;
       serviceName?: string | null;
       variantId?: string | null;
@@ -369,6 +370,7 @@ async function buildGroundedFrameOnly(input: {
   isResolvedCatalogAnswer: boolean;
   isCatalogChoiceReply: boolean;
   isActionLinkResolvedCatalogReply: boolean;
+  resolvedCatalogClosingMode: "default" | "availability_statement" | "none";
 }): Promise<{ intro: string | null; closing: string | null }> {
   const frameTaskRules = input.isCatalogChoiceReply
     ? [
@@ -396,8 +398,8 @@ async function buildGroundedFrameOnly(input: {
     ? [
         "This is a resolved grounded catalog answer.",
         "Return exactly one short intro before the canonical body.",
-        input.isActionLinkResolvedCatalogReply
-          ? "For action-link continuation turns, closing must be null."
+        input.resolvedCatalogClosingMode === "none"
+          ? "Closing must be null."
           : "Return exactly one short closing after the canonical body.",
         "You are only framing the canonical body. The body itself is already resolved and grounded by the system.",
         "The intro must be brief, neutral-to-consultative, and natural.",
@@ -413,9 +415,17 @@ async function buildGroundedFrameOnly(input: {
         "The closing must never ask for more information, more details, or more explanation about the same plan, service, or variant already explained.",
         "The closing must never imply that the system still owes the user basic information about the same item.",
         "The closing should only help the user do one of these: proceed, compare another option, book, or talk to a person.",
-        input.isActionLinkResolvedCatalogReply
-          ? "For action-link continuation turns, always return null for closing."
+        input.resolvedCatalogClosingMode === "none"
+          ? "Always return null for closing."
+          : input.resolvedCatalogClosingMode === "availability_statement"
+          ? "Return one short declarative closing. It must not be a question. It must not ask the user to proceed, reserve, book, click, or confirm. It should simply leave the conversation open for further help."
           : "If there is no strong next step, return null for closing.",
+        input.resolvedCatalogClosingMode === "availability_statement"
+          ? "The closing must be declarative, low-pressure, and non-interrogative."
+          : null,
+        input.resolvedCatalogClosingMode === "availability_statement"
+          ? "Do not use question marks in the closing."
+          : null,
         "If in doubt, return null for intro and/or closing rather than inventing content.",
         "The closing must not use phrases equivalent to asking for more details or more information about the same item.",
       ]
@@ -661,6 +671,11 @@ export async function renderFastpathDmReply(
       ? String(catalogPayload.presentationMode || "full_detail").trim().toLowerCase()
       : "full_detail";
 
+  const resolvedCatalogClosingMode =
+    catalogPayload?.kind === "resolved_catalog_answer"
+      ? String(catalogPayload.closingMode || "default").trim().toLowerCase()
+      : "default";
+
   const isActionLinkResolvedCatalogReply =
     catalogPayload?.kind === "resolved_catalog_answer" &&
     resolvedCatalogPresentationMode === "action_link";
@@ -803,7 +818,7 @@ export async function renderFastpathDmReply(
     );
 
   const shouldAllowOutro =
-    !isActionLinkResolvedCatalogReply &&
+    resolvedCatalogClosingMode !== "none" &&
     (!bypassWriterModel ||
       isResolvedCatalogAnswer ||
       isCatalogListReply ||
@@ -820,7 +835,7 @@ export async function renderFastpathDmReply(
     );
 
   const shouldEndWithSalesQuestion =
-    !isActionLinkResolvedCatalogReply &&
+    resolvedCatalogClosingMode === "default" &&
     !replyPolicy.canonicalBodyOwnsClosing &&
     !isCatalogChoiceReply &&
     (
@@ -1018,6 +1033,12 @@ export async function renderFastpathDmReply(
       isResolvedCatalogAnswer,
       isCatalogChoiceReply,
       isActionLinkResolvedCatalogReply,
+      resolvedCatalogClosingMode:
+        resolvedCatalogClosingMode === "availability_statement"
+          ? "availability_statement"
+          : resolvedCatalogClosingMode === "none"
+          ? "none"
+          : "default",
     });
 
     if (isCatalogChoiceReply && !String(frame.intro || "").trim()) {
@@ -1035,7 +1056,37 @@ export async function renderFastpathDmReply(
         isResolvedCatalogAnswer,
         isCatalogChoiceReply,
         isActionLinkResolvedCatalogReply,
+        resolvedCatalogClosingMode:
+          resolvedCatalogClosingMode === "availability_statement"
+            ? "availability_statement"
+            : resolvedCatalogClosingMode === "none"
+            ? "none"
+            : "default",
       });
+    }
+
+    if (resolvedCatalogClosingMode === "none") {
+      frame = {
+        intro: String(frame.intro || "").trim() || null,
+        closing: null,
+      };
+    }
+
+    if (
+      resolvedCatalogClosingMode === "availability_statement" &&
+      /[?¿]/.test(String(frame.closing || ""))
+    ) {
+      frame = {
+        intro: String(frame.intro || "").trim() || null,
+        closing: null,
+      };
+    }
+
+    if (isActionLinkResolvedCatalogReply) {
+      frame = {
+        intro: String(frame.intro || "").trim() || null,
+        closing: null,
+      };
     }
 
     const renderedCanonicalBody =

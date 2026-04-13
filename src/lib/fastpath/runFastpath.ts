@@ -190,6 +190,7 @@ type CatalogPayload =
       kind: "resolved_catalog_answer";
       scope: "service" | "variant" | "family" | "overview";
       presentationMode?: "full_detail" | "action_link";
+      closingMode?: "default" | "availability_statement" | "none";
       serviceId?: string | null;
       serviceName?: string | null;
       variantId?: string | null;
