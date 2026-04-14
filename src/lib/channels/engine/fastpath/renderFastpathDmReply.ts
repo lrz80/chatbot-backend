@@ -314,38 +314,6 @@ type CatalogPayload =
       };
     };
 
-function shouldBypassWriterModel(input: {
-  isCatalogChoiceReply: boolean;
-  isResolvedCatalogAnswer: boolean;
-  isGroundedCatalogReply: boolean;
-  isPriceSummaryReply: boolean;
-  canonicalBodyOwnsClosing: boolean;
-  shouldUseGroundedFrameOnly: boolean;
-  isInfoGeneralOverviewTurn: boolean;
-}): boolean {
-  if (input.isResolvedCatalogAnswer) {
-    return true;
-  }
-
-  if (
-    input.shouldUseGroundedFrameOnly &&
-    (
-      input.canonicalBodyOwnsClosing ||
-      input.isGroundedCatalogReply ||
-      input.isPriceSummaryReply ||
-      input.isInfoGeneralOverviewTurn
-    )
-  ) {
-    return true;
-  }
-
-  return (
-    input.isGroundedCatalogReply ||
-    input.isPriceSummaryReply ||
-    input.canonicalBodyOwnsClosing
-  );
-}
-
 function buildResolvedCatalogCanonicalBody(input: {
   catalogPayload: Extract<CatalogPayload, { kind: "resolved_catalog_answer" }>;
 }): string {
@@ -375,22 +343,6 @@ function buildResolvedCatalogCanonicalBody(input: {
     .filter(Boolean)
     .join("\n\n")
     .trim();
-}
-
-function isBusinessInfoReply(input: {
-  fpSource: string;
-  fpIntent: string;
-  replyPolicy: RenderFastpathDmReplyInput["replyPolicy"];
-}): boolean {
-  if (input.replyPolicy.isGroundedCatalogOverviewDm === true) {
-    return true;
-  }
-
-  if (input.fpIntent === "info_general") {
-    return true;
-  }
-
-  return input.fpSource.startsWith("business_info");
 }
 
 function renderCatalogChoiceBody(input: {
@@ -475,109 +427,70 @@ async function buildGroundedFrameOnly(input: {
   promptBaseMem: string;
   history: ChatCompletionMessageParam[];
   canonicalReply: string;
-  commercialPolicy: {
-    purchaseIntent: "unknown" | "low" | "medium" | "high";
-    wantsBooking: boolean;
-    wantsQuote: boolean;
-    wantsHuman: boolean;
-    urgency: "unknown" | "low" | "medium" | "high";
-    shouldUseSalesTone: boolean;
-    shouldUseSoftClosing: boolean;
-    shouldUseDirectClosing: boolean;
-    shouldSuggestHumanHandoff: boolean;
-  };
   fpIntent: string;
-  isInfoGeneralOverviewTurn: boolean;
-  isResolvedCatalogAnswer: boolean;
-  isCatalogChoiceReply: boolean;
-  isActionLinkResolvedCatalogReply: boolean;
   resolvedCatalogClosingMode: "default" | "availability_statement" | "none";
+  replyPolicy: RenderFastpathDmReplyInput["replyPolicy"];
 }): Promise<{
   intro: string | null;
   closing: string | null;
   closingType: FrameClosingType;
 }> {
-  const frameTaskRules = input.isCatalogChoiceReply
-    ? [
-        "This is a catalog choice turn.",
-        "Return exactly one short intro line before the canonical options body.",
-        "For catalog choice turns, intro is required and must never be null.",
-        "The intro must state that the selected plan or service has these options.",
-        "The intro must be simple, neutral, and direct.",
-        "The intro must not sound promotional or vague.",
-        "The intro must not say 'here is information about the plan' or similar.",
-        "The intro must not ask whether the user wants more information.",
-        "The intro must not mention includes, benefits, features, prices, schedules, policies, or links.",
-        "The intro must not repeat the numbered options.",
-        "Return exactly one short closing line after the canonical options body.",
-        "The closing must be a direct selection CTA.",
-        "The closing should tell the user to select the option they want.",
-        "The closing must not be phrased as a broad question.",
-        "Prefer imperative CTA style over question style.",
-        "Do not rewrite or summarize the options body.",
-        "Do not mention any facts not already implied by the canonical body.",
-        "Do not return intro as null for catalog choice turns.",
-        "If you are unsure, still return a short direct intro instead of null.",
-      ]
-    : input.isResolvedCatalogAnswer
-    ? [
-        "This is a resolved grounded catalog answer.",
-        "Return exactly one short intro before the canonical body.",
-        input.resolvedCatalogClosingMode === "none"
-          ? "Closing must be null."
-          : "Return exactly one short closing after the canonical body.",
-        "You are only framing the canonical body. The body itself is already resolved and grounded by the system.",
-        "The intro must be brief, neutral-to-consultative, and natural.",
-        "The closing must be brief and must respect the tenant CTA from PROMPT_BASE when one exists.",
-        "Do not rewrite, summarize, paraphrase, compress, expand, or replace the canonical body.",
-        "Do not mention any fact, benefit, positioning, suitability claim, audience claim, recommendation, promise, or interpretation that is not explicitly present in the canonical body.",
-        "Do not infer who this plan is ideal for.",
-        "Do not infer lifestyle, preferences, goals, schedule fit, or customer profile.",
-        "Do not restate prices, includes, schedules, policies, conditions, or links outside the canonical body.",
-        "Do not repeat the exact title or heading if the canonical body already starts with it.",
-        "The intro must work only as a light conversational bridge into the body.",
-        "The closing must work only as a light conversational bridge to the next step.",
-        "If PROMPT_BASE contains an explicit tenant CTA, use that CTA in the closing instead of inventing a different next-step wording.",
-        "Do not replace an explicit tenant CTA with a generic variant.",
-        "The closing must never ask for more information, more details, or more explanation about the same plan, service, or variant already explained.",
-        "The closing must never imply that the system still owes the user basic information about the same item.",
-        input.resolvedCatalogClosingMode === "availability_statement"
-          ? "The closing should only communicate continued availability to help the user further."
-          : "The closing should only help the user do one of these: proceed, compare another option, book, or talk to a person.",
-        input.resolvedCatalogClosingMode === "none"
-          ? "Always return null for closing."
-        : input.resolvedCatalogClosingMode === "availability_statement"
-          ? "Return one short declarative closing that leaves the conversation open for further help. closingType must be availability_statement. The closing must not be a question. The closing must not invite booking, proceeding, reserving, clicking, confirming, or continuing a process."
-          : "If there is no strong next step, return null for closing.",
-        input.resolvedCatalogClosingMode === "availability_statement"
-          ? "For availability_statement turns, never use closingType question."
-          : null,
-        input.resolvedCatalogClosingMode === "availability_statement"
-          ? "If you cannot produce a valid availability-style closing, return closing as null and closingType as none."
-          : null,
-        input.resolvedCatalogClosingMode === "availability_statement"
-          ? "The closing must be declarative, low-pressure, and non-interrogative."
-          : null,
-        input.resolvedCatalogClosingMode === "availability_statement"
-          ? "Do not use question marks in the closing."
-          : null,
-        "If in doubt, return null for intro and/or closing rather than inventing content.",
-        "The closing must not use phrases equivalent to asking for more details or more information about the same item.",
-      ]
-    : input.isInfoGeneralOverviewTurn
-    ? [
-        "This is a grounded business overview turn.",
-        "Intro must be null.",
-        "Do not ask a broad discovery question before the canonical body.",
-        "Do not restate, summarize, or paraphrase the canonical body.",
-        "If PROMPT_BASE contains an explicit tenant CTA, use that CTA as the closing.",
-        "Do not replace an explicit tenant CTA with a generic closing.",
-        "Return one short closing that keeps the conversation moving naturally only when there is no explicit tenant CTA.",
-      ]
-    : [
-        "Return optional framing only when it improves the DM reply.",
-        "Do not rewrite or summarize the canonical body.",
-      ];
+  const commercialPolicy = input.replyPolicy.commercialPolicy;
+  const isCatalogChoiceReply = input.replyPolicy.answerType === "disambiguation";
+  const isResolvedCatalogAnswer = input.replyPolicy.answerType === "direct_answer";
+  const isInfoGeneralOverviewTurn = input.replyPolicy.answerType === "overview";
+  const isActionLinkResolvedCatalogReply =
+    input.replyPolicy.answerType === "action_link";
+  const frameTaskRules =
+    input.replyPolicy.answerType === "disambiguation"
+      ? [
+          "This is a catalog choice turn.",
+          "Return exactly one short intro line before the canonical options body.",
+          "Intro is required and must never be null.",
+          "The intro must state that these are the available options.",
+          "The intro must be simple, neutral, and direct.",
+          "The intro must not mention prices, includes, benefits, schedules, policies, or links.",
+          "The intro must not repeat the numbered options.",
+          "Return exactly one short closing line after the canonical options body.",
+          "The closing must be a direct selection CTA.",
+          "Do not rewrite or summarize the options body.",
+        ]
+      : input.replyPolicy.answerType === "overview"
+      ? [
+          "This is a grounded business overview turn.",
+          "Intro must be null.",
+          "Do not ask a broad discovery question before the canonical body.",
+          "Do not restate, summarize, or paraphrase the canonical body.",
+          "If PROMPT_BASE contains an explicit tenant CTA, use that CTA as the closing.",
+          "Do not replace an explicit tenant CTA with a generic closing.",
+          "Return one short closing that keeps the conversation moving naturally only when there is no explicit tenant CTA.",
+        ]
+      : input.replyPolicy.answerType === "direct_answer" ||
+        input.replyPolicy.answerType === "comparison" ||
+        input.replyPolicy.answerType === "action_link"
+      ? [
+          "This is a resolved grounded answer.",
+          input.replyPolicy.shouldForceNullIntro
+            ? "Intro must be null."
+            : "Return exactly one short intro before the canonical body.",
+          input.replyPolicy.shouldForceNullClosing
+            ? "Closing must be null."
+            : input.resolvedCatalogClosingMode === "availability_statement"
+            ? "Return one short declarative availability-style closing. It must not be a question."
+            : "Return exactly one short closing after the canonical body.",
+          "You are only framing the canonical body.",
+          "Do not rewrite, summarize, paraphrase, compress, expand, or replace the canonical body.",
+          "Do not mention facts not explicit in the canonical body.",
+          "Do not restate prices, includes, schedules, policies, conditions, or links outside the canonical body.",
+          "If PROMPT_BASE contains an explicit tenant CTA, prefer that CTA in the closing when closing is allowed.",
+          input.resolvedCatalogClosingMode === "availability_statement"
+            ? "The closing must be declarative, low-pressure, and non-interrogative."
+            : "The closing must be brief, consultative, and natural.",
+        ]
+      : [
+          "Return optional framing only when it improves the DM reply.",
+          "Do not rewrite or summarize the canonical body.",
+        ];
 
   const framePrompt = [
     "SYSTEM_ROLE:",
@@ -613,20 +526,23 @@ async function buildGroundedFrameOnly(input: {
     "TURN_METADATA_JSON:",
     JSON.stringify({
       fpIntent: input.fpIntent || null,
-      isInfoGeneralOverviewTurn: input.isInfoGeneralOverviewTurn,
-      isResolvedCatalogAnswer: input.isResolvedCatalogAnswer,
-      isCatalogChoiceReply: input.isCatalogChoiceReply,
-      isActionLinkResolvedCatalogReply: input.isActionLinkResolvedCatalogReply,
-      resolvedCatalogClosingMode: input.resolvedCatalogClosingMode,
-      purchaseIntent: input.commercialPolicy.purchaseIntent,
-      wantsBooking: input.commercialPolicy.wantsBooking,
-      wantsQuote: input.commercialPolicy.wantsQuote,
-      wantsHuman: input.commercialPolicy.wantsHuman,
-      urgency: input.commercialPolicy.urgency,
-      shouldUseSalesTone: input.commercialPolicy.shouldUseSalesTone,
-      shouldUseSoftClosing: input.commercialPolicy.shouldUseSoftClosing,
-      shouldUseDirectClosing: input.commercialPolicy.shouldUseDirectClosing,
-      shouldSuggestHumanHandoff: input.commercialPolicy.shouldSuggestHumanHandoff,
+      answerType: input.replyPolicy.answerType,
+      salesPosture: input.replyPolicy.salesPosture,
+      closingMode: input.replyPolicy.closingMode,
+      shouldAskQuestion: input.replyPolicy.shouldAskQuestion,
+      shouldOpenChoice: input.replyPolicy.shouldOpenChoice,
+      shouldForceNullIntro: input.replyPolicy.shouldForceNullIntro,
+      shouldForceNullClosing: input.replyPolicy.shouldForceNullClosing,
+      clarificationTarget: input.replyPolicy.clarificationTarget,
+      purchaseIntent: commercialPolicy.purchaseIntent,
+      wantsBooking: commercialPolicy.wantsBooking,
+      wantsQuote: commercialPolicy.wantsQuote,
+      wantsHuman: commercialPolicy.wantsHuman,
+      urgency: commercialPolicy.urgency,
+      shouldUseSalesTone: commercialPolicy.shouldUseSalesTone,
+      shouldUseSoftClosing: commercialPolicy.shouldUseSoftClosing,
+      shouldUseDirectClosing: commercialPolicy.shouldUseDirectClosing,
+      shouldSuggestHumanHandoff: commercialPolicy.shouldSuggestHumanHandoff,
     }),
     "",
     "PROMPT_BASE:",
@@ -660,9 +576,9 @@ async function buildGroundedFrameOnly(input: {
       canSelectSpecificCatalogItem: false,
       canOfferBookingTimes: false,
       canUseOfficialLinks: false,
-      unresolvedEntity: input.isCatalogChoiceReply,
-      clarificationTarget: input.isCatalogChoiceReply ? "variant" : null,
-      singleResolvedEntityOnly: input.isResolvedCatalogAnswer,
+      unresolvedEntity: input.replyPolicy.shouldOpenChoice,
+      clarificationTarget: input.replyPolicy.clarificationTarget,
+      singleResolvedEntityOnly: input.replyPolicy.answerType === "direct_answer",
       allowAlternativeEntities: false,
       allowCrossSellEntities: false,
       allowAddOnSuggestions: false,
@@ -747,6 +663,8 @@ export type RenderFastpathDmReplyInput = {
     shouldOpenChoice: boolean;
     shouldForceNullIntro: boolean;
     shouldForceNullClosing: boolean;
+
+    clarificationTarget: "service" | "variant" | null;
 
     commercialPolicy: {
       purchaseIntent: "unknown" | "low" | "medium" | "high";
@@ -1004,11 +922,7 @@ export async function renderFastpathDmReply(
     canOfferBookingTimes: false,
     canUseOfficialLinks: true,
     unresolvedEntity: replyPolicy.shouldOpenChoice,
-    clarificationTarget: unresolvedCatalogChoice
-      ? isServiceChoiceReply
-        ? "service"
-        : "variant"
-      : null,
+    clarificationTarget: replyPolicy.clarificationTarget,
     singleResolvedEntityOnly:
       (isResolvedCatalogAnswer || replyPolicy.hasResolvedEntity) &&
       !isCatalogDbReply,
@@ -1026,80 +940,33 @@ export async function renderFastpathDmReply(
     mustEndWithSalesQuestion: isCatalogChoiceReply
       ? false
       : shouldEndWithSalesQuestion,
-    reasoningNotes: isServiceChoiceReply
-      ? "Catalog service choice turn. The canonical options body is owned by the system. Write one short intro that says these are the available options. After the canonical options body, add one short direct CTA telling the user to select the option they want. Use a clean and simple DM structure. Do not rewrite, summarize, rename, reorder, or replace the numbered options."
-      : isVariantChoiceReply
-      ? "Catalog variant choice turn. The canonical options body is owned by the system. Write one short intro that says the selected plan has these options. After the canonical options body, add one short direct CTA telling the user to select the option they want. Use a clean and simple DM structure. Do not say 'here is information about the plan'. Do not ask if the user wants more information. Do not mention includes, benefits, or prices. Do not rewrite, summarize, rename, reorder, or replace the numbered options."
-      : isCatalogListReply
-      ? [
-          "Grounded catalog list turn. The canonical body is the source of truth and must be preserved exactly.",
-          "Do not rewrite, summarize, decorate, or enrich the catalog list.",
-          "Do not invent descriptions, includes, prices, schedule details, labels, or benefits not already present in the canonical body.",
-          "After the canonical body, add exactly one short closing move only if allowed by policy.",
-          tenantClosingPolicyInstruction,
-          commercialClosingInstruction,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : isResolvedCatalogAnswer
-      ? [
-          "Resolved grounded catalog turn. The canonical body is the source of truth and must be preserved exactly.",
-          "Do not rewrite, summarize, compress, paraphrase, or omit any fact, condition, number, schedule, bullet, or link from the canonical body.",
-          "Return one short commercial intro before the canonical body.",
-          "The intro must be consultative, natural, and sales-oriented.",
-          "The intro must not repeat the exact title or heading of the plan or variant if the canonical body already starts with it.",
-          "Do not restate, preview, summarize, or paraphrase facts already contained in the canonical body.",
-          "Do not mention prices, numbers, includes, service details, schedules, locations, policies, or links outside the canonical body.",
-          resolvedCatalogClosingMode === "none"
-            ? "Do not add any closing after the canonical body. Closing must be null."
-            : resolvedCatalogClosingMode === "availability_statement"
-            ? "After the canonical body, add one short declarative availability-style closing only if you can do so without asking a question. The closing must not be a CTA."
-            : "After the canonical body, add exactly one short closing move only if it helps the user take a real next step.",
-          resolvedCatalogClosingMode === "availability_statement"
-            ? "The closing must be declarative, low-pressure, and availability-oriented."
-            : "The closing must be consultative, natural, and sales-oriented.",
-
-          resolvedCatalogClosingMode === "availability_statement"
-            ? "Do not ask any question after the canonical body. Do not reopen booking, reservation, or process guidance."
-            : "Do not ask whether the user wants more information, more details, or more explanation about the same plan or variant that was just explained.",
-          "Do not use generic closings that reopen the same informational question already answered.",
-          "If PROMPT_BASE contains an explicit tenant CTA or closing instruction, use it as the preferred closing whenever a closing is allowed and it does not conflict with the rules above.",
-          "The body itself must remain unchanged and in the same order.",
-          tenantClosingPolicyInstruction,
-          commercialClosingInstruction,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : isInfoGeneralOverviewTurn
-      ? [
-          "General business overview turn for DM. The canonical body is the source of truth and must be preserved.",
-          "Do not replace it with a vague clarification question.",
-          "Do not turn the intro into a broad generic question about what the user wants to know.",
-          "Do not use the intro to weaken, delay, or redirect the overview.",
-          "Do not omit the closing.",
-          "After the canonical body, add exactly one short closing move that helps the user continue.",
-          "The tenant-specific closing policy may apply only to the closing, never to the intro.",
-          "Keep the canonical body in the same order and bullet structure.",
-          tenantClosingPolicyInstruction,
-          commercialClosingInstruction,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : isGroundedCatalogReply
-      ? [
-          "Grounded catalog turn. Preserve the canonical body exactly.",
-          commercialClosingInstruction,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : isPriceSummaryReply
-      ? [
-          "Grounded price summary turn. Preserve the canonical body exactly.",
-          commercialClosingInstruction,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : commercialClosingInstruction,
+    reasoningNotes: [
+      "The canonical body is the source of truth and must be preserved exactly.",
+      replyPolicy.answerType === "disambiguation"
+        ? "This is a disambiguation turn. Write a short direct intro and a short direct selection CTA."
+        : replyPolicy.answerType === "overview"
+        ? "This is an overview turn. Do not weaken, delay, or redirect the overview. Keep intro null when policy requires it."
+        : replyPolicy.answerType === "comparison"
+        ? "This is a comparison turn. Keep the body exact and use only a brief consultative frame."
+        : replyPolicy.answerType === "action_link"
+        ? "This is an action-link turn. Preserve the body and keep framing minimal."
+        : "This is a direct grounded answer. Preserve the body and use only a brief conversational frame.",
+      replyPolicy.shouldForceNullIntro
+        ? "Intro must be null."
+        : "Use intro only if policy allows it.",
+      replyPolicy.shouldForceNullClosing
+        ? "Closing must be null."
+        : replyPolicy.closingMode === "availability_statement"
+        ? "Closing must be a short declarative availability statement, not a question."
+        : replyPolicy.shouldAskQuestion
+        ? "Closing may be a short next-step question only if it helps the user move forward naturally."
+        : "Use closing only if policy allows it.",
+      "Do not rewrite, summarize, paraphrase, reorder, or replace the canonical body.",
+      tenantClosingPolicyInstruction,
+      commercialClosingInstruction,
+    ]
+      .filter(Boolean)
+      .join(" "),
   } as const;
 
   if (bypassWriterModel) {
@@ -1138,18 +1005,14 @@ export async function renderFastpathDmReply(
       promptBaseMem,
       history,
       canonicalReply,
-      commercialPolicy,
       fpIntent,
-      isInfoGeneralOverviewTurn,
-      isResolvedCatalogAnswer,
-      isCatalogChoiceReply,
-      isActionLinkResolvedCatalogReply,
       resolvedCatalogClosingMode:
         resolvedCatalogClosingMode === "availability_statement"
           ? "availability_statement"
           : resolvedCatalogClosingMode === "none"
           ? "none"
           : "default",
+      replyPolicy,
     });
 
     if (isCatalogChoiceReply && !String(frame.intro || "").trim()) {
@@ -1161,18 +1024,14 @@ export async function renderFastpathDmReply(
         promptBaseMem,
         history,
         canonicalReply,
-        commercialPolicy,
         fpIntent,
-        isInfoGeneralOverviewTurn,
-        isResolvedCatalogAnswer,
-        isCatalogChoiceReply,
-        isActionLinkResolvedCatalogReply,
         resolvedCatalogClosingMode:
           resolvedCatalogClosingMode === "availability_statement"
             ? "availability_statement"
             : resolvedCatalogClosingMode === "none"
             ? "none"
             : "default",
+        replyPolicy,
       });
     }
 
@@ -1180,9 +1039,9 @@ export async function renderFastpathDmReply(
     const normalizedClosing = String(frame.closing || "").trim();
 
     const safeIntro =
-      isInfoGeneralOverviewTurn ? "" : normalizedIntro;
+      replyPolicy.shouldForceNullIntro ? "" : normalizedIntro;
 
-    if (resolvedCatalogClosingMode === "none") {
+    if (replyPolicy.shouldForceNullClosing || resolvedCatalogClosingMode === "none") {
       frame = {
         intro: safeIntro || null,
         closing: null,

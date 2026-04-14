@@ -89,6 +89,8 @@ export type FastpathReplyPolicy = {
   shouldForceNullIntro: boolean;
   shouldForceNullClosing: boolean;
 
+  clarificationTarget: "service" | "variant" | null;
+
   commercialPolicy: {
     purchaseIntent: "unknown" | "low" | "medium" | "high";
     wantsBooking: boolean;
@@ -482,13 +484,9 @@ export function buildFastpathReplyPolicy(
   });
 
   const canonicalBodyOwnsClosing =
-    isVariantDisambiguation ||
-    isServiceChoiceDisambiguation ||
-    input.fp?.awaitingEffect?.type === "set_awaiting_yes_no" ||
-    replySourceKind === "catalog_grounded" ||
-    replySourceKind === "business_info" ||
-    replySourceKind === "price_like" ||
-    replySourceKind === "catalog_comparison_render";
+  isVariantDisambiguation ||
+  isServiceChoiceDisambiguation ||
+  input.fp?.awaitingEffect?.type === "set_awaiting_yes_no";
 
   const shouldBypassStructuredRewrite =
     isDmChannel && hasPendingLinkState(input.ctxPatch);
@@ -580,6 +578,13 @@ export function buildFastpathReplyPolicy(
   const shouldForceNullClosing =
     closingMode === "none" || canonicalBodyOwnsClosing;
 
+  const clarificationTarget =
+    answerType === "disambiguation"
+      ? isServiceChoiceDisambiguation
+        ? "service"
+        : "variant"
+      : null;
+
   return {
     isDmChannel,
     shouldBypassStructuredRewrite,
@@ -609,6 +614,7 @@ export function buildFastpathReplyPolicy(
     shouldOpenChoice,
     shouldForceNullIntro,
     shouldForceNullClosing,
+    clarificationTarget,
     commercialPolicy,
   };
 }
