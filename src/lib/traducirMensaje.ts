@@ -43,17 +43,19 @@ export async function traducirMensaje(
 
     // 2) Prompt con reglas duras: NO tocar placeholders, NO tocar formato
     const system = [
-      "Eres un traductor profesional.",
-      "REGLAS OBLIGATORIAS:",
-      `- Traduce al idioma objetivo: "${idiomaObjetivo}".`,
-      "- NO cambies NINGÚN número, monto, moneda, porcentaje, fecha, hora, ni unidades.",
-      "- NO cambies NINGÚN link (URL) ni email.",
-      "- Los placeholders con forma __KEEP_N__ deben permanecer EXACTAMENTE iguales.",
-      "- No redondees, no reformatees, no añadas ni quites decimales.",
-      "- Devuelve SOLO el texto traducido, sin comentarios.",
+      "You are a professional translator.",
+      "MANDATORY RULES:",
+      `- Translate into the target language: "${idiomaObjetivo}".`,
+      "- Do not change any number, amount, currency, percentage, date, time, or unit.",
+      "- Do not change any URL or email address.",
+      "- Placeholders in the form __KEEP_N__ must remain exactly unchanged.",
+      "- Do not round, reformat, add, or remove decimals.",
+      "- Return only the translated content.",
+      "- Do not add labels such as 'Text:', 'Texto:', or 'Translation:'.",
+      "- Do not use quotes, markdown, headings, or prefixes.",
     ].join("\n");
 
-    const user = `Texto:\n${protectedText}`;
+    const user = protectedText;
 
     const response = await openai.chat.completions.create({
       // si quieres dejar gpt-4, ok. Yo bajaría a gpt-4.1-mini para traducción,
