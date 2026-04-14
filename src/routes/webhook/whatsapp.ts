@@ -719,6 +719,7 @@ export async function procesarMensajeWhatsApp(
 
     const canonicalBusinessInfoBody = wantsBusinessFacets
       ? await resolveBusinessInfoFacetsCanonicalBody({
+          pool,
           tenantId: tenant.id,
           canal,
           idiomaDestino,

@@ -123,6 +123,7 @@ export async function composeFacetReply(
   }
 
   const businessInfoBlock = await resolveBusinessInfoFacetsCanonicalBody({
+    pool,
     tenantId,
     canal,
     idiomaDestino,
