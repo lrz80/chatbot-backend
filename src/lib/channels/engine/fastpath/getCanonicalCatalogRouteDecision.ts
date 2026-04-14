@@ -122,7 +122,7 @@ export async function getCanonicalCatalogRouteDecision(
     args.pool,
     args.tenantId,
     args.userInput,
-    { mode: "loose" }
+    { mode: "strict" }
   );
 
   if (resolution.kind === "resolved_single") {
