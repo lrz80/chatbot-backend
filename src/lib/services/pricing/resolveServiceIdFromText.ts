@@ -77,6 +77,7 @@ type Scored = {
   overlapCategoryTokens: string[];
   overlapTipoTokens: string[];
   overlapSupportTokens: string[];
+  overlapResolvableSupportTokens: string[];
 
   allOverlapTokens: string[];
   dominantOverlapTokens: string[];
@@ -676,9 +677,15 @@ export async function resolveServiceCandidatesFromText(
     const overlapTipoTokens = uniqueOverlapTokens(observedQueryTokens, cand.tipoTokens);
     const overlapSupportTokens = uniqueOverlapTokens(observedQueryTokens, cand.supportTokens);
 
+    const overlapResolvableSupportTokens = uniqueOverlapTokens(
+      resolvableQueryTokens,
+      cand.supportTokens
+    );
+
     const resolvableOverlapTokens = uniqueUnion([
       overlapNameTokens,
       overlapVariantTokens,
+      overlapResolvableSupportTokens,
     ]);
 
     const structuralOverlapTokens = uniqueUnion([
@@ -693,7 +700,9 @@ export async function resolveServiceCandidatesFromText(
     ]);
 
     const hasResolvableEntityEvidence =
-      overlapNameTokens.length > 0 || overlapVariantTokens.length > 0;
+      overlapNameTokens.length > 0 ||
+      overlapVariantTokens.length > 0 ||
+      overlapResolvableSupportTokens.length > 0;
 
     if (!allOverlapTokens.length) {
       return {
@@ -706,6 +715,7 @@ export async function resolveServiceCandidatesFromText(
         overlapCategoryTokens,
         overlapTipoTokens,
         overlapSupportTokens,
+        overlapResolvableSupportTokens,
         allOverlapTokens,
         dominantOverlapTokens: [],
         dominantOverlapCount: 0,
@@ -787,6 +797,7 @@ export async function resolveServiceCandidatesFromText(
       overlapCategoryTokens,
       overlapTipoTokens,
       overlapSupportTokens,
+      overlapResolvableSupportTokens,
       allOverlapTokens,
       dominantOverlapTokens,
       dominantOverlapCount,
