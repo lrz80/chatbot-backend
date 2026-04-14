@@ -1,18 +1,9 @@
 // src/lib/channels/engine/businessInfo/resolveBusinessInfoFacetTargets.ts
 import type { Pool } from "pg";
-import {
-  resolveServiceCandidatesFromText,
-  type ResolveServiceDecision,
-} from "../../../services/pricing/resolveServiceIdFromText";
 
 export type BusinessInfoScheduleTarget =
   | { type: "none" }
-  | { type: "general" }
-  | {
-      type: "service";
-      serviceId: string;
-      serviceName: string | null;
-    };
+  | { type: "general" };
 
 export type BusinessInfoLocationTarget =
   | { type: "none" }
@@ -55,28 +46,6 @@ function buildDefaultTargets(): BusinessInfoFacetTargets {
   };
 }
 
-function shouldPromoteScheduleToServiceTarget(
-  resolution: ResolveServiceDecision
-): boolean {
-  if (resolution.kind !== "resolved_single" || !resolution.hit) {
-    return false;
-  }
-
-  const best = Array.isArray(resolution.candidates) ? resolution.candidates[0] : null;
-  if (!best) {
-    return false;
-  }
-
-  const overlapNameTokens = Array.isArray(best.overlapNameTokens)
-    ? best.overlapNameTokens.filter(Boolean)
-    : [];
-
-  // Regla conservadora:
-  // solo promovemos un target específico cuando hay evidencia nominal explícita
-  // suficiente para no adivinar una modalidad/servicio.
-  return overlapNameTokens.length >= 1;
-}
-
 export async function resolveBusinessInfoFacetTargets(
   args: ResolveBusinessInfoFacetTargetsArgs
 ): Promise<BusinessInfoFacetTargets> {
@@ -84,6 +53,10 @@ export async function resolveBusinessInfoFacetTargets(
 
   if (!hasMeaningfulFacets(args)) {
     return targets;
+  }
+
+  if (args.facets.asksSchedules === true) {
+    targets.scheduleTarget = { type: "general" };
   }
 
   if (args.facets.asksLocation === true) {
@@ -94,30 +67,5 @@ export async function resolveBusinessInfoFacetTargets(
     targets.availabilityTarget = { type: "general" };
   }
 
-  if (args.facets.asksSchedules !== true) {
-    return targets;
-  }
-
-  const resolution = await resolveServiceCandidatesFromText(
-    args.pool,
-    args.tenantId,
-    args.userInput,
-    { mode: "strict" }
-  );
-
-  if (
-    shouldPromoteScheduleToServiceTarget(resolution) &&
-    resolution.kind === "resolved_single" &&
-    resolution.hit
-  ) {
-    targets.scheduleTarget = {
-      type: "service",
-      serviceId: resolution.hit.id,
-      serviceName: resolution.hit.name || null,
-    };
-    return targets;
-  }
-
-  targets.scheduleTarget = { type: "general" };
   return targets;
 }

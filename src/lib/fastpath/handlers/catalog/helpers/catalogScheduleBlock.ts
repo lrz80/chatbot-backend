@@ -1,16 +1,14 @@
 // src/lib/fastpath/handlers/catalog/helpers/catalogScheduleBlock.ts
 
-import { extractSchedulesOnly } from "../../../helpers/extractSchedulesOnly";
+import {
+  extractSchedulesOnly,
+  extractStructuredSchedules,
+} from "../../../helpers/extractSchedulesOnly";
 import { withSectionTitle } from "./catalogReplyBlocks";
 
 export type ScheduleTarget =
   | { type: "none" }
-  | { type: "general" }
-  | {
-      type: "service";
-      serviceId: string;
-      serviceName: string | null;
-    };
+  | { type: "general" };
 
 type BuildScheduleBlockInput = {
   idiomaDestino: string;
@@ -25,21 +23,6 @@ function normalizeScheduleTarget(
     return { type: "general" };
   }
 
-  if (target.type === "service") {
-    const serviceId = String(target.serviceId || "").trim();
-    const serviceName = String(target.serviceName || "").trim() || null;
-
-    if (!serviceId) {
-      return { type: "general" };
-    }
-
-    return {
-      type: "service",
-      serviceId,
-      serviceName,
-    };
-  }
-
   if (target.type === "none") {
     return { type: "none" };
   }
@@ -49,17 +32,21 @@ function normalizeScheduleTarget(
 
 export function buildScheduleBlock(input: BuildScheduleBlockInput): string {
   const scheduleTarget = normalizeScheduleTarget(input.scheduleTarget);
-  const schedulesOnly = extractSchedulesOnly(input.infoClave);
 
-  if (!String(schedulesOnly || "").trim()) {
+  if (scheduleTarget.type === "none") {
     return "";
   }
 
-  // Este helper sigue siendo renderer puro.
-  // No interpreta userInput ni hace matching semántico.
-  // Si más adelante existe un extractor estructurado de horarios por servicio,
-  // el filtrado específico se hace antes o sobre esa estructura, no aquí.
-  if (scheduleTarget.type === "none") {
+  // Dejamos el extractor estructurado evaluado para que este helper
+  // dependa de una fuente preparada para evolución futura, pero sin
+  // introducir todavía filtrado frágil por texto.
+  const structuredEntries = extractStructuredSchedules(input.infoClave);
+  const schedulesOnly =
+    structuredEntries.length > 0
+      ? structuredEntries.map((entry) => entry.rawLine).join("\n").trim()
+      : extractSchedulesOnly(input.infoClave);
+
+  if (!String(schedulesOnly || "").trim()) {
     return "";
   }
 
