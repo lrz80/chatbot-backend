@@ -721,6 +721,33 @@ export type RenderFastpathDmReplyInput = {
 
     canonicalBodyOwnsClosing: boolean;
 
+    answerType:
+      | "overview"
+      | "direct_answer"
+      | "disambiguation"
+      | "comparison"
+      | "guided_next_step"
+      | "action_link";
+
+    salesPosture:
+      | "inform"
+      | "guide"
+      | "recommend"
+      | "close_soft"
+      | "close_direct";
+
+    closingMode:
+      | "none"
+      | "soft_question"
+      | "direct_question"
+      | "availability_statement"
+      | "tenant_cta";
+
+    shouldAskQuestion: boolean;
+    shouldOpenChoice: boolean;
+    shouldForceNullIntro: boolean;
+    shouldForceNullClosing: boolean;
+
     commercialPolicy: {
       purchaseIntent: "unknown" | "low" | "medium" | "high";
       wantsBooking: boolean;
@@ -798,11 +825,7 @@ export async function renderFastpathDmReply(
     fpSource === "catalog_list_db" ||
     fpSource === "catalog_overview_db";
 
-  const isInfoGeneralOverviewTurn = isBusinessInfoReply({
-    fpSource,
-    fpIntent,
-    replyPolicy,
-  });
+  const isInfoGeneralOverviewTurn = replyPolicy.answerType === "overview";
 
   const catalogPayload = fp?.catalogPayload;
 
@@ -878,16 +901,11 @@ export async function renderFastpathDmReply(
       isCatalogListReply &&
       Boolean(canonicalReply);
     
-    const bypassWriterModel = shouldBypassWriterModel({
-      isCatalogChoiceReply,
-      isResolvedCatalogAnswer: isResolvedCatalogAnswer || isCatalogListReply,
-      isGroundedCatalogReply: isGroundedCatalogReply || isCatalogListReply,
-      isPriceSummaryReply: isPriceSummaryReply || isCatalogListReply,
-      canonicalBodyOwnsClosing: replyPolicy.canonicalBodyOwnsClosing,
-      shouldUseGroundedFrameOnly:
-        replyPolicy.shouldUseGroundedFrameOnly || isCatalogListReply,
-      isInfoGeneralOverviewTurn,
-    });
+    const bypassWriterModel =
+      replyPolicy.shouldUseGroundedFrameOnly ||
+      replyPolicy.canonicalBodyOwnsClosing ||
+      isResolvedCatalogAnswer ||
+      isCatalogListReply;
 
     if (shouldReturnCanonicalDirectly) {
       console.log("[DM_RENDER][EARLY_RETURN_CANONICAL]", {
@@ -947,46 +965,21 @@ export async function renderFastpathDmReply(
 
   const shouldAllowIntro =
     !isCatalogListReply &&
-    !isInfoGeneralOverviewTurn &&
+    !replyPolicy.shouldForceNullIntro &&
     (
-      isResolvedCatalogAnswer ||
-      commercialPolicy.shouldUseSalesTone
-    ) &&
-    (
-      !bypassWriterModel ||
-      isResolvedCatalogAnswer
+      !bypassWriterModel || isResolvedCatalogAnswer
     );
 
   const shouldAllowOutro =
     resolvedCatalogClosingMode !== "none" &&
-    (!bypassWriterModel ||
-      isResolvedCatalogAnswer ||
-      isCatalogListReply ||
-      isInfoGeneralOverviewTurn) &&
-    !replyPolicy.canonicalBodyOwnsClosing &&
-    (
-      isResolvedCatalogAnswer ||
-      isCatalogListReply ||
-      isInfoGeneralOverviewTurn ||
-      commercialPolicy.shouldUseSalesTone ||
-      commercialPolicy.shouldUseSoftClosing ||
-      commercialPolicy.shouldUseDirectClosing ||
-      commercialPolicy.shouldSuggestHumanHandoff
-    );
+    !replyPolicy.shouldForceNullClosing &&
+    !replyPolicy.canonicalBodyOwnsClosing;
 
   const shouldEndWithSalesQuestion =
     resolvedCatalogClosingMode === "default" &&
-    !replyPolicy.canonicalBodyOwnsClosing &&
+    !replyPolicy.shouldForceNullClosing &&
     !isCatalogChoiceReply &&
-    (
-      isResolvedCatalogAnswer ||
-      isCatalogListReply ||
-      isInfoGeneralOverviewTurn ||
-      shouldForceSalesClosingQuestion ||
-      commercialPolicy.shouldUseSoftClosing ||
-      commercialPolicy.shouldUseDirectClosing ||
-      commercialPolicy.shouldSuggestHumanHandoff
-    );
+    replyPolicy.shouldAskQuestion;
 
   const responsePolicy = {
     mode: isCatalogChoiceReply
@@ -1010,7 +1003,7 @@ export async function renderFastpathDmReply(
       replyPolicy.hasResolvedEntity,
     canOfferBookingTimes: false,
     canUseOfficialLinks: true,
-    unresolvedEntity: unresolvedCatalogChoice,
+    unresolvedEntity: replyPolicy.shouldOpenChoice,
     clarificationTarget: unresolvedCatalogChoice
       ? isServiceChoiceReply
         ? "service"
@@ -1022,36 +1015,11 @@ export async function renderFastpathDmReply(
     allowAlternativeEntities: false,
     allowCrossSellEntities: false,
     allowAddOnSuggestions: false,
-    preserveExactBody:
-      bypassWriterModel ||
-      isCatalogChoiceReply ||
-      isCatalogListReply ||
-      mustPreserveResolvedCanonicalBody ||
-      isInfoGeneralOverviewTurn,
-    preserveExactOrder:
-      bypassWriterModel ||
-      isCatalogChoiceReply ||
-      isCatalogListReply ||
-      mustPreserveResolvedCanonicalBody ||
-      isInfoGeneralOverviewTurn,
-    preserveExactBullets:
-      bypassWriterModel ||
-      isCatalogChoiceReply ||
-      isCatalogListReply ||
-      mustPreserveResolvedCanonicalBody ||
-      isInfoGeneralOverviewTurn,
-    preserveExactNumbers:
-      bypassWriterModel ||
-      isCatalogChoiceReply ||
-      isCatalogListReply ||
-      mustPreserveResolvedCanonicalBody ||
-      isInfoGeneralOverviewTurn,
-    preserveExactLinks:
-      bypassWriterModel ||
-      isCatalogChoiceReply ||
-      isCatalogListReply ||
-      mustPreserveResolvedCanonicalBody ||
-      isInfoGeneralOverviewTurn,
+    preserveExactBody: true,
+    preserveExactOrder: true,
+    preserveExactBullets: true,
+    preserveExactNumbers: true,
+    preserveExactLinks: true,
     allowIntro: isCatalogChoiceReply ? true : shouldAllowIntro,
     allowOutro: isCatalogChoiceReply ? true : shouldAllowOutro,
     allowBodyRewrite: false,

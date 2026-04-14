@@ -62,6 +62,33 @@ export type FastpathReplyPolicy = {
     | "grounded_only"
     | "clarify_only";
 
+    answerType:
+    | "overview"
+    | "direct_answer"
+    | "disambiguation"
+    | "comparison"
+    | "guided_next_step"
+    | "action_link";
+
+  salesPosture:
+    | "inform"
+    | "guide"
+    | "recommend"
+    | "close_soft"
+    | "close_direct";
+
+  closingMode:
+    | "none"
+    | "soft_question"
+    | "direct_question"
+    | "availability_statement"
+    | "tenant_cta";
+
+  shouldAskQuestion: boolean;
+  shouldOpenChoice: boolean;
+  shouldForceNullIntro: boolean;
+  shouldForceNullClosing: boolean;
+
   commercialPolicy: {
     purchaseIntent: "unknown" | "low" | "medium" | "high";
     wantsBooking: boolean;
@@ -283,6 +310,145 @@ function getCommercialSignal(
   };
 }
 
+function resolveAnswerType(input: {
+  replySourceKind: FastpathReplyPolicy["replySourceKind"];
+  isServiceChoiceDisambiguation: boolean;
+  isVariantDisambiguation: boolean;
+  isGroundedCatalogOverviewDm: boolean;
+  isCatalogDbReply: boolean;
+  isPriceSummaryReply: boolean;
+  hasResolvedEntity: boolean;
+  fpSource: string;
+}):
+  | "overview"
+  | "direct_answer"
+  | "disambiguation"
+  | "comparison"
+  | "guided_next_step"
+  | "action_link" {
+  if (input.isServiceChoiceDisambiguation || input.isVariantDisambiguation) {
+    return "disambiguation";
+  }
+
+  if (input.replySourceKind === "catalog_comparison_render") {
+    return "comparison";
+  }
+
+  if (
+    input.fpSource === "catalog_db_action_link" ||
+    input.fpSource === "service_link_db"
+  ) {
+    return "action_link";
+  }
+
+  if (
+    input.replySourceKind === "business_info" ||
+    input.isGroundedCatalogOverviewDm
+  ) {
+    return "overview";
+  }
+
+  if (
+    input.isCatalogDbReply ||
+    input.isPriceSummaryReply ||
+    input.hasResolvedEntity
+  ) {
+    return "direct_answer";
+  }
+
+  return "guided_next_step";
+}
+
+function resolveSalesPosture(input: {
+  answerType:
+    | "overview"
+    | "direct_answer"
+    | "disambiguation"
+    | "comparison"
+    | "guided_next_step"
+    | "action_link";
+  commercialPolicy: FastpathReplyPolicy["commercialPolicy"];
+}):
+  | "inform"
+  | "guide"
+  | "recommend"
+  | "close_soft"
+  | "close_direct" {
+  if (input.answerType === "disambiguation") {
+    return "guide";
+  }
+
+  if (input.answerType === "comparison") {
+    return "recommend";
+  }
+
+  if (input.commercialPolicy.shouldSuggestHumanHandoff) {
+    return "close_direct";
+  }
+
+  if (input.commercialPolicy.shouldUseDirectClosing) {
+    return "close_direct";
+  }
+
+  if (input.commercialPolicy.shouldUseSoftClosing) {
+    return "close_soft";
+  }
+
+  if (input.answerType === "overview") {
+    return "guide";
+  }
+
+  if (input.commercialPolicy.shouldUseSalesTone) {
+    return "recommend";
+  }
+
+  return "inform";
+}
+
+function resolveClosingMode(input: {
+  answerType:
+    | "overview"
+    | "direct_answer"
+    | "disambiguation"
+    | "comparison"
+    | "guided_next_step"
+    | "action_link";
+  canonicalBodyOwnsClosing: boolean;
+  commercialPolicy: FastpathReplyPolicy["commercialPolicy"];
+}):
+  | "none"
+  | "soft_question"
+  | "direct_question"
+  | "availability_statement"
+  | "tenant_cta" {
+  if (input.canonicalBodyOwnsClosing) {
+    return "none";
+  }
+
+  if (input.answerType === "disambiguation") {
+    return "direct_question";
+  }
+
+  if (input.commercialPolicy.shouldSuggestHumanHandoff) {
+    return "direct_question";
+  }
+
+  if (input.commercialPolicy.shouldUseDirectClosing) {
+    return "direct_question";
+  }
+
+  if (
+    input.commercialPolicy.shouldUseSoftClosing ||
+    input.answerType === "overview" ||
+    input.answerType === "direct_answer" ||
+    input.answerType === "comparison"
+  ) {
+    return "soft_question";
+  }
+
+  return "none";
+}
+
 export function buildFastpathReplyPolicy(
   input: FastpathReplyPolicyInput
 ): FastpathReplyPolicy {
@@ -381,6 +547,39 @@ export function buildFastpathReplyPolicy(
     !shouldBypassStructuredRewrite &&
     !canonicalBodyOwnsClosing;
 
+  const answerType = resolveAnswerType({
+    replySourceKind,
+    isServiceChoiceDisambiguation,
+    isVariantDisambiguation,
+    isGroundedCatalogOverviewDm,
+    isCatalogDbReply,
+    isPriceSummaryReply,
+    hasResolvedEntity,
+    fpSource,
+  });
+
+  const salesPosture = resolveSalesPosture({
+    answerType,
+    commercialPolicy,
+  });
+
+  const closingMode = resolveClosingMode({
+    answerType,
+    canonicalBodyOwnsClosing,
+    commercialPolicy,
+  });
+
+  const shouldAskQuestion =
+    closingMode === "soft_question" || closingMode === "direct_question";
+
+  const shouldOpenChoice = answerType === "disambiguation";
+
+  const shouldForceNullIntro =
+    answerType === "overview" && replySourceKind === "business_info";
+
+  const shouldForceNullClosing =
+    closingMode === "none" || canonicalBodyOwnsClosing;
+
   return {
     isDmChannel,
     shouldBypassStructuredRewrite,
@@ -403,6 +602,13 @@ export function buildFastpathReplyPolicy(
     responsePolicyMode,
 
     canonicalBodyOwnsClosing,
+    answerType,
+    salesPosture,
+    closingMode,
+    shouldAskQuestion,
+    shouldOpenChoice,
+    shouldForceNullIntro,
+    shouldForceNullClosing,
     commercialPolicy,
   };
 }
