@@ -285,7 +285,7 @@ function decideHybridDomain(input: {
 
   if (input.isGuidedBusinessEntryTurn) {
     return {
-      routeTarget: "continue_pipeline",
+      routeTarget: "business_info",
       reason: "guided_entry",
     };
   }
@@ -571,6 +571,7 @@ export async function handleFastpathHybridTurn(
     (
       normalizedCurrentIntent === "duda" ||
       normalizedCurrentIntent === "info_general" ||
+      normalizedCurrentIntent === "info_servicio" ||
       normalizedCurrentIntent === ""
     );
 

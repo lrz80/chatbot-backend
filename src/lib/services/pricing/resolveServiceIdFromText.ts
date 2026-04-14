@@ -149,6 +149,37 @@ function sanitizeWord(raw: string): string {
   return out.trim();
 }
 
+function buildTokenVariants(raw: string): string[] {
+  const token = sanitizeWord(raw);
+  if (!token) return [];
+  if (token.length < 2) return [];
+  if (/^\d+$/.test(token)) return [];
+
+  const variants = new Set<string>();
+  variants.add(token);
+
+  // Singularización conservadora para mejorar matching ES/EN
+  // Ejemplos:
+  // pisos -> piso
+  // laminados -> laminado
+  // classes -> class
+  if (token.length > 4) {
+    if (token.endsWith("es") && !token.endsWith("ss")) {
+      const singularEs = token.slice(0, -2);
+      if (singularEs.length >= 2) {
+        variants.add(singularEs);
+      }
+    } else if (token.endsWith("s") && !token.endsWith("ss")) {
+      const singularS = token.slice(0, -1);
+      if (singularS.length >= 2) {
+        variants.add(singularS);
+      }
+    }
+  }
+
+  return Array.from(variants);
+}
+
 function tokenize(raw: string): string[] {
   const text = normalize(raw);
   if (!text) return [];
@@ -156,40 +187,41 @@ function tokenize(raw: string): string[] {
   const tokens: string[] = [];
   const seen = new Set<string>();
 
+  const pushVariants = (rawToken: string) => {
+    for (const variant of buildTokenVariants(rawToken)) {
+      if (!seen.has(variant)) {
+        seen.add(variant);
+        tokens.push(variant);
+      }
+    }
+  };
+
   const SegmenterCtor = (Intl as any)?.Segmenter;
 
   if (typeof SegmenterCtor === "function") {
     const segmenter = new SegmenterCtor("en", { granularity: "word" });
+
     for (const part of segmenter.segment(text)) {
       if (!part?.isWordLike) continue;
-      const token = sanitizeWord(part.segment);
-      if (!token) continue;
-      if (token.length < 2) continue;
-      if (/^\d+$/.test(token)) continue;
-      if (!seen.has(token)) {
-        seen.add(token);
-        tokens.push(token);
-      }
+      pushVariants(part.segment);
     }
+
     return tokens;
   }
 
   let current = "";
+
   for (const ch of text) {
     if (isAsciiLetterOrDigit(ch)) {
       current += ch;
     } else if (current) {
-      if (current.length >= 2 && !/^\d+$/.test(current) && !seen.has(current)) {
-        seen.add(current);
-        tokens.push(current);
-      }
+      pushVariants(current);
       current = "";
     }
   }
 
-  if (current.length >= 2 && !/^\d+$/.test(current) && !seen.has(current)) {
-    seen.add(current);
-    tokens.push(current);
+  if (current) {
+    pushVariants(current);
   }
 
   return tokens;
