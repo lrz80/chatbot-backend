@@ -829,7 +829,6 @@ export async function resolveServiceCandidatesFromText(
   });
 
   const BASE_THRESHOLD = mode === "strict" ? 0.2 : 0.14;
-  const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.52 : 0.3;
   const MARGIN = mode === "strict" ? 0.1 : 0.06;
 
   const ENTITY_STRONG_THRESHOLD = mode === "strict" ? 0.58 : 0.42;
@@ -894,20 +893,9 @@ export async function resolveServiceCandidatesFromText(
       return s.score > 0 && allTokens.includes(token);
     });
 
-    console.log(
-      "[RESOLVE-SERVICE] 1 token observado → no auto-resolver entidad por evidencia insuficiente",
-      {
-        userText,
-        token,
-        candidates: withToken.length,
-        mode,
-      }
-    );
-
-    return {
-      kind: withToken.length > 1 ? "ambiguous" : "none",
-      hit: null,
-      candidates: withToken.slice(0, 3).map((s) => ({
+    const singleTokenCandidates: ResolveServiceCandidate[] = withToken
+      .slice(0, 3)
+      .map((s) => ({
         id: s.cand.serviceId,
         name: s.cand.label,
         score: s.score,
@@ -919,7 +907,26 @@ export async function resolveServiceCandidatesFromText(
         overlapTipoTokens: s.overlapTipoTokens,
         overlapSupportTokens: s.overlapSupportTokens,
         dominantOverlapTokens: s.dominantOverlapTokens,
-      })),
+      }));
+
+    console.log(
+      "[RESOLVE-SERVICE] 1 token observado → no auto-resolver entidad canónica",
+      {
+        userText,
+        token,
+        candidates: singleTokenCandidates.map((c) => ({
+          id: c.id,
+          name: c.name,
+          score: c.score,
+        })),
+        mode,
+      }
+    );
+
+    return {
+      kind: singleTokenCandidates.length > 1 ? "ambiguous" : "none",
+      hit: null,
+      candidates: singleTokenCandidates,
     };
   }
 
