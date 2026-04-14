@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import { renderFastpathDmReply } from "../fastpath/renderFastpathDmReply";
 import { resolveBusinessInfoFacetsCanonicalBody } from "../businessInfo/resolveBusinessInfoFacetsCanonicalBody";
 import { buildCatalogOverviewPriceBlock } from "../../../fastpath/handlers/catalog/helpers/buildCatalogOverviewPriceBlock";
+import { buildStaticFastpathReplyPolicy } from "../fastpath/buildFastpathReplyPolicy";
 
 type IntentFacets = {
   asksPrices?: boolean;
@@ -180,19 +181,21 @@ export async function composeFacetReply(
       serviceLabel: null,
       hasResolution: false,
     },
-    replyPolicy: {
-      shouldUseGroundedFrameOnly: true,
+    replyPolicy: buildStaticFastpathReplyPolicy({
+      canal,
+      answerType: "overview",
+      replySourceKind: "business_info",
       responsePolicyMode: "grounded_frame_only",
       hasResolvedEntity: false,
-
-      isCatalogDbReply: hasPriceBlock,
+      isCatalogDbReply: false,
       isPriceSummaryReply: hasPriceBlock,
       isPriceDisambiguationReply: false,
       isGroundedCatalogReply: hasPriceBlock,
       isGroundedCatalogOverviewDm: true,
       shouldForceSalesClosingQuestion: false,
-      canonicalBodyOwnsClosing: true,
-
+      shouldUseGroundedFrameOnly: true,
+      canonicalBodyOwnsClosing: false,
+      clarificationTarget: null,
       commercialPolicy: {
         purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
         wantsBooking: detectedCommercial?.wantsBooking === true,
@@ -202,9 +205,9 @@ export async function composeFacetReply(
         shouldUseSalesTone: true,
         shouldUseSoftClosing: true,
         shouldUseDirectClosing: false,
-        shouldSuggestHumanHandoff: detectedCommercial?.wantsHuman === true,
+        shouldSuggestHumanHandoff: false,
       },
-    },
+    }),
     ctxPatch: {},
     maxLines: 9999,
   });

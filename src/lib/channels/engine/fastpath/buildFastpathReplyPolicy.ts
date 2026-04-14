@@ -618,3 +618,131 @@ export function buildFastpathReplyPolicy(
     commercialPolicy,
   };
 }
+
+export function buildStaticFastpathReplyPolicy(input: {
+  canal: Canal;
+  answerType: FastpathReplyPolicy["answerType"];
+  responsePolicyMode?: FastpathReplyPolicy["responsePolicyMode"];
+  replySourceKind?: FastpathReplyPolicy["replySourceKind"];
+
+  hasResolvedEntity?: boolean;
+  isCatalogDbReply?: boolean;
+  isPriceSummaryReply?: boolean;
+  isPriceDisambiguationReply?: boolean;
+  isGroundedCatalogReply?: boolean;
+  isGroundedCatalogOverviewDm?: boolean;
+  shouldForceSalesClosingQuestion?: boolean;
+  shouldUseGroundedFrameOnly?: boolean;
+  canonicalBodyOwnsClosing?: boolean;
+
+  clarificationTarget?: "service" | "variant" | null;
+
+  commercialPolicy?: Partial<FastpathReplyPolicy["commercialPolicy"]>;
+}): FastpathReplyPolicy {
+  const isDmChannel = isDmChatChannel(input.canal);
+
+  const commercialPolicy: FastpathReplyPolicy["commercialPolicy"] = {
+    purchaseIntent: input.commercialPolicy?.purchaseIntent ?? "unknown",
+    wantsBooking: input.commercialPolicy?.wantsBooking === true,
+    wantsQuote: input.commercialPolicy?.wantsQuote === true,
+    wantsHuman: input.commercialPolicy?.wantsHuman === true,
+    urgency: input.commercialPolicy?.urgency ?? "unknown",
+    shouldUseSalesTone: input.commercialPolicy?.shouldUseSalesTone === true,
+    shouldUseSoftClosing: input.commercialPolicy?.shouldUseSoftClosing === true,
+    shouldUseDirectClosing: input.commercialPolicy?.shouldUseDirectClosing === true,
+    shouldSuggestHumanHandoff:
+      input.commercialPolicy?.shouldSuggestHumanHandoff === true,
+  };
+
+  const replySourceKind: FastpathReplyPolicy["replySourceKind"] =
+    input.replySourceKind ??
+    (input.answerType === "comparison"
+      ? "catalog_comparison_render"
+      : input.answerType === "disambiguation"
+      ? "catalog_disambiguation"
+      : input.answerType === "overview"
+      ? "business_info"
+      : input.isCatalogDbReply
+      ? "catalog_grounded"
+      : input.isPriceSummaryReply
+      ? "price_like"
+      : "generic");
+
+  const canonicalBodyOwnsClosing = input.canonicalBodyOwnsClosing === true;
+
+  const salesPosture = resolveSalesPosture({
+    answerType: input.answerType,
+    commercialPolicy,
+  });
+
+  const closingMode = resolveClosingMode({
+    answerType: input.answerType,
+    canonicalBodyOwnsClosing,
+    commercialPolicy,
+  });
+
+  const shouldAskQuestion =
+    closingMode === "soft_question" || closingMode === "direct_question";
+
+  const shouldOpenChoice = input.answerType === "disambiguation";
+
+  const shouldForceNullIntro =
+    input.answerType === "overview" && replySourceKind === "business_info";
+
+  const shouldForceNullClosing =
+    closingMode === "none" || canonicalBodyOwnsClosing;
+
+  const shouldBypassStructuredRewrite = false;
+  const shouldPersistStructuredService =
+    input.hasResolvedEntity === true && !shouldOpenChoice;
+  const shouldHardBypassReply = false;
+  const shouldDirectReturnInfoBlock = false;
+  const shouldDirectReturnPriceLikeReply = false;
+
+  return {
+    isDmChannel,
+    shouldBypassStructuredRewrite,
+    shouldPersistStructuredService,
+    shouldHardBypassReply,
+    shouldDirectReturnInfoBlock,
+    shouldDirectReturnPriceLikeReply,
+    shouldRunDmRewrite:
+      isDmChannel &&
+      !shouldBypassStructuredRewrite &&
+      !canonicalBodyOwnsClosing,
+    shouldUseGroundedFrameOnly: input.shouldUseGroundedFrameOnly === true,
+    hasResolvedEntity: input.hasResolvedEntity === true,
+
+    isCatalogDbReply: input.isCatalogDbReply === true,
+    isPriceSummaryReply: input.isPriceSummaryReply === true,
+    isPriceDisambiguationReply: input.isPriceDisambiguationReply === true,
+    isGroundedCatalogReply: input.isGroundedCatalogReply === true,
+    isGroundedCatalogOverviewDm: input.isGroundedCatalogOverviewDm === true,
+    shouldForceSalesClosingQuestion:
+      input.shouldForceSalesClosingQuestion === true,
+
+    canonicalBodyOwnsClosing,
+
+    replySourceKind,
+    responsePolicyMode:
+      input.responsePolicyMode ??
+      (input.shouldUseGroundedFrameOnly === true
+        ? "grounded_frame_only"
+        : input.hasResolvedEntity === true
+        ? "grounded_only"
+        : "clarify_only"),
+
+    answerType: input.answerType,
+    salesPosture,
+    closingMode,
+    shouldAskQuestion,
+    shouldOpenChoice,
+    shouldForceNullIntro,
+    shouldForceNullClosing,
+    clarificationTarget:
+      input.clarificationTarget ??
+      (input.answerType === "disambiguation" ? "variant" : null),
+
+    commercialPolicy,
+  };
+}

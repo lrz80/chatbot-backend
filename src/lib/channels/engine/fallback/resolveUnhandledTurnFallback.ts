@@ -3,6 +3,7 @@ import type { Canal, CommercialSignal } from "../../../detectarIntencion";
 import type { LangCode } from "../../../i18n/lang";
 import { renderFastpathDmReply } from "../fastpath/renderFastpathDmReply";
 import { resolveBusinessInfoOverviewCanonicalBody } from "../businessInfo/resolveBusinessInfoOverviewCanonicalBody";
+import { buildStaticFastpathReplyPolicy } from "../fastpath/buildFastpathReplyPolicy";
 
 type IntentFacets = {
   asksPrices?: boolean;
@@ -106,31 +107,33 @@ async function resolvePostCompletionCourtesyFallback(
       serviceLabel: null,
       hasResolution: false,
     },
-    replyPolicy: {
-      shouldUseGroundedFrameOnly: true,
+    replyPolicy: buildStaticFastpathReplyPolicy({
+      canal: args.canal,
+      answerType: "overview",
+      replySourceKind: "business_info",
       responsePolicyMode: "grounded_frame_only",
       hasResolvedEntity: false,
-
       isCatalogDbReply: false,
       isPriceSummaryReply: false,
       isPriceDisambiguationReply: false,
       isGroundedCatalogReply: false,
-      isGroundedCatalogOverviewDm: false,
+      isGroundedCatalogOverviewDm: true,
       shouldForceSalesClosingQuestion: false,
+      shouldUseGroundedFrameOnly: true,
       canonicalBodyOwnsClosing: false,
-
+      clarificationTarget: null,
       commercialPolicy: {
-        purchaseIntent: "low",
-        wantsBooking: false,
-        wantsQuote: false,
-        wantsHuman: false,
-        urgency: "low",
-        shouldUseSalesTone: false,
+        purchaseIntent: args.detectedCommercial?.purchaseIntent ?? "low",
+        wantsBooking: args.detectedCommercial?.wantsBooking === true,
+        wantsQuote: args.detectedCommercial?.wantsQuote === true,
+        wantsHuman: args.detectedCommercial?.wantsHuman === true,
+        urgency: args.detectedCommercial?.urgency ?? "low",
+        shouldUseSalesTone: true,
         shouldUseSoftClosing: true,
         shouldUseDirectClosing: false,
         shouldSuggestHumanHandoff: false,
       },
-    },
+    }),
     ctxPatch: args.ctxPatch || {},
     maxLines: 9999,
   });
@@ -219,19 +222,21 @@ export async function resolveUnhandledTurnFallback(
         serviceLabel: null,
         hasResolution: false,
       },
-      replyPolicy: {
-        shouldUseGroundedFrameOnly: true,
+      replyPolicy: buildStaticFastpathReplyPolicy({
+        canal: args.canal,
+        answerType: "guided_next_step",
+        replySourceKind: "generic",
         responsePolicyMode: "grounded_frame_only",
         hasResolvedEntity: false,
-
         isCatalogDbReply: false,
         isPriceSummaryReply: false,
         isPriceDisambiguationReply: false,
         isGroundedCatalogReply: false,
-        isGroundedCatalogOverviewDm: true,
+        isGroundedCatalogOverviewDm: false,
         shouldForceSalesClosingQuestion: false,
-        canonicalBodyOwnsClosing: true,
-
+        shouldUseGroundedFrameOnly: true,
+        canonicalBodyOwnsClosing: false,
+        clarificationTarget: null,
         commercialPolicy: {
           purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
           wantsBooking: detectedCommercial?.wantsBooking === true,
@@ -241,9 +246,9 @@ export async function resolveUnhandledTurnFallback(
           shouldUseSalesTone: true,
           shouldUseSoftClosing: true,
           shouldUseDirectClosing: false,
-          shouldSuggestHumanHandoff: detectedCommercial?.wantsHuman === true,
+          shouldSuggestHumanHandoff: false,
         },
-      },
+      }),
       ctxPatch: ctxPatch || {},
       maxLines: 9999,
     });
