@@ -391,6 +391,25 @@ function buildDiscriminativeQueryTokens(
   );
 }
 
+function buildEntityEvidenceQueryTokens(
+  observedQueryTokens: string[],
+  discriminativeQueryTokens: string[],
+  dfMap: Map<string, number>,
+  totalCandidates: number
+): string[] {
+  if (discriminativeQueryTokens.length > 0) {
+    return discriminativeQueryTokens;
+  }
+
+  return observedQueryTokens.filter((token) => {
+    const df = dfMap.get(token) || 0;
+    if (df <= 0 || totalCandidates <= 0) return false;
+
+    const coverage = df / totalCandidates;
+    return coverage <= 0.2;
+  });
+}
+
 export async function resolveServiceCandidatesFromText(
   pool: Pool,
   tenantId: string,
@@ -626,11 +645,15 @@ export async function resolveServiceCandidatesFromText(
     totalCandidates
   );
 
+  const entityEvidenceQueryTokens = buildEntityEvidenceQueryTokens(
+    observedQueryTokens,
+    discriminativeQueryTokens,
+    dfMap,
+    totalCandidates
+  );
+
   const scored: Scored[] = candidates.map((cand) => {
-    const resolvableQueryTokens =
-      discriminativeQueryTokens.length > 0
-        ? discriminativeQueryTokens
-        : observedQueryTokens;
+    const resolvableQueryTokens = entityEvidenceQueryTokens;
 
     const nameScore = scoreTokensWeighted(
       resolvableQueryTokens,
@@ -835,7 +858,7 @@ export async function resolveServiceCandidatesFromText(
   const ENTITY_CLEAR_MARGIN = mode === "strict" ? 0.14 : 0.08;
   const MIN_RESOLVABLE_OVERLAP =
     mode === "strict"
-      ? (observedQueryTokens.length >= 2 ? 2 : 1)
+      ? 2
       : 1;
 
   const topCandidates: ResolveServiceCandidate[] = scored
@@ -940,10 +963,7 @@ export async function resolveServiceCandidatesFromText(
   const secondScore = second?.score || 0;
   const marginVsSecond = best ? best.score - secondScore : 0;
 
-  const resolvableEvidenceQueryTokens =
-    discriminativeQueryTokens.length > 0
-      ? discriminativeQueryTokens
-      : observedQueryTokens;
+  const resolvableEvidenceQueryTokens = entityEvidenceQueryTokens;
 
   const bestResolvableOverlapTokens = best
     ? uniqueUnion([
