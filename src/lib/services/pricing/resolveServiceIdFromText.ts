@@ -995,9 +995,11 @@ export async function resolveServiceCandidatesFromText(
     bestResolvableOverlapCount >= MIN_RESOLVABLE_OVERLAP;
 
   const enoughEvidence =
-    hasDirectEntityTokenEvidence &&
     bestResolvableOverlapCount >= MIN_RESOLVABLE_OVERLAP &&
-    (exactEntityMatch || strongSingleEntityCandidate);
+    (
+      exactEntityMatch ||
+      (mode === "loose" && strongSingleEntityCandidate)
+    );
 
   const bestOnlyVariantDriven =
     Boolean(best) &&
