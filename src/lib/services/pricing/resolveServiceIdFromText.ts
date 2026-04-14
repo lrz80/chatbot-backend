@@ -894,66 +894,14 @@ export async function resolveServiceCandidatesFromText(
       return s.score > 0 && allTokens.includes(token);
     });
 
-    if (mode === "strict") {
-      if (withToken.length !== 1) {
-        console.log(
-          "[RESOLVE-SERVICE] (strict) 1 token observado pero",
-          withToken.length,
-          "candidatos → ambiguo, devolviendo null"
-        );
-
-        return {
-          kind: withToken.length > 1 ? "ambiguous" : "none",
-          hit: null,
-          candidates: withToken.slice(0, 3).map((s) => ({
-            id: s.cand.serviceId,
-            name: s.cand.label,
-            score: s.score,
-          })),
-        };
-      }
-
-      const only = withToken[0];
-
-      const enoughEvidence =
-        only.score >= SINGLE_TOKEN_THRESHOLD &&
-        (only.exactNameHits >= 1 || only.exactVariantHits >= 1);
-
-      if (enoughEvidence) {
-        console.log("[RESOLVE-SERVICE] (strict) match único por token observado", {
-          userText,
-          token,
-          label: only.cand.label,
-          score: only.score,
-        });
-
-        return {
-          kind: "resolved_single",
-          hit: { id: only.cand.serviceId, name: only.cand.label },
-          candidates: topCandidates,
-        };
-      }
-
-      console.log(
-        "[RESOLVE-SERVICE] (strict) evidencia insuficiente con 1 token observado, devolviendo null",
-        {
-          userText,
-          token,
-          label: only.cand.label,
-          score: only.score,
-        }
-      );
-
-      return {
-        kind: "none",
-        hit: null,
-        candidates: topCandidates,
-      };
-    }
-
     console.log(
-      "[RESOLVE-SERVICE] (loose) 1 token observado → no auto-resolver, devolviendo null",
-      { userText, token, candidates: withToken.length }
+      "[RESOLVE-SERVICE] 1 token observado → no auto-resolver entidad por evidencia insuficiente",
+      {
+        userText,
+        token,
+        candidates: withToken.length,
+        mode,
+      }
     );
 
     return {
@@ -963,6 +911,14 @@ export async function resolveServiceCandidatesFromText(
         id: s.cand.serviceId,
         name: s.cand.label,
         score: s.score,
+        category: s.cand.category || null,
+        tipo: s.cand.tipo || null,
+        parentServiceId: s.cand.parentServiceId || null,
+        catalogRole: s.cand.catalogRole || null,
+        overlapNameTokens: s.overlapNameTokens,
+        overlapTipoTokens: s.overlapTipoTokens,
+        overlapSupportTokens: s.overlapSupportTokens,
+        dominantOverlapTokens: s.dominantOverlapTokens,
       })),
     };
   }
