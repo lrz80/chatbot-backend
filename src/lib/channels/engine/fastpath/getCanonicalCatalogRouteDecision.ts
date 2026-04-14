@@ -98,6 +98,23 @@ function shouldRouteAmbiguousCatalog(
   return false;
 }
 
+function hasDirectCanonicalEntityEvidence(
+  resolution: ResolveServiceDecision
+): boolean {
+  const candidates = normalizeCandidates(resolution.candidates);
+  const best = candidates[0];
+
+  if (!best) {
+    return false;
+  }
+
+  const overlapNameTokens = Array.isArray(best.overlapNameTokens)
+    ? best.overlapNameTokens.filter(Boolean)
+    : [];
+
+  return overlapNameTokens.length >= 1;
+}
+
 export async function getCanonicalCatalogRouteDecision(
   args: Args
 ): Promise<CanonicalCatalogRouteDecision> {
@@ -109,6 +126,19 @@ export async function getCanonicalCatalogRouteDecision(
   );
 
   if (resolution.kind === "resolved_single") {
+    const hasDirectEntityEvidence =
+      hasDirectCanonicalEntityEvidence(resolution);
+
+    if (!hasDirectEntityEvidence) {
+      return {
+        shouldRouteCatalog: false,
+        resolutionKind: "none",
+        resolution,
+        resolvedServiceId: null,
+        resolvedServiceName: null,
+      };
+    }
+
     return {
       shouldRouteCatalog: true,
       resolutionKind: "resolved_single",

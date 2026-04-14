@@ -1002,18 +1002,17 @@ export async function resolveServiceCandidatesFromText(
   const exactEntityMatch =
     hasDirectServiceEvidence || hasStrongVariantEvidence;
 
+  const hasDirectEntityTokenEvidence =
+    bestNameEvidenceCount >= 1 || bestVariantEvidenceCount >= 1;
+
   const strongSingleEntityCandidate =
-    Boolean(best?.hasResolvableEntityEvidence) &&
+    hasDirectEntityTokenEvidence &&
     (best?.score || 0) >= ENTITY_STRONG_THRESHOLD &&
     marginVsSecond >= ENTITY_CLEAR_MARGIN &&
-    bestResolvableOverlapCount >= MIN_RESOLVABLE_OVERLAP &&
-    (
-      bestNameEvidenceCount >= 1 ||
-      (best?.dominantOverlapCount || 0) >= 2
-    );
+    bestResolvableOverlapCount >= MIN_RESOLVABLE_OVERLAP;
 
   const enoughEvidence =
-    Boolean(best?.hasResolvableEntityEvidence) &&
+    hasDirectEntityTokenEvidence &&
     bestResolvableOverlapCount >= MIN_RESOLVABLE_OVERLAP &&
     (exactEntityMatch || strongSingleEntityCandidate);
 
