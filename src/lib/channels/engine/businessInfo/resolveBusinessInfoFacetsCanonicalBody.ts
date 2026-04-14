@@ -1,4 +1,5 @@
 // src/lib/channels/engine/businessInfo/resolveBusinessInfoFacetsCanonicalBody.ts
+import type { Pool } from "pg";
 import type { Canal } from "../../../detectarIntencion";
 import type { LangCode } from "../../../i18n/lang";
 import { withSectionTitle } from "../../../fastpath/handlers/catalog/helpers/catalogReplyBlocks";
@@ -7,8 +8,13 @@ import {
   buildLocationBlockFromInfoClave,
 } from "../../../fastpath/handlers/catalog/helpers/catalogBusinessInfoBlocks";
 import { buildScheduleBlock } from "../../../fastpath/handlers/catalog/helpers/catalogScheduleBlock";
+import {
+  resolveBusinessInfoFacetTargets,
+  type BusinessInfoScheduleTarget,
+} from "./resolveBusinessInfoFacetTargets";
 
 type Args = {
+  pool: Pool;
   tenantId: string;
   canal: Canal;
   idiomaDestino: LangCode;
@@ -25,7 +31,7 @@ type Args = {
 export async function resolveBusinessInfoFacetsCanonicalBody(
   args: Args
 ): Promise<string> {
-  const { idiomaDestino, infoClave, facets } = args;
+  const { pool, tenantId, idiomaDestino, infoClave, facets, userInput } = args;
 
   const shouldResolveBusinessInfo =
     facets.asksSchedules === true ||
@@ -36,12 +42,20 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     return "";
   }
 
+  const facetTargets = await resolveBusinessInfoFacetTargets({
+    pool,
+    tenantId,
+    userInput,
+    facets,
+  });
+
   const blocks: string[] = [];
 
   if (facets.asksSchedules === true) {
     const scheduleBlock = buildScheduleBlock({
       idiomaDestino,
       infoClave,
+      scheduleTarget: facetTargets.scheduleTarget as BusinessInfoScheduleTarget,
     });
 
     if (String(scheduleBlock || "").trim()) {
