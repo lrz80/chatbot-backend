@@ -24,7 +24,9 @@ type Args = {
   userInput: string;
 };
 
-function getCandidateServiceId(candidate: ResolveServiceCandidate): string | null {
+function getCandidateServiceId(
+  candidate: ResolveServiceCandidate
+): string | null {
   const value = String(candidate?.id || "").trim();
   return value || null;
 }
@@ -49,6 +51,53 @@ function getResolvedServiceNameFromAmbiguousCandidates(
   return null;
 }
 
+function normalizeCandidates(
+  candidates: ResolveServiceCandidate[] | undefined | null
+): ResolveServiceCandidate[] {
+  return Array.isArray(candidates) ? candidates : [];
+}
+
+function getUniqueServiceIds(candidates: ResolveServiceCandidate[]): string[] {
+  return Array.from(
+    new Set(
+      candidates
+        .map((candidate) => getCandidateServiceId(candidate))
+        .filter((serviceId): serviceId is string => Boolean(serviceId))
+    )
+  );
+}
+
+function areAllCandidatesVariants(
+  candidates: ResolveServiceCandidate[]
+): boolean {
+  return (
+    candidates.length > 0 &&
+    candidates.every((candidate) => candidate.candidateKind === "variant")
+  );
+}
+
+function shouldRouteAmbiguousCatalog(
+  candidates: ResolveServiceCandidate[]
+): boolean {
+  if (candidates.length === 0) {
+    return false;
+  }
+
+  const uniqueServiceIds = getUniqueServiceIds(candidates);
+  const allCandidatesAreVariants = areAllCandidatesVariants(candidates);
+
+  // Único caso donde una ambigüedad estructural sí autoriza catálogo por sí sola:
+  // el servicio ya quedó resuelto y solo faltan variantes del mismo servicio.
+  if (uniqueServiceIds.length === 1 && allCandidatesAreVariants) {
+    return true;
+  }
+
+  // Cualquier otra ambigüedad multi-servicio o de familia NO debe secuestrar
+  // el dominio por sí sola. La entrada a catálogo debe venir por otras señales
+  // canónicas del pipeline.
+  return false;
+}
+
 export async function getCanonicalCatalogRouteDecision(
   args: Args
 ): Promise<CanonicalCatalogRouteDecision> {
@@ -70,25 +119,9 @@ export async function getCanonicalCatalogRouteDecision(
   }
 
   if (resolution.kind === "ambiguous") {
-    const candidates = Array.isArray(resolution.candidates)
-      ? resolution.candidates
-      : [];
-
-    const uniqueServiceIds = Array.from(
-      new Set(
-        candidates
-          .map((candidate) => getCandidateServiceId(candidate))
-          .filter((serviceId): serviceId is string => Boolean(serviceId))
-      )
-    );
-
-    // Caso importante:
-    // el servicio ya está resuelto, pero faltó escoger variante.
-    // En este caso el resolver devuelve varios candidates tipo "variant"
-    // con el MISMO service id en candidate.id.
-    const allCandidatesAreVariants =
-      candidates.length > 0 &&
-      candidates.every((candidate) => candidate.candidateKind === "variant");
+    const candidates = normalizeCandidates(resolution.candidates);
+    const uniqueServiceIds = getUniqueServiceIds(candidates);
+    const allCandidatesAreVariants = areAllCandidatesVariants(candidates);
 
     if (uniqueServiceIds.length === 1 && allCandidatesAreVariants) {
       return {
@@ -102,7 +135,7 @@ export async function getCanonicalCatalogRouteDecision(
     }
 
     return {
-      shouldRouteCatalog: true,
+      shouldRouteCatalog: shouldRouteAmbiguousCatalog(candidates),
       resolutionKind: "ambiguous",
       resolution,
       resolvedServiceId: null,

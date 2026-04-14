@@ -90,6 +90,7 @@ function shouldUseConversationAnchor(input: {
   asksAvailability: boolean;
   detectedRoutingHints?: IntentRoutingHints | null;
   canonicalCatalogRouteDecision: {
+    shouldRouteCatalog?: boolean;
     resolutionKind?: string | null;
   };
   hasCurrentTurnCatalogEvidence: boolean;
@@ -172,6 +173,7 @@ function decideHybridDomain(input: {
   detectedFacets?: IntentFacets | null;
   detectedRoutingHints?: IntentRoutingHints | null;
   canonicalCatalogRouteDecision: {
+    shouldRouteCatalog?: boolean;
     resolutionKind?: string | null;
   };
 }): HybridDomainDecision {
@@ -182,11 +184,26 @@ function decideHybridDomain(input: {
     };
   }
 
+  const canonicalResolutionKind = String(
+    input.canonicalCatalogRouteDecision?.resolutionKind || "none"
+  ).trim();
+
+  const canonicalShouldRouteCatalog =
+    input.canonicalCatalogRouteDecision?.shouldRouteCatalog === true;
+
   if (
-    input.canonicalCatalogRouteDecision?.resolutionKind === "resolved_single" ||
-    input.canonicalCatalogRouteDecision?.resolutionKind ===
-      "resolved_service_variant_ambiguous" ||
-    input.canonicalCatalogRouteDecision?.resolutionKind === "ambiguous"
+    canonicalResolutionKind === "resolved_single" ||
+    canonicalResolutionKind === "resolved_service_variant_ambiguous"
+  ) {
+    return {
+      routeTarget: "catalog",
+      reason: "canonical_catalog_resolution",
+    };
+  }
+
+  if (
+    canonicalResolutionKind === "ambiguous" &&
+    canonicalShouldRouteCatalog
   ) {
     return {
       routeTarget: "catalog",
@@ -230,10 +247,6 @@ function decideHybridDomain(input: {
       reason: "catalog_overview_signal",
     };
   }
-
-  const canonicalResolutionKind = String(
-    input.canonicalCatalogRouteDecision?.resolutionKind || "none"
-  ).trim();
 
   const hasCurrentTurnCatalogEvidence =
     canonicalResolutionKind === "resolved_single" ||
