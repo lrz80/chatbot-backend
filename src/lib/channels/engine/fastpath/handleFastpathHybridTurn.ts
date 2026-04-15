@@ -226,8 +226,13 @@ function decideHybridDomain(input: {
   }
 
   if (
-    input.detectedRoutingHints?.businessInfoScope &&
-    input.detectedRoutingHints.businessInfoScope !== "none"
+    input.asksSchedules ||
+    input.asksLocation ||
+    input.asksAvailability ||
+    (
+      input.detectedRoutingHints?.businessInfoScope &&
+      input.detectedRoutingHints.businessInfoScope !== "none"
+    )
   ) {
     return {
       routeTarget: "business_info",
