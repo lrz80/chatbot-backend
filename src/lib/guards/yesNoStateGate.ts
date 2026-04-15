@@ -57,6 +57,67 @@ function getEffectiveYesNoResolution(params: {
   return getDeclaredYesNoResolution(params.ctx);
 }
 
+type LastAssistantTurnSnapshot = {
+  replySourceKind?:
+    | "catalog_comparison_render"
+    | "catalog_grounded"
+    | "catalog_disambiguation"
+    | "business_info"
+    | "price_like"
+    | "service_detail"
+    | "generic";
+  answerType?:
+    | "overview"
+    | "direct_answer"
+    | "disambiguation"
+    | "comparison"
+    | "guided_next_step"
+    | "action_link";
+  salesPosture?:
+    | "inform"
+    | "guide"
+    | "recommend"
+    | "close_soft"
+    | "close_direct";
+  askedQuestion?: boolean;
+  closingText?: string | null;
+  createdAt?: string;
+};
+
+function getLastAssistantTurnSnapshot(ctx: any): LastAssistantTurnSnapshot | null {
+  if (!ctx || typeof ctx !== "object") return null;
+
+  const value =
+    ctx?.last_assistant_turn && typeof ctx.last_assistant_turn === "object"
+      ? (ctx.last_assistant_turn as LastAssistantTurnSnapshot)
+      : null;
+
+  return value;
+}
+
+function isRecentAssistantTurn(value: LastAssistantTurnSnapshot | null): boolean {
+  if (!value?.createdAt) return false;
+
+  const ts = Date.parse(String(value.createdAt));
+  if (!Number.isFinite(ts)) return false;
+
+  const ageMs = Date.now() - ts;
+  if (ageMs < 0) return false;
+
+  return ageMs <= 15 * 60 * 1000;
+}
+
+function canUseSemanticYesNoContinuation(input: {
+  lastAssistantTurn: LastAssistantTurnSnapshot | null;
+}): boolean {
+  const turn = input.lastAssistantTurn;
+  if (!turn) return false;
+  if (turn.askedQuestion !== true) return false;
+  if (!isRecentAssistantTurn(turn)) return false;
+
+  return true;
+}
+
 async function clearAwaitingState(params: {
   pool: any;
   tenantId: string;
@@ -131,10 +192,19 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
   }
 
   const awaiting = Boolean(ctx && ctx[awaitingKey]);
-  if (!awaiting) return { action: "continue" };
+  const lastAssistantTurn = getLastAssistantTurnSnapshot(ctx);
+  const canUseSemanticContinuation = canUseSemanticYesNoContinuation({
+    lastAssistantTurn,
+  });
+
+  if (!awaiting && !canUseSemanticContinuation) {
+    return { action: "continue" };
+  }
 
   if (!inputNorm) {
-    return { action: "silence", reason: "awaiting_yesno_but_empty" };
+    return awaiting
+      ? { action: "silence", reason: "awaiting_yesno_but_empty" }
+      : { action: "continue" };
   }
 
   const yn = getEffectiveYesNoResolution({
@@ -145,6 +215,32 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
   if (yn === "unknown") {
     return {
       action: "continue",
+    };
+  }
+
+  // -------------------------------------------------------------
+  // Continuidad semántica genérica del último turno del asistente
+  // sin depender de awaiting_yesno / pending_cta
+  // -------------------------------------------------------------
+  if (!awaiting && canUseSemanticContinuation) {
+    return {
+      action: "transition",
+      transition: {
+        patchCtx: {
+          semantic_yesno_followup: {
+            answer: yn,
+            source: "last_assistant_turn",
+            lastAssistantTurn,
+            createdAt: new Date().toISOString(),
+          },
+          yesno_resolution: yn,
+          last_bot_action:
+            yn === "yes"
+              ? "semantic_yesno_followup_accepted"
+              : "semantic_yesno_followup_rejected",
+          last_bot_action_at: Date.now(),
+        },
+      },
     };
   }
 

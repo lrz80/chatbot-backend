@@ -666,6 +666,15 @@ export type RenderFastpathDmReplyInput = {
 
     clarificationTarget: "service" | "variant" | null;
 
+    replySourceKind:
+      | "catalog_comparison_render"
+      | "catalog_grounded"
+      | "catalog_disambiguation"
+      | "business_info"
+      | "price_like"
+      | "service_detail"
+      | "generic";
+
     commercialPolicy: {
       purchaseIntent: "unknown" | "low" | "medium" | "high";
       wantsBooking: boolean;
@@ -686,6 +695,58 @@ export type RenderFastpathDmReplyResult = {
   reply: string;
   ctxPatch: any;
 };
+
+type LastAssistantTurnSnapshot = {
+  replySourceKind:
+    | "catalog_comparison_render"
+    | "catalog_grounded"
+    | "catalog_disambiguation"
+    | "business_info"
+    | "price_like"
+    | "service_detail"
+    | "generic";
+  answerType:
+    | "overview"
+    | "direct_answer"
+    | "disambiguation"
+    | "comparison"
+    | "guided_next_step"
+    | "action_link";
+  salesPosture:
+    | "inform"
+    | "guide"
+    | "recommend"
+    | "close_soft"
+    | "close_direct";
+  askedQuestion: boolean;
+  closingText: string | null;
+  createdAt: string;
+};
+
+function buildLastAssistantTurnSnapshot(input: {
+  replyPolicy: RenderFastpathDmReplyInput["replyPolicy"];
+  closingText: string | null;
+  closingType?: FrameClosingType;
+}): LastAssistantTurnSnapshot {
+  const closingText = String(input.closingText || "").trim() || null;
+
+  const askedQuestion =
+    input.closingType === "question" ||
+    (
+      input.replyPolicy.shouldAskQuestion === true &&
+      !input.replyPolicy.shouldForceNullClosing &&
+      !!closingText
+    );
+
+  return {
+    replySourceKind: input.replyPolicy.replySourceKind,
+    answerType: input.replyPolicy.answerType,
+    salesPosture: input.replyPolicy.salesPosture,
+    askedQuestion,
+    closingText,
+    createdAt: new Date().toISOString(),
+  };
+}
 
 export async function renderFastpathDmReply(
   input: RenderFastpathDmReplyInput
@@ -855,9 +916,18 @@ export async function renderFastpathDmReply(
         }
       }
 
+      const nextCtxPatch = {
+        ...(ctxPatch || {}),
+        last_assistant_turn: buildLastAssistantTurnSnapshot({
+          replyPolicy,
+          closingText: null,
+          closingType: "none",
+        }),
+      };
+
       return {
         reply: stripMarkdownLinksForDm(String(canonicalReply).trim()),
-        ctxPatch,
+        ctxPatch: nextCtxPatch,
       };
     }
 
@@ -1101,9 +1171,18 @@ export async function renderFastpathDmReply(
       .join("\n\n")
       .trim();
 
+    const nextCtxPatch = {
+      ...(ctxPatch || {}),
+      last_assistant_turn: buildLastAssistantTurnSnapshot({
+        replyPolicy,
+        closingText: safeClosing,
+        closingType: frame.closingType,
+      }),
+    };
+
     return {
       reply: stripMarkdownLinksForDm(finalGroundedReply),
-      ctxPatch,
+      ctxPatch: nextCtxPatch,
     };
   }
 
@@ -1143,8 +1222,17 @@ export async function renderFastpathDmReply(
     }
   }
 
+  const nextCtxPatch = {
+    ...(ctxPatch || {}),
+    last_assistant_turn: buildLastAssistantTurnSnapshot({
+      replyPolicy,
+      closingText: null,
+      closingType: "none",
+    }),
+  };
+
   return {
     reply: stripMarkdownLinksForDm(composed.text),
-    ctxPatch,
+    ctxPatch: nextCtxPatch,
   };
 }
