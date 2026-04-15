@@ -10,6 +10,7 @@ type ResolveBusinessInfoOverviewCanonicalBodyArgs = {
   userInput: string;
   promptBaseMem: string;
   infoClave: string;
+  convoCtx?: any;
   overviewMode?: "general_overview" | "guided_entry";
 };
 
@@ -68,6 +69,61 @@ function getBusinessInfoResolverModel(): string {
     process.env.OPENAI_MODEL ||
     "gpt-4.1-mini"
   );
+}
+
+function normalizeText(input: string): string {
+  return String(input || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function tokenize(input: string): string[] {
+  return normalizeText(input)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function isLowAutonomyTurn(userInput: string): boolean {
+  const normalized = normalizeText(userInput);
+  if (!normalized) return false;
+
+  const tokens = tokenize(normalized);
+
+  if (tokens.length <= 2) {
+    return true;
+  }
+
+  if (tokens.length <= 4 && !normalized.includes("?")) {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldSuppressOverviewForContinuation(input: {
+  userInput: string;
+  convoCtx?: any;
+}): boolean {
+  const lastTurn = input.convoCtx?.continuationContext?.lastTurn ?? null;
+
+  if (!lastTurn || lastTurn.domain !== "business_info") {
+    return false;
+  }
+
+  const lastIntent = String(lastTurn.intent || "").trim().toLowerCase();
+
+  const wasFacetTurn =
+    lastIntent === "horario" ||
+    lastIntent === "ubicacion" ||
+    lastIntent === "disponibilidad";
+
+  if (!wasFacetTurn) {
+    return false;
+  }
+
+  return isLowAutonomyTurn(input.userInput);
 }
 
 function buildSystemPrompt(params: {
@@ -386,7 +442,17 @@ export async function resolveBusinessInfoOverviewCanonicalBody(
     userInput,
     promptBaseMem,
     infoClave,
+    convoCtx,
   } = args;
+
+  if (
+    shouldSuppressOverviewForContinuation({
+      userInput,
+      convoCtx,
+    })
+  ) {
+    return "";
+  }
 
   const businessSource = buildBusinessSource({
     promptBaseMem,

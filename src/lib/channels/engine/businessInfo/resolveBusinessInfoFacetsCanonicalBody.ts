@@ -21,6 +21,7 @@ type Args = {
   userInput: string;
   promptBaseMem: string;
   infoClave: string;
+  convoCtx?: any;
   facets: {
     asksSchedules?: boolean;
     asksLocation?: boolean;
@@ -28,15 +29,98 @@ type Args = {
   };
 };
 
+type EffectiveFacets = {
+  asksSchedules: boolean;
+  asksLocation: boolean;
+  asksAvailability: boolean;
+};
+
+function resolveContinuationBusinessInfoFacets(convoCtx?: any): EffectiveFacets | null {
+  const lastTurn = convoCtx?.continuationContext?.lastTurn ?? null;
+
+  if (!lastTurn || lastTurn.domain !== "business_info") {
+    return null;
+  }
+
+  const lastIntent = String(lastTurn.intent || "").trim().toLowerCase();
+
+  if (lastIntent === "horario") {
+    return {
+      asksSchedules: true,
+      asksLocation: false,
+      asksAvailability: false,
+    };
+  }
+
+  if (lastIntent === "ubicacion") {
+    return {
+      asksSchedules: false,
+      asksLocation: true,
+      asksAvailability: false,
+    };
+  }
+
+  if (lastIntent === "disponibilidad") {
+    return {
+      asksSchedules: false,
+      asksLocation: false,
+      asksAvailability: true,
+    };
+  }
+
+  return null;
+}
+
+function resolveEffectiveFacets(input: {
+  facets: Args["facets"];
+  convoCtx?: any;
+}): EffectiveFacets {
+  const explicitFacets: EffectiveFacets = {
+    asksSchedules: input.facets.asksSchedules === true,
+    asksLocation: input.facets.asksLocation === true,
+    asksAvailability: input.facets.asksAvailability === true,
+  };
+
+  const hasExplicitFacet =
+    explicitFacets.asksSchedules ||
+    explicitFacets.asksLocation ||
+    explicitFacets.asksAvailability;
+
+  if (hasExplicitFacet) {
+    return explicitFacets;
+  }
+
+  const continuationFacets = resolveContinuationBusinessInfoFacets(input.convoCtx);
+
+  if (continuationFacets) {
+    return continuationFacets;
+  }
+
+  return explicitFacets;
+}
+
 export async function resolveBusinessInfoFacetsCanonicalBody(
   args: Args
 ): Promise<string> {
-  const { pool, tenantId, idiomaDestino, infoClave, facets, userInput } = args;
+  const {
+    pool,
+    tenantId,
+    idiomaDestino,
+    infoClave,
+    facets,
+    userInput,
+    convoCtx,
+  } = args;
+
+  const effectiveFacets = resolveEffectiveFacets({
+    facets,
+    convoCtx,
+  });
 
   const shouldResolveBusinessInfo =
-    facets.asksSchedules === true ||
-    facets.asksLocation === true ||
-    facets.asksAvailability === true;
+    effectiveFacets.asksSchedules === true ||
+    effectiveFacets.asksLocation === true ||
+    effectiveFacets.asksAvailability === true;
 
   if (!shouldResolveBusinessInfo) {
     return "";
@@ -46,12 +130,12 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     pool,
     tenantId,
     userInput,
-    facets,
+    facets: effectiveFacets,
   });
 
   const blocks: string[] = [];
 
-  if (facets.asksSchedules === true) {
+  if (effectiveFacets.asksSchedules === true) {
     const scheduleBlock = buildScheduleBlock({
       idiomaDestino,
       infoClave,
@@ -63,7 +147,7 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     }
   }
 
-  if (facets.asksLocation === true) {
+  if (effectiveFacets.asksLocation === true) {
     const locationBody = buildLocationBlockFromInfoClave(infoClave);
 
     const locationBlock = withSectionTitle(
@@ -78,7 +162,7 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     }
   }
 
-  if (facets.asksAvailability === true) {
+  if (effectiveFacets.asksAvailability === true) {
     const availabilityBody = buildAvailabilityBlockFromInfoClave(infoClave);
 
     const availabilityBlock = withSectionTitle(
