@@ -1,6 +1,6 @@
-// backend/src/lib/conversation/finalizeReply.ts
 import type { Canal } from '../../lib/detectarIntencion';
 import type { LangCode } from '../i18n/lang';
+import { buildCanonicalTurnSnapshot } from '../channels/engine/continuation/buildCanonicalTurnSnapshot';
 
 type LastServiceRef = {
   kind: "service" | "variant" | null;
@@ -77,6 +77,41 @@ type FinalizeInput = {
 
   onAfterOk?: (nextCtx: any) => void;
 };
+
+function resolveContinuationDomain(args: {
+  canonicalLastEntityId: string | null;
+  canonicalLastResolvedIntent: string | null;
+  baseCtx: any;
+}): "catalog" | "business_info" | "booking" | "other" {
+  const { canonicalLastEntityId, canonicalLastResolvedIntent, baseCtx } = args;
+
+  const bookingStep =
+    baseCtx?.booking?.step && typeof baseCtx.booking.step === "string"
+      ? baseCtx.booking.step.trim().toLowerCase()
+      : "";
+
+  const inBooking = Boolean(bookingStep && bookingStep !== "idle");
+
+  if (inBooking) {
+    return "booking";
+  }
+
+  if (canonicalLastEntityId) {
+    return "catalog";
+  }
+
+  if (
+    canonicalLastResolvedIntent === "info_general" ||
+    canonicalLastResolvedIntent === "horario" ||
+    canonicalLastResolvedIntent === "ubicacion" ||
+    canonicalLastResolvedIntent === "disponibilidad" ||
+    canonicalLastResolvedIntent === "info_servicio"
+  ) {
+    return "business_info";
+  }
+
+  return "other";
+}
 
 export async function finalizeReply(
   input: FinalizeInput,
@@ -252,6 +287,7 @@ export async function finalizeReply(
     patchCtx.lastVariantId ??
     rawBaseCtx.last_variant_id ??
     rawBaseCtx.lastVariantId ??
+    capturedRef?.variant_id ??
     null;
 
   const canonicalLastVariantName =
@@ -261,20 +297,16 @@ export async function finalizeReply(
     rawBaseCtx.lastVariantName ??
     null;
 
-  const conversationAnchorDomain =
-    canonicalLastEntityId
-      ? "catalog"
-      : canonicalLastResolvedIntent === "info_general" ||
-        canonicalLastResolvedIntent === "horario" ||
-        canonicalLastResolvedIntent === "ubicacion" ||
-        canonicalLastResolvedIntent === "disponibilidad"
-      ? "business_info"
-      : null;
+  const continuationDomain = resolveContinuationDomain({
+    canonicalLastEntityId,
+    canonicalLastResolvedIntent,
+    baseCtx,
+  });
 
   const conversationAnchor =
-    conversationAnchorDomain
+    continuationDomain === "catalog" || continuationDomain === "business_info"
       ? {
-          domain: conversationAnchorDomain,
+          domain: continuationDomain,
           entityId: canonicalLastEntityId,
           entityName: canonicalLastEntityName,
           variantId: canonicalLastVariantId,
@@ -284,10 +316,28 @@ export async function finalizeReply(
         }
       : null;
 
+  const continuationLastTurn = buildCanonicalTurnSnapshot({
+    domain: continuationDomain,
+    intent: canonicalLastResolvedIntent,
+    userText: userInput,
+    assistantText: reply,
+    canonicalSource: continuationDomain,
+    references: {
+      serviceId: canonicalLastEntityId,
+      familyId: canonicalLastFamilyKey,
+      variantId: canonicalLastVariantId,
+    },
+  });
+
   const nextCtx = {
     ...baseCtx,
     ...(capturedRef?.service_id ? { last_service_ref: capturedRef } : {}),
     conversationAnchor,
+
+    continuationContext: {
+      ...(baseCtx?.continuationContext ?? {}),
+      lastTurn: continuationLastTurn,
+    },
 
     lastEntityId: canonicalLastEntityId,
     lastEntityName: canonicalLastEntityName,
@@ -322,6 +372,8 @@ export async function finalizeReply(
     tenantId,
     canal,
     replyPreview: String(reply || "").slice(0, 300),
+    continuationDomain,
+    continuationLastTurn,
   });
 
   const ok = await deps.safeSend(tenantId, canal, messageId, fromNumber, reply);

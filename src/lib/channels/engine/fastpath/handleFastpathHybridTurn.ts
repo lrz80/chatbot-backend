@@ -1,4 +1,3 @@
-//src/lib/channels/engine/fastpath/handleFastpathHybridTurn.ts
 import { Pool } from "pg";
 import type {
   Canal,
@@ -14,6 +13,7 @@ import {
   type IntentFacets,
 } from "./buildFastpathTurnPolicy";
 import { getCanonicalCatalogRouteDecision } from "./getCanonicalCatalogRouteDecision";
+import { decideTurnContinuation } from "../continuation/decideTurnContinuation";
 
 export type FastpathHybridRoute =
   | "catalog"
@@ -72,6 +72,9 @@ type HybridDomainDecision = {
     | "catalog_overview_signal"
     | "catalog_anchor_continuation"
     | "business_info_anchor_continuation"
+    | "continuation_previous_catalog_domain"
+    | "continuation_previous_business_info_domain"
+    | "continuation_previous_booking_domain"
     | "business_info_signal"
     | "mixed_turn"
     | "guided_entry"
@@ -123,10 +126,8 @@ function shouldUseConversationAnchor(input: {
     input.asksSchedules ||
     input.asksLocation ||
     input.asksAvailability ||
-    (
-      input.detectedRoutingHints?.businessInfoScope &&
-      input.detectedRoutingHints.businessInfoScope !== "none"
-    );
+    (input.detectedRoutingHints?.businessInfoScope &&
+      input.detectedRoutingHints.businessInfoScope !== "none");
 
   if (hasExplicitBusinessInfoSignal) {
     return input.conversationAnchor.domain === "business_info";
@@ -176,12 +177,39 @@ function decideHybridDomain(input: {
     shouldRouteCatalog?: boolean;
     resolutionKind?: string | null;
   };
+  continuationDecision?: {
+    shouldContinue: boolean;
+    targetDomain: string | null;
+  } | null;
 }): HybridDomainDecision {
   if (input.hasPendingCatalogChoice) {
     return {
       routeTarget: "catalog",
       reason: "pending_catalog_choice",
     };
+  }
+
+  if (input.continuationDecision?.shouldContinue) {
+    if (input.continuationDecision.targetDomain === "catalog") {
+      return {
+        routeTarget: "catalog",
+        reason: "continuation_previous_catalog_domain",
+      };
+    }
+
+    if (input.continuationDecision.targetDomain === "business_info") {
+      return {
+        routeTarget: "business_info",
+        reason: "continuation_previous_business_info_domain",
+      };
+    }
+
+    if (input.continuationDecision.targetDomain === "booking") {
+      return {
+        routeTarget: "continue_pipeline",
+        reason: "continuation_previous_booking_domain",
+      };
+    }
   }
 
   const canonicalResolutionKind = String(
@@ -229,10 +257,8 @@ function decideHybridDomain(input: {
     input.asksSchedules ||
     input.asksLocation ||
     input.asksAvailability ||
-    (
-      input.detectedRoutingHints?.businessInfoScope &&
-      input.detectedRoutingHints.businessInfoScope !== "none"
-    )
+    (input.detectedRoutingHints?.businessInfoScope &&
+      input.detectedRoutingHints.businessInfoScope !== "none")
   ) {
     return {
       routeTarget: "business_info",
@@ -497,12 +523,12 @@ function buildPendingCatalogChoiceClassification(convoCtx: any) {
     return {
       kind: "entity_specific",
       targetLevel: "service",
-      targetServiceId: String(
-        pending.selectedServiceId || pending.serviceId || ""
-      ).trim() || null,
-      targetServiceName: String(
-        pending.selectedServiceName || pending.serviceName || ""
-      ).trim() || null,
+      targetServiceId:
+        String(pending.selectedServiceId || pending.serviceId || "").trim() ||
+        null,
+      targetServiceName:
+        String(pending.selectedServiceName || pending.serviceName || "").trim() ||
+        null,
       targetVariantId: null,
       targetVariantName: null,
       targetFamilyKey: null,
@@ -516,12 +542,12 @@ function buildPendingCatalogChoiceClassification(convoCtx: any) {
     return {
       kind: "variant_specific",
       targetLevel: "variant",
-      targetServiceId: String(
-        pending.selectedServiceId || pending.serviceId || ""
-      ).trim() || null,
-      targetServiceName: String(
-        pending.selectedServiceName || pending.serviceName || ""
-      ).trim() || null,
+      targetServiceId:
+        String(pending.selectedServiceId || pending.serviceId || "").trim() ||
+        null,
+      targetServiceName:
+        String(pending.selectedServiceName || pending.serviceName || "").trim() ||
+        null,
       targetVariantId: null,
       targetVariantName: null,
       targetFamilyKey: null,
@@ -664,6 +690,29 @@ export async function handleFastpathHybridTurn(
       canonicalCatalogRouteDecision: rawCanonicalCatalogRouteDecision,
     });
 
+  const continuationDecision = decideTurnContinuation({
+    userInput,
+    continuationContext: convoCtx?.continuationContext ?? null,
+    currentTurnSignals: {
+      detectedIntent: currentIntent,
+      hasStrongStandaloneIntent:
+        Boolean(currentIntent && normalizedCurrentIntent !== "duda") ||
+        Boolean(detectedRoutingHints?.catalogScope && detectedRoutingHints.catalogScope !== "none") ||
+        Boolean(
+          detectedRoutingHints?.businessInfoScope &&
+            detectedRoutingHints.businessInfoScope !== "none"
+        ),
+      hasResolvedEntity: Boolean(
+        canonicalResolutionMeta.resolvedServiceId
+      ),
+      asksPrices,
+      asksSchedules,
+      asksLocation,
+      asksAvailability,
+      wantsBooking: Boolean(detectedCommercial?.wantsBooking),
+    },
+  });
+
   const domainDecision = decideHybridDomain({
     hasPendingCatalogChoice,
     hasConversationAnchor,
@@ -682,6 +731,7 @@ export async function handleFastpathHybridTurn(
     detectedFacets: detectedFacets || null,
     detectedRoutingHints: detectedRoutingHints || null,
     canonicalCatalogRouteDecision: rawCanonicalCatalogRouteDecision,
+    continuationDecision,
   });
 
   console.log("[FASTPATH_HYBRID][DOMAIN_DECISION]", {
@@ -693,6 +743,7 @@ export async function handleFastpathHybridTurn(
     intentFallback,
     routeTarget: domainDecision.routeTarget,
     reason: domainDecision.reason,
+    continuationDecision,
     asksPrices,
     asksSchedules,
     asksLocation,
