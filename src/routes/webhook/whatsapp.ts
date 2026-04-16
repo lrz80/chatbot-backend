@@ -617,15 +617,32 @@ export async function procesarMensajeWhatsApp(
         ""
       ).trim();
 
+    console.log("[EXTERNAL_ACTION][SELECT_INPUT]", {
+      sourceDomain: params.sourceDomain,
+      tenantBookingUrl: params.tenant?.booking_url ?? null,
+      tenantBookingUrlCamel: params.tenant?.bookingUrl ?? null,
+      tenantSettingsBookingUrl:
+        params.tenant?.settings?.booking?.booking_url ?? null,
+    });
+
     if (!bookingUrl) {
+      console.log("[EXTERNAL_ACTION][SELECT_NONE]", {
+        reason: "missing_booking_url",
+        sourceDomain: params.sourceDomain,
+      });
       return null;
     }
 
     if (params.sourceDomain !== "business_info") {
+      console.log("[EXTERNAL_ACTION][SELECT_NONE]", {
+        reason: "unsupported_source_domain",
+        sourceDomain: params.sourceDomain,
+        bookingUrl,
+      });
       return null;
     }
 
-    return {
+    const action: ExternalActionContext = {
       type: "external_action",
       channel: "link",
       dispatchPolicy: "affirmative_continuation",
@@ -633,6 +650,10 @@ export async function procesarMensajeWhatsApp(
       sourceDomain: params.sourceDomain,
       createdAt: new Date().toISOString(),
     };
+
+    console.log("[EXTERNAL_ACTION][SELECTED]", action);
+
+    return action;
   }
 
   // ✅ google_calendar_enabled flag (source of truth)
@@ -1164,84 +1185,6 @@ export async function procesarMensajeWhatsApp(
       finalActionText,
       "external_action_link",
       "external_action"
-    );
-
-    return true;
-  }
-
-  async function tryActionContextContinuation(params: {
-    intent: string | null;
-    detectedFacets?: IntentFacets | null;
-  }): Promise<boolean> {
-    const actionContext = convoCtx?.actionContext ?? null;
-
-    if (!actionContext || typeof actionContext !== "object") {
-      return false;
-    }
-
-    const actionType = String(actionContext.type || "").trim().toLowerCase();
-    const actionChannel = String(actionContext.channel || "").trim().toLowerCase();
-    const targetUrl = String(actionContext.targetUrl || "").trim();
-
-    if (actionType !== "external_action") {
-      return false;
-    }
-
-    if (actionChannel !== "booking_link") {
-      return false;
-    }
-
-    if (!targetUrl) {
-      return false;
-    }
-
-    if (bookingEnabled) {
-      return false;
-    }
-
-    const explicitAsksSchedules = params.detectedFacets?.asksSchedules === true;
-    const explicitAsksLocation = params.detectedFacets?.asksLocation === true;
-    const explicitAsksAvailability = params.detectedFacets?.asksAvailability === true;
-
-    if (explicitAsksSchedules || explicitAsksLocation || explicitAsksAvailability) {
-      return false;
-    }
-
-    const resolvedIntent = String(params.intent || "").trim().toLowerCase() || null;
-
-    const looksLikeAffirmativeContinuation =
-      shouldTreatTurnAsPendingCtaConfirmation({
-        userInput,
-        resolvedIntent,
-      });
-
-    if (!looksLikeAffirmativeContinuation) {
-      return false;
-    }
-
-    const bookingLinkText =
-      idiomaDestino === "en"
-        ? `Perfect — you can book here: ${targetUrl}`
-        : `Perfecto — puedes agendar aquí: ${targetUrl}`;
-
-    const actionCtxPatch = {
-      actionContext: null,
-      last_bot_action: "booking_link_sent",
-    };
-
-    transition({ patchCtx: actionCtxPatch });
-    finalCtxPatch = {
-      ...finalCtxPatch,
-      ...actionCtxPatch,
-    };
-
-    INTENCION_FINAL_CANONICA = "booking_link";
-    lastIntent = "booking_link";
-
-    await replyAndExit(
-      bookingLinkText,
-      "booking_link_continuation",
-      "booking_link"
     );
 
     return true;
