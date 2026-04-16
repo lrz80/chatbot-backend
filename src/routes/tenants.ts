@@ -14,15 +14,7 @@ function isString(x: any): x is string { return typeof x === 'string'; }
 function isLikelyIana(tz: string) {
   return /^[A-Za-z]+\/[A-Za-z0-9_\-+]+$/.test(tz);
 }
-/** Normaliza el nombre a slug simple (sin acentos ni espacios). */
-function toSlug(s: string) {
-  return s
-    .normalize('NFD').replace(/\p{M}/gu, '')  // quita acentos
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')              // no letras/números -> -
-    .replace(/^-+|-+$/g, '');                 // bordes
-}
+
 /** Devuelve el primer string no-vacío; si no hay, null. */
 function firstString(...vals: any[]): string | null {
   for (const v of vals) {
@@ -196,9 +188,8 @@ router.post('/', async (req: Request, res: Response) => {
       );
     }
 
-    // 3) Booking URL → settings.booking.booking_url y links.booking_url
+    // 3) Booking URL → settings.booking.booking_url y links.booking.booking_url
     if (isValidUrl(bookingUrlCandidate)) {
-      // settings
       await pool.query(
         `UPDATE tenants
            SET settings = jsonb_set(
@@ -212,15 +203,19 @@ router.post('/', async (req: Request, res: Response) => {
                  'true'::jsonb,
                  true
                ),
-               -- links espelho
-               links = COALESCE(links, '{}'::jsonb) || jsonb_build_object('booking_url', to_jsonb($2::text)),
+               links = jsonb_set(
+                 COALESCE(links, '{}'::jsonb),
+                 '{booking,booking_url}',
+                 to_jsonb($2::text),
+                 true
+               ),
                updated_at = NOW()
          WHERE id = $1`,
         [tenantId, bookingUrlCandidate]
       );
     }
 
-    // 4) Availability API → settings.availability.api_url y links.booking_api_url
+    // 4) Availability API → settings.availability.api_url y links.availability.api_url
     if (isValidUrl(apiUrlCandidate)) {
       await pool.query(
         `UPDATE tenants
@@ -235,14 +230,19 @@ router.post('/', async (req: Request, res: Response) => {
                  'true'::jsonb,
                  true
                ),
-               links = COALESCE(links, '{}'::jsonb) || jsonb_build_object('booking_api_url', to_jsonb($2::text)),
+               links = jsonb_set(
+                 COALESCE(links, '{}'::jsonb),
+                 '{availability,api_url}',
+                 to_jsonb($2::text),
+                 true
+               ),
                updated_at = NOW()
          WHERE id = $1`,
         [tenantId, apiUrlCandidate]
       );
     }
 
-    // 5) Headers → settings.availability.headers y links.booking_headers
+    // 5) Headers → settings.availability.headers y links.availability.headers
     if (headersObj) {
       await pool.query(
         `UPDATE tenants
@@ -252,7 +252,12 @@ router.post('/', async (req: Request, res: Response) => {
                  to_jsonb($2::jsonb),
                  true
                ),
-               links = COALESCE(links, '{}'::jsonb) || jsonb_build_object('booking_headers', to_jsonb($2::jsonb)),
+               links = jsonb_set(
+                 COALESCE(links, '{}'::jsonb),
+                 '{availability,headers}',
+                 to_jsonb($2::jsonb),
+                 true
+               ),
                updated_at = NOW()
          WHERE id = $1`,
         [tenantId, headersObj]
