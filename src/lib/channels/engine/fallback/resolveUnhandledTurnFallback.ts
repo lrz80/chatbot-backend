@@ -21,6 +21,7 @@ type ResolveUnhandledTurnFallbackArgs = {
   messageId: string | null;
   promptBaseMem: string;
   infoClave: string;
+  convoCtx?: any;
 
   detectedIntent?: string | null;
   intentFallback?: string | null;
@@ -171,6 +172,7 @@ export async function resolveUnhandledTurnFallback(
     messageId,
     promptBaseMem,
     infoClave,
+    convoCtx,
     detectedIntent,
     intentFallback,
     detectedCommercial,
@@ -195,7 +197,8 @@ export async function resolveUnhandledTurnFallback(
       userInput,
       promptBaseMem,
       infoClave,
-      overviewMode: "guided_entry",
+      convoCtx,
+      overviewMode: "general_overview",
     });
 
   if (canonicalBusinessInfoBody) {
