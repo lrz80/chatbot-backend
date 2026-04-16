@@ -441,56 +441,63 @@ async function buildGroundedFrameOnly(input: {
   const isInfoGeneralOverviewTurn = input.replyPolicy.answerType === "overview";
   const isActionLinkResolvedCatalogReply =
     input.replyPolicy.answerType === "action_link";
-  const frameTaskRules =
-    input.replyPolicy.answerType === "disambiguation"
-      ? [
-          "This is a catalog choice turn.",
-          "Return exactly one short intro line before the canonical options body.",
-          "Intro is required and must never be null.",
-          "The intro must state that these are the available options.",
-          "The intro must be simple, neutral, and direct.",
-          "The intro must not mention prices, includes, benefits, schedules, policies, or links.",
-          "The intro must not repeat the numbered options.",
-          "Return exactly one short closing line after the canonical options body.",
-          "The closing must be a direct selection CTA.",
-          "Do not rewrite or summarize the options body.",
-        ]
-      : input.replyPolicy.answerType === "overview"
-      ? [
-          "This is a grounded business overview turn.",
-          "Intro must be null.",
-          "Do not ask a broad discovery question before the canonical body.",
-          "Do not restate, summarize, or paraphrase the canonical body.",
-          "If PROMPT_BASE contains an explicit tenant CTA, use that CTA as the closing.",
-          "Do not replace an explicit tenant CTA with a generic closing.",
-          "Return one short closing that keeps the conversation moving naturally only when there is no explicit tenant CTA.",
-        ]
-      : input.replyPolicy.answerType === "direct_answer" ||
-        input.replyPolicy.answerType === "comparison" ||
-        input.replyPolicy.answerType === "action_link"
-      ? [
-          "This is a resolved grounded answer.",
-          input.replyPolicy.shouldForceNullIntro
-            ? "Intro must be null."
-            : "Return exactly one short intro before the canonical body.",
-          input.replyPolicy.shouldForceNullClosing
-            ? "Closing must be null."
-            : input.resolvedCatalogClosingMode === "availability_statement"
-            ? "Return one short declarative availability-style closing. It must not be a question."
-            : "Return exactly one short closing after the canonical body.",
-          "You are only framing the canonical body.",
-          "Do not rewrite, summarize, paraphrase, compress, expand, or replace the canonical body.",
-          "Do not mention facts not explicit in the canonical body.",
-          "Do not restate prices, includes, schedules, policies, conditions, or links outside the canonical body.",
-          "If PROMPT_BASE contains an explicit tenant CTA, prefer that CTA in the closing when closing is allowed.",
-          input.resolvedCatalogClosingMode === "availability_statement"
-            ? "The closing must be declarative, low-pressure, and non-interrogative."
-            : "The closing must be brief, consultative, and natural.",
-        ]
-      : [
-          "Return optional framing only when it improves the DM reply.",
-          "Do not rewrite or summarize the canonical body.",
-        ];
+    const frameTaskRules =
+      input.replyPolicy.answerType === "disambiguation"
+        ? [
+            "This is a catalog choice turn.",
+            "Return exactly one short intro line before the canonical options body.",
+            "Intro is required and must never be null.",
+            "The intro must state that these are the available options.",
+            "The intro must feel natural for a DM conversation, not robotic or system-like.",
+            "The intro must be simple, neutral, direct, and warm.",
+            "The intro must not mention prices, includes, benefits, schedules, policies, or links.",
+            "The intro must not repeat the numbered options.",
+            "Return exactly one short closing line after the canonical options body.",
+            "The closing must be a direct selection CTA.",
+            "Do not rewrite or summarize the options body.",
+          ]
+        : input.replyPolicy.answerType === "overview"
+        ? [
+            "This is a grounded business overview turn.",
+            "Intro must be null.",
+            "Do not ask a broad discovery question before the canonical body.",
+            "Do not restate, summarize, or paraphrase the canonical body.",
+            "If PROMPT_BASE contains an explicit tenant CTA, use that CTA as the closing.",
+            "Do not replace an explicit tenant CTA with a generic closing.",
+            "Return one short closing that keeps the conversation moving naturally only when there is no explicit tenant CTA.",
+          ]
+        : input.replyPolicy.answerType === "direct_answer" ||
+          input.replyPolicy.answerType === "comparison" ||
+          input.replyPolicy.answerType === "action_link"
+        ? [
+            "This is a resolved grounded answer.",
+            input.replyPolicy.shouldForceNullIntro
+              ? "Intro must be null."
+              : "Return exactly one short intro before the canonical body.",
+            input.replyPolicy.shouldForceNullClosing
+              ? "Closing must be null."
+              : input.resolvedCatalogClosingMode === "availability_statement"
+              ? "Return one short declarative availability-style closing. It must not be a question."
+              : "Return exactly one short closing after the canonical body.",
+            "You are only framing the canonical body.",
+            "Do not rewrite, summarize, paraphrase, compress, expand, or replace the canonical body.",
+            "Do not mention facts not explicit in the canonical body.",
+            "Do not restate prices, includes, schedules, policies, conditions, or links outside the canonical body.",
+            "If intro is allowed, it should briefly acknowledge the user's request in a natural DM tone before the canonical body.",
+            "If intro is allowed, it must feel human, warm, and direct, without sounding like a template or system message.",
+            "If intro is allowed, prefer a light conversational bridge rather than a cold presentation line.",
+            "Avoid robotic openers such as generic presentation-style intros with no conversational warmth.",
+            "Do not make the intro long.",
+            "Do not use filler, gratitude, or exaggerated politeness.",
+            "If PROMPT_BASE contains an explicit tenant CTA, prefer that CTA in the closing when closing is allowed.",
+            input.resolvedCatalogClosingMode === "availability_statement"
+              ? "The closing must be declarative, low-pressure, and non-interrogative."
+              : "The closing must be brief, consultative, and natural.",
+          ]
+        : [
+            "Return optional framing only when it improves the DM reply.",
+            "Do not rewrite or summarize the canonical body.",
+          ];
 
   const framePrompt = [
     "SYSTEM_ROLE:",
@@ -502,12 +509,16 @@ async function buildGroundedFrameOnly(input: {
     "- You may generate only intro and closing.",
     "- Do not generate, rewrite, summarize, compress, paraphrase, reorder, or replace the canonical body.",
     "- The canonical body will be inserted by the system exactly as-is after your output.",
-    "- intro must be very short.",
-    "- closing must be very short.",
+    "- intro must be short: one natural DM line.",
+    "- closing must be short.",
     "- intro may be null only when the turn is not a catalog choice turn.",
     "- for catalog choice turns, intro is mandatory and must not be null.",
     "- closing may be null only when the turn does not need a next-step prompt.",
     "- intro and closing must be framing only, never content expansion.",
+    "- when intro is present, it must sound natural, warm, direct, and conversational.",
+    "- when intro is present, it must not sound robotic, generic, or like a system-generated heading.",
+    "- when intro is present, it should lightly acknowledge the user's request without restating the full canonical body.",
+    "- avoid cold lead-ins that feel like labels or section headers.",
     "- Do not mention facts, prices, includes, schedules, locations, links, conditions, service names, benefits, or details unless they are already explicit in the canonical body and strictly necessary for a minimal bridge sentence.",
     "- Do not add positioning language, suitability claims, audience assumptions, lifestyle assumptions, or persuasive claims not explicitly present in the canonical body.",
     "- Do not duplicate or summarize facts already stated in the canonical body.",

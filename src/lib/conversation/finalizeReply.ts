@@ -329,6 +329,10 @@ export async function finalizeReply(
     },
   });
 
+  const nextActionContext = hasOwn(patchCtx, "actionContext")
+    ? patchCtx.actionContext ?? null
+    : rawBaseCtx.actionContext ?? null;
+
   const nextCtx = {
     ...baseCtx,
     ...(capturedRef?.service_id ? { last_service_ref: capturedRef } : {}),
@@ -338,6 +342,8 @@ export async function finalizeReply(
       ...(baseCtx?.continuationContext ?? {}),
       lastTurn: continuationLastTurn,
     },
+
+    actionContext: nextActionContext,
 
     lastEntityId: canonicalLastEntityId,
     lastEntityName: canonicalLastEntityName,
@@ -374,6 +380,7 @@ export async function finalizeReply(
     replyPreview: String(reply || "").slice(0, 300),
     continuationDomain,
     continuationLastTurn,
+    actionContext: nextActionContext,
   });
 
   const ok = await deps.safeSend(tenantId, canal, messageId, fromNumber, reply);

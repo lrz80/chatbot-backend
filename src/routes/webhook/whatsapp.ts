@@ -96,6 +96,28 @@ type IntentFacets = {
   asksAvailability?: boolean;
 };
 
+type ExternalActionConfig = {
+  id: string;
+  enabled: boolean;
+  channel: "link";
+  dispatchPolicy: "affirmative_continuation";
+  url: string;
+  allowedDomains?: Array<"business_info" | "catalog" | "booking" | "other">;
+  canonicalBody?: string | null;
+  canonicalBodyByLang?: Partial<Record<LangCode, string>>;
+};
+
+type ExternalActionContext = {
+  type: "external_action";
+  actionId: string;
+  channel: "link";
+  dispatchPolicy: "affirmative_continuation";
+  targetUrl: string;
+  canonicalBody: string;
+  sourceDomain: "business_info" | "catalog" | "booking" | "other";
+  createdAt: string;
+};
+
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
@@ -503,6 +525,128 @@ export async function procesarMensajeWhatsApp(
     return tokenCount <= 3;
   }
 
+  function normalizeExternalActions(raw: unknown): ExternalActionConfig[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const out: ExternalActionConfig[] = [];
+
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const row = item as Record<string, unknown>;
+
+    const id = String(row.id || "").trim();
+    const enabled = row.enabled === true;
+    const channel = String(row.channel || "").trim().toLowerCase();
+    const dispatchPolicy = String(row.dispatchPolicy || "").trim().toLowerCase();
+    const url = String(row.url || "").trim();
+
+    if (!id || !enabled || channel !== "link" || dispatchPolicy !== "affirmative_continuation" || !url) {
+      continue;
+    }
+
+    const allowedDomains = Array.isArray(row.allowedDomains)
+      ? row.allowedDomains
+          .map((value) => String(value || "").trim().toLowerCase())
+          .filter(
+            (value): value is "business_info" | "catalog" | "booking" | "other" =>
+              value === "business_info" ||
+              value === "catalog" ||
+              value === "booking" ||
+              value === "other"
+          )
+      : [];
+
+    const canonicalBody =
+      typeof row.canonicalBody === "string" && row.canonicalBody.trim()
+        ? row.canonicalBody.trim()
+        : null;
+
+    const canonicalBodyByLang =
+      row.canonicalBodyByLang && typeof row.canonicalBodyByLang === "object"
+        ? (row.canonicalBodyByLang as Partial<Record<LangCode, string>>)
+        : undefined;
+
+    out.push({
+      id,
+      enabled,
+      channel: "link",
+      dispatchPolicy: "affirmative_continuation",
+      url,
+      allowedDomains,
+      canonicalBody,
+      canonicalBodyByLang,
+    });
+  }
+
+  return out;
+}
+
+  function resolveExternalActionCanonicalBody(
+    action: ExternalActionConfig,
+    idiomaDestino: LangCode
+  ): string | null {
+    const byLang =
+      action.canonicalBodyByLang &&
+      typeof action.canonicalBodyByLang[idiomaDestino] === "string"
+        ? String(action.canonicalBodyByLang[idiomaDestino] || "").trim()
+        : "";
+
+    if (byLang) {
+      return byLang;
+    }
+
+    if (action.canonicalBody) {
+      return String(action.canonicalBody).trim() || null;
+    }
+
+    return null;
+  }
+
+  function selectExternalActionForDomain(params: {
+    tenant: any;
+    sourceDomain: "business_info" | "catalog" | "booking" | "other";
+    idiomaDestino: LangCode;
+  }): ExternalActionContext | null {
+    const actions = normalizeExternalActions(params.tenant?.external_actions);
+
+    for (const action of actions) {
+      const allowedDomains = Array.isArray(action.allowedDomains)
+        ? action.allowedDomains
+        : [];
+
+      if (allowedDomains.length > 0 && !allowedDomains.includes(params.sourceDomain)) {
+        continue;
+      }
+
+      const canonicalBody = resolveExternalActionCanonicalBody(
+        action,
+        params.idiomaDestino
+      );
+
+      if (!canonicalBody) {
+        continue;
+      }
+
+      return {
+        type: "external_action",
+        actionId: action.id,
+        channel: "link",
+        dispatchPolicy: "affirmative_continuation",
+        targetUrl: action.url,
+        canonicalBody,
+        sourceDomain: params.sourceDomain,
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    return null;
+  }
+
   // ✅ google_calendar_enabled flag (source of truth)
   let bookingEnabled = false;
   try {
@@ -858,7 +1002,15 @@ export async function procesarMensajeWhatsApp(
           shouldSuggestHumanHandoff: detectedCommercial?.wantsHuman === true,
         },
       }),
-      ctxPatch: finalCtxPatch || {},
+      ctxPatch: {
+        ...(finalCtxPatch || {}),
+        actionContext:
+          selectExternalActionForDomain({
+            tenant,
+            sourceDomain: "business_info",
+            idiomaDestino,
+          }) ?? null,
+      },
       maxLines: MAX_WHATSAPP_LINES,
     });
 
@@ -888,6 +1040,227 @@ export async function procesarMensajeWhatsApp(
         ? "business_info_facets_outside_fastpath"
         : "business_info_outside_fastpath",
       resolvedBusinessIntent
+    );
+
+    return true;
+  }
+
+  async function tryExternalActionContextContinuation(params: {
+    intent: string | null;
+    detectedFacets?: IntentFacets | null;
+  }): Promise<boolean> {
+    const actionContext = convoCtx?.actionContext ?? null;
+
+    if (!actionContext || typeof actionContext !== "object") {
+      return false;
+    }
+
+    const actionType = String(actionContext.type || "").trim().toLowerCase();
+    const actionChannel = String(actionContext.channel || "").trim().toLowerCase();
+    const dispatchPolicy = String(actionContext.dispatchPolicy || "").trim().toLowerCase();
+    const canonicalBody = String(actionContext.canonicalBody || "").trim();
+
+    if (actionType !== "external_action") {
+      return false;
+    }
+
+    if (actionChannel !== "link") {
+      return false;
+    }
+
+    if (dispatchPolicy !== "affirmative_continuation") {
+      return false;
+    }
+
+    if (!canonicalBody) {
+      return false;
+    }
+
+    const explicitAsksSchedules = params.detectedFacets?.asksSchedules === true;
+    const explicitAsksLocation = params.detectedFacets?.asksLocation === true;
+    const explicitAsksAvailability = params.detectedFacets?.asksAvailability === true;
+
+    if (explicitAsksSchedules || explicitAsksLocation || explicitAsksAvailability) {
+      return false;
+    }
+
+    const resolvedIntent = String(params.intent || "").trim().toLowerCase() || null;
+
+    const looksLikeAffirmativeContinuation =
+      shouldTreatTurnAsPendingCtaConfirmation({
+        userInput,
+        resolvedIntent,
+      });
+
+    if (!looksLikeAffirmativeContinuation) {
+      return false;
+    }
+
+    const actionCtxPatch = {
+      actionContext: null,
+      last_bot_action: "external_action_sent",
+      last_external_action_id: String(actionContext.actionId || "").trim() || null,
+    };
+
+    const rendered = await renderFastpathDmReply({
+      tenantId: tenant.id,
+      canal,
+      idiomaDestino,
+      userInput,
+      contactoNorm,
+      messageId: messageId || null,
+      promptBaseMem,
+      fastpathText: canonicalBody,
+      fp: {
+        reply: canonicalBody,
+        source: "external_action_context",
+        intent: "external_action",
+        catalogPayload: undefined,
+      },
+      detectedIntent: "external_action",
+      intentFallback: "external_action",
+      structuredService: {
+        serviceId: null,
+        serviceName: null,
+        serviceLabel: null,
+        hasResolution: false,
+      },
+      replyPolicy: buildStaticFastpathReplyPolicy({
+        canal,
+        answerType: "direct_answer",
+        replySourceKind: "business_info",
+        responsePolicyMode: "grounded_frame_only",
+        hasResolvedEntity: false,
+        isCatalogDbReply: false,
+        isPriceSummaryReply: false,
+        isPriceDisambiguationReply: false,
+        isGroundedCatalogReply: false,
+        isGroundedCatalogOverviewDm: false,
+        shouldForceSalesClosingQuestion: false,
+        shouldUseGroundedFrameOnly: true,
+        canonicalBodyOwnsClosing: false,
+        clarificationTarget: null,
+        commercialPolicy: {
+          purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
+          wantsBooking: detectedCommercial?.wantsBooking === true,
+          wantsQuote: detectedCommercial?.wantsQuote === true,
+          wantsHuman: detectedCommercial?.wantsHuman === true,
+          urgency: detectedCommercial?.urgency ?? "low",
+          shouldUseSalesTone: true,
+          shouldUseSoftClosing: true,
+          shouldUseDirectClosing: false,
+          shouldSuggestHumanHandoff: detectedCommercial?.wantsHuman === true,
+        },
+      }),
+      ctxPatch: {
+        ...(finalCtxPatch || {}),
+        ...actionCtxPatch,
+      },
+      maxLines: MAX_WHATSAPP_LINES,
+    });
+
+    if (rendered.ctxPatch) {
+      transition({ patchCtx: rendered.ctxPatch });
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        ...rendered.ctxPatch,
+      };
+    }
+
+    const finalActionText = await ensureReplyLanguage(
+      String(rendered.reply || "").trim(),
+      idiomaDestino
+    );
+
+    if (!finalActionText) {
+      return false;
+    }
+
+    INTENCION_FINAL_CANONICA = "external_action";
+    lastIntent = "external_action";
+
+    await replyAndExit(
+      finalActionText,
+      "external_action_context",
+      "external_action"
+    );
+
+    return true;
+  }
+
+  async function tryActionContextContinuation(params: {
+    intent: string | null;
+    detectedFacets?: IntentFacets | null;
+  }): Promise<boolean> {
+    const actionContext = convoCtx?.actionContext ?? null;
+
+    if (!actionContext || typeof actionContext !== "object") {
+      return false;
+    }
+
+    const actionType = String(actionContext.type || "").trim().toLowerCase();
+    const actionChannel = String(actionContext.channel || "").trim().toLowerCase();
+    const targetUrl = String(actionContext.targetUrl || "").trim();
+
+    if (actionType !== "external_action") {
+      return false;
+    }
+
+    if (actionChannel !== "booking_link") {
+      return false;
+    }
+
+    if (!targetUrl) {
+      return false;
+    }
+
+    if (bookingEnabled) {
+      return false;
+    }
+
+    const explicitAsksSchedules = params.detectedFacets?.asksSchedules === true;
+    const explicitAsksLocation = params.detectedFacets?.asksLocation === true;
+    const explicitAsksAvailability = params.detectedFacets?.asksAvailability === true;
+
+    if (explicitAsksSchedules || explicitAsksLocation || explicitAsksAvailability) {
+      return false;
+    }
+
+    const resolvedIntent = String(params.intent || "").trim().toLowerCase() || null;
+
+    const looksLikeAffirmativeContinuation =
+      shouldTreatTurnAsPendingCtaConfirmation({
+        userInput,
+        resolvedIntent,
+      });
+
+    if (!looksLikeAffirmativeContinuation) {
+      return false;
+    }
+
+    const bookingLinkText =
+      idiomaDestino === "en"
+        ? `Perfect — you can book here: ${targetUrl}`
+        : `Perfecto — puedes agendar aquí: ${targetUrl}`;
+
+    const actionCtxPatch = {
+      actionContext: null,
+      last_bot_action: "booking_link_sent",
+    };
+
+    transition({ patchCtx: actionCtxPatch });
+    finalCtxPatch = {
+      ...finalCtxPatch,
+      ...actionCtxPatch,
+    };
+
+    INTENCION_FINAL_CANONICA = "booking_link";
+    lastIntent = "booking_link";
+
+    await replyAndExit(
+      bookingLinkText,
+      "booking_link_continuation",
+      "booking_link"
     );
 
     return true;
@@ -1667,6 +2040,16 @@ export async function procesarMensajeWhatsApp(
       hybridRes.routeTarget === "business_info" ||
       shouldUseGuidedEntryOutsideFastpath
     ) {
+      const handledExternalAction =
+        await tryExternalActionContextContinuation({
+          intent: nextIntent,
+          detectedFacets: nextDetectedFacets,
+        });
+
+      if (handledExternalAction) {
+        return;
+      }
+
       const handledBusinessInfo = await tryBusinessInfoOutsideFastpath({
         intent: nextIntent,
         detectedFacets: nextDetectedFacets,
