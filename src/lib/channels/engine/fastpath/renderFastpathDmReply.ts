@@ -314,6 +314,11 @@ type CatalogPayload =
       };
     };
 
+type ExternalActionPayload = {
+  type: "link";
+  targetUrl: string;
+};
+
 function buildResolvedCatalogCanonicalBody(input: {
   catalogPayload: Extract<CatalogPayload, { kind: "resolved_catalog_answer" }>;
 }): string {
@@ -625,6 +630,7 @@ export type RenderFastpathDmReplyInput = {
     intent?: string | null;
     awaitingEffect?: any;
     catalogPayload?: CatalogPayload;
+    externalAction?: ExternalActionPayload;
   };
   detectedIntent?: string | null;
   intentFallback?: string | null;
@@ -810,6 +816,15 @@ export async function renderFastpathDmReply(
     fp?.intent || input.detectedIntent || input.intentFallback || ""
   ).toLowerCase();
 
+  const externalAction = fp?.externalAction;
+
+  const isExternalActionLinkReply =
+    externalAction?.type === "link" &&
+    normalizeText(externalAction?.targetUrl).length > 0;
+    
+  const isStandaloneActionLinkReply =
+    fpSource === "external_action_link" || isExternalActionLinkReply;
+
   const isCatalogListReply =
     fpSource === "service_list_db" ||
     fpSource === "catalog_list_db" ||
@@ -858,6 +873,10 @@ export async function renderFastpathDmReply(
     buildTenantClosingPolicyInstruction(promptBaseMem);
 
   const canonicalReply = await (async () => {
+    if (isExternalActionLinkReply) {
+      return normalizeText(externalAction?.targetUrl);
+    }
+
     if (catalogPayload?.kind === "service_choice") {
       return renderCatalogChoiceBody({
         catalogPayload,
@@ -895,7 +914,8 @@ export async function renderFastpathDmReply(
       replyPolicy.shouldUseGroundedFrameOnly ||
       replyPolicy.canonicalBodyOwnsClosing ||
       isResolvedCatalogAnswer ||
-      isCatalogListReply;
+      isCatalogListReply ||
+      isStandaloneActionLinkReply;
 
     if (shouldReturnCanonicalDirectly) {
       console.log("[DM_RENDER][EARLY_RETURN_CANONICAL]", {

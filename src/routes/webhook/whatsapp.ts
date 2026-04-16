@@ -109,11 +109,9 @@ type ExternalActionConfig = {
 
 type ExternalActionContext = {
   type: "external_action";
-  actionId: string;
   channel: "link";
   dispatchPolicy: "affirmative_continuation";
   targetUrl: string;
-  canonicalBody: string;
   sourceDomain: "business_info" | "catalog" | "booking" | "other";
   createdAt: string;
 };
@@ -610,41 +608,31 @@ export async function procesarMensajeWhatsApp(
   function selectExternalActionForDomain(params: {
     tenant: any;
     sourceDomain: "business_info" | "catalog" | "booking" | "other";
-    idiomaDestino: LangCode;
   }): ExternalActionContext | null {
-    const actions = normalizeExternalActions(params.tenant?.external_actions);
+    const bookingUrl =
+      String(
+        params.tenant?.booking_url ||
+        params.tenant?.bookingUrl ||
+        params.tenant?.settings?.booking?.booking_url ||
+        ""
+      ).trim();
 
-    for (const action of actions) {
-      const allowedDomains = Array.isArray(action.allowedDomains)
-        ? action.allowedDomains
-        : [];
-
-      if (allowedDomains.length > 0 && !allowedDomains.includes(params.sourceDomain)) {
-        continue;
-      }
-
-      const canonicalBody = resolveExternalActionCanonicalBody(
-        action,
-        params.idiomaDestino
-      );
-
-      if (!canonicalBody) {
-        continue;
-      }
-
-      return {
-        type: "external_action",
-        actionId: action.id,
-        channel: "link",
-        dispatchPolicy: "affirmative_continuation",
-        targetUrl: action.url,
-        canonicalBody,
-        sourceDomain: params.sourceDomain,
-        createdAt: new Date().toISOString(),
-      };
+    if (!bookingUrl) {
+      return null;
     }
 
-    return null;
+    if (params.sourceDomain !== "business_info") {
+      return null;
+    }
+
+    return {
+      type: "external_action",
+      channel: "link",
+      dispatchPolicy: "affirmative_continuation",
+      targetUrl: bookingUrl,
+      sourceDomain: params.sourceDomain,
+      createdAt: new Date().toISOString(),
+    };
   }
 
   // ✅ google_calendar_enabled flag (source of truth)
@@ -1008,7 +996,6 @@ export async function procesarMensajeWhatsApp(
           selectExternalActionForDomain({
             tenant,
             sourceDomain: "business_info",
-            idiomaDestino,
           }) ?? null,
       },
       maxLines: MAX_WHATSAPP_LINES,
@@ -1049,30 +1036,25 @@ export async function procesarMensajeWhatsApp(
     intent: string | null;
     detectedFacets?: IntentFacets | null;
   }): Promise<boolean> {
-    const actionContext = convoCtx?.actionContext ?? null;
+    const actionContext = convoCtx?.actionContext as ExternalActionContext | null;
 
     if (!actionContext || typeof actionContext !== "object") {
       return false;
     }
 
-    const actionType = String(actionContext.type || "").trim().toLowerCase();
-    const actionChannel = String(actionContext.channel || "").trim().toLowerCase();
-    const dispatchPolicy = String(actionContext.dispatchPolicy || "").trim().toLowerCase();
-    const canonicalBody = String(actionContext.canonicalBody || "").trim();
-
-    if (actionType !== "external_action") {
+    if (actionContext.type !== "external_action") {
       return false;
     }
 
-    if (actionChannel !== "link") {
+    if (actionContext.channel !== "link") {
       return false;
     }
 
-    if (dispatchPolicy !== "affirmative_continuation") {
+    if (actionContext.dispatchPolicy !== "affirmative_continuation") {
       return false;
     }
 
-    if (!canonicalBody) {
+    if (!String(actionContext.targetUrl || "").trim()) {
       return false;
     }
 
@@ -1096,12 +1078,6 @@ export async function procesarMensajeWhatsApp(
       return false;
     }
 
-    const actionCtxPatch = {
-      actionContext: null,
-      last_bot_action: "external_action_sent",
-      last_external_action_id: String(actionContext.actionId || "").trim() || null,
-    };
-
     const rendered = await renderFastpathDmReply({
       tenantId: tenant.id,
       canal,
@@ -1110,11 +1086,15 @@ export async function procesarMensajeWhatsApp(
       contactoNorm,
       messageId: messageId || null,
       promptBaseMem,
-      fastpathText: canonicalBody,
+      fastpathText: actionContext.targetUrl,
       fp: {
-        reply: canonicalBody,
-        source: "external_action_context",
+        reply: actionContext.targetUrl,
+        source: "external_action_link",
         intent: "external_action",
+        externalAction: {
+          type: "link",
+          targetUrl: actionContext.targetUrl,
+        },
         catalogPayload: undefined,
       },
       detectedIntent: "external_action",
@@ -1154,7 +1134,8 @@ export async function procesarMensajeWhatsApp(
       }),
       ctxPatch: {
         ...(finalCtxPatch || {}),
-        ...actionCtxPatch,
+        actionContext: null,
+        last_bot_action: "external_action_sent",
       },
       maxLines: MAX_WHATSAPP_LINES,
     });
@@ -1181,7 +1162,7 @@ export async function procesarMensajeWhatsApp(
 
     await replyAndExit(
       finalActionText,
-      "external_action_context",
+      "external_action_link",
       "external_action"
     );
 
