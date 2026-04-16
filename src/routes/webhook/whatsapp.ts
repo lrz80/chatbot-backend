@@ -710,9 +710,38 @@ export async function procesarMensajeWhatsApp(
     const routeIntent = String(params.intent || "").trim() || "info_general";
     const overviewMode = params.overviewMode ?? "general_overview";
 
-    const asksSchedules = params.detectedFacets?.asksSchedules === true;
-    const asksLocation = params.detectedFacets?.asksLocation === true;
-    const asksAvailability = params.detectedFacets?.asksAvailability === true;
+    const explicitAsksSchedules = params.detectedFacets?.asksSchedules === true;
+    const explicitAsksLocation = params.detectedFacets?.asksLocation === true;
+    const explicitAsksAvailability = params.detectedFacets?.asksAvailability === true;
+
+    const continuationLastTurn = convoCtx?.continuationContext?.lastTurn ?? null;
+
+    const continuedBusinessInfoIntent =
+      continuationLastTurn?.domain === "business_info"
+        ? String(continuationLastTurn.intent || "").trim().toLowerCase()
+        : "";
+
+    const inheritedAsksSchedules =
+      !explicitAsksSchedules &&
+      !explicitAsksLocation &&
+      !explicitAsksAvailability &&
+      continuedBusinessInfoIntent === "horario";
+
+    const inheritedAsksLocation =
+      !explicitAsksSchedules &&
+      !explicitAsksLocation &&
+      !explicitAsksAvailability &&
+      continuedBusinessInfoIntent === "ubicacion";
+
+    const inheritedAsksAvailability =
+      !explicitAsksSchedules &&
+      !explicitAsksLocation &&
+      !explicitAsksAvailability &&
+      continuedBusinessInfoIntent === "disponibilidad";
+
+    const asksSchedules = explicitAsksSchedules || inheritedAsksSchedules;
+    const asksLocation = explicitAsksLocation || inheritedAsksLocation;
+    const asksAvailability = explicitAsksAvailability || inheritedAsksAvailability;
 
     const wantsBusinessFacets =
       asksSchedules || asksLocation || asksAvailability;
@@ -726,6 +755,7 @@ export async function procesarMensajeWhatsApp(
           userInput,
           promptBaseMem,
           infoClave: String(tenant?.info_clave || ""),
+          convoCtx,
           facets: {
             asksSchedules,
             asksLocation,
@@ -739,6 +769,7 @@ export async function procesarMensajeWhatsApp(
           userInput,
           promptBaseMem,
           infoClave: String(tenant?.info_clave || ""),
+          convoCtx,
           overviewMode,
         });
 
@@ -752,6 +783,7 @@ export async function procesarMensajeWhatsApp(
         userInput,
         routeIntent,
         wantsBusinessFacets,
+        continuedBusinessInfoIntent,
         facets: {
           asksSchedules,
           asksLocation,
