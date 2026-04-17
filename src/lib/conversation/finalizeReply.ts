@@ -82,8 +82,14 @@ function resolveContinuationDomain(args: {
   canonicalLastEntityId: string | null;
   canonicalLastResolvedIntent: string | null;
   baseCtx: any;
+  replySource: string | null;
 }): "catalog" | "business_info" | "booking" | "other" {
-  const { canonicalLastEntityId, canonicalLastResolvedIntent, baseCtx } = args;
+  const {
+    canonicalLastEntityId,
+    canonicalLastResolvedIntent,
+    baseCtx,
+    replySource,
+  } = args;
 
   const bookingStep =
     baseCtx?.booking?.step && typeof baseCtx.booking.step === "string"
@@ -96,16 +102,24 @@ function resolveContinuationDomain(args: {
     return "booking";
   }
 
-  if (canonicalLastEntityId) {
+  const normalizedReplySource = String(replySource || "").trim().toLowerCase();
+  const normalizedIntent = String(canonicalLastResolvedIntent || "").trim().toLowerCase();
+
+  const isCatalogReplySource =
+    normalizedReplySource === "catalog_db" ||
+    normalizedReplySource === "catalog_route" ||
+    normalizedReplySource.startsWith("catalog_");
+
+  if (canonicalLastEntityId || isCatalogReplySource) {
     return "catalog";
   }
 
   if (
-    canonicalLastResolvedIntent === "info_general" ||
-    canonicalLastResolvedIntent === "horario" ||
-    canonicalLastResolvedIntent === "ubicacion" ||
-    canonicalLastResolvedIntent === "disponibilidad" ||
-    canonicalLastResolvedIntent === "info_servicio"
+    normalizedIntent === "info_general" ||
+    normalizedIntent === "horario" ||
+    normalizedIntent === "ubicacion" ||
+    normalizedIntent === "disponibilidad" ||
+    normalizedIntent === "info_servicio"
   ) {
     return "business_info";
   }
@@ -301,6 +315,7 @@ export async function finalizeReply(
     canonicalLastEntityId,
     canonicalLastResolvedIntent,
     baseCtx,
+    replySource,
   });
 
   const conversationAnchor =

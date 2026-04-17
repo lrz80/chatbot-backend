@@ -444,6 +444,7 @@ async function buildGroundedFrameOnly(input: {
   const isCatalogChoiceReply = input.replyPolicy.answerType === "disambiguation";
   const isResolvedCatalogAnswer = input.replyPolicy.answerType === "direct_answer";
   const isInfoGeneralOverviewTurn = input.replyPolicy.answerType === "overview";
+  const isCatalogOverviewTurn = input.replyPolicy.isGroundedCatalogOverviewDm === true;
   const isActionLinkResolvedCatalogReply =
     input.replyPolicy.answerType === "action_link";
     const frameTaskRules =
@@ -499,9 +500,13 @@ async function buildGroundedFrameOnly(input: {
         : input.replyPolicy.answerType === "direct_answer" ||
           input.replyPolicy.answerType === "comparison"
         ? [
-            "This is a resolved grounded answer.",
+            isCatalogOverviewTurn
+              ? "This is a grounded catalog overview turn."
+              : "This is a resolved grounded answer.",
             input.replyPolicy.shouldForceNullIntro
               ? "Intro must be null."
+              : isCatalogOverviewTurn
+              ? "Return exactly one short intro before the canonical body. Intro is required and must not be null."
               : "Return exactly one short intro before the canonical body.",
             input.replyPolicy.shouldForceNullClosing
               ? "Closing must be null."
@@ -512,9 +517,15 @@ async function buildGroundedFrameOnly(input: {
             "Do not rewrite, summarize, paraphrase, compress, expand, or replace the canonical body.",
             "Do not mention facts not explicit in the canonical body.",
             "Do not restate prices, includes, schedules, policies, conditions, or links outside the canonical body.",
-            "If intro is allowed, it should briefly acknowledge the user's request in a natural DM tone before the canonical body.",
-            "If intro is allowed, it must feel human, warm, and direct, without sounding like a template or system message.",
-            "If intro is allowed, prefer a light conversational bridge rather than a cold presentation line.",
+            isCatalogOverviewTurn
+              ? "The intro must make clear that the canonical body shows some available prices or a price sample, not an exhaustive full catalog."
+              : "If intro is allowed, it should briefly acknowledge the user's request in a natural DM tone before the canonical body.",
+            isCatalogOverviewTurn
+              ? "Do not imply that the list contains all prices, all services, or the complete catalog."
+              : "If intro is allowed, it must feel human, warm, and direct, without sounding like a template or system message.",
+            isCatalogOverviewTurn
+              ? "Prefer natural intros such as a brief lead-in equivalent to 'here are some of our prices' in the target language, but do not hardcode a fixed phrase."
+              : "If intro is allowed, prefer a light conversational bridge rather than a cold presentation line.",
             "Avoid robotic openers such as generic presentation-style intros with no conversational warmth.",
             "Do not make the intro long.",
             "Do not use filler, gratitude, or exaggerated politeness.",
@@ -540,7 +551,8 @@ async function buildGroundedFrameOnly(input: {
     "- The canonical body will be inserted by the system exactly as-is after your output.",
     "- intro must be short: one natural DM line.",
     "- closing must be short.",
-    "- intro may be null only when the turn is not a catalog choice turn.",
+    "- intro may be null only when the turn does not require an intro by policy.",
+    "- for grounded catalog overview turns, intro is mandatory and must make clear the body is a partial sample of available prices, not an exhaustive catalog.",
     "- for catalog choice turns, intro is mandatory and must not be null.",
     "- closing may be null only when the turn does not need a next-step prompt.",
     "- intro and closing must be framing only, never content expansion.",
