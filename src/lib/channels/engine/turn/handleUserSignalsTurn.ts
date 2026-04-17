@@ -1,6 +1,6 @@
 //src/lib/channels/engine/turn/handleUserSignalsTurn.ts
 import { Pool } from "pg";
-import type { Canal } from "../../../detectarIntencion";
+import type { Canal, IntentRoutingHints } from "../../../detectarIntencion";
 import type { Lang } from "../clients/clientDb";
 
 import { detectarIntencion } from "../../../detectarIntencion";
@@ -103,6 +103,34 @@ function normalizeCommercialSignal(input: any): CommercialSignal {
   };
 }
 
+function normalizeRoutingHints(input: any): IntentRoutingHints {
+  const catalogScopeRaw = String(input?.catalogScope || "")
+    .trim()
+    .toLowerCase();
+
+  const businessInfoScopeRaw = String(input?.businessInfoScope || "")
+    .trim()
+    .toLowerCase();
+
+  const catalogScope: IntentRoutingHints["catalogScope"] =
+    catalogScopeRaw === "overview" || catalogScopeRaw === "targeted"
+      ? catalogScopeRaw
+      : "none";
+
+  const businessInfoScope: IntentRoutingHints["businessInfoScope"] =
+    businessInfoScopeRaw === "overview" ||
+    businessInfoScopeRaw === "schedule" ||
+    businessInfoScopeRaw === "location" ||
+    businessInfoScopeRaw === "availability"
+      ? businessInfoScopeRaw
+      : "none";
+
+  return {
+    catalogScope,
+    businessInfoScope,
+  };
+}
+
 export type HandleUserSignalsArgs = {
   pool: Pool;
   tenant: any;
@@ -123,6 +151,7 @@ export type HandleUserSignalsResult = {
   detectedInterest: number | null;
   detectedFacets: IntentFacets;
   detectedCommercial: CommercialSignal | null;
+  detectedRoutingHints: IntentRoutingHints | null;
   INTENCION_FINAL_CANONICA: string | null;
   emotion: string | null;
   promptBaseMem: string;
@@ -158,6 +187,7 @@ export async function handleUserSignalsTurn(
   let detectedInterest: number | null = null;
   let detectedFacets: IntentFacets = {};
   let detectedCommercial: CommercialSignal | null = null;
+  let detectedRoutingHints: IntentRoutingHints | null = null;
   let emotion: string | null = null;
   let promptBaseMem = promptBase;
 
@@ -181,12 +211,16 @@ export async function handleUserSignalsTurn(
     detectedCommercial = det?.commercial
       ? normalizeCommercialSignal(det.commercial)
       : null;
+    detectedRoutingHints = det?.routingHints
+      ? normalizeRoutingHints(det.routingHints)
+      : null;
 
     console.log("🎯 detectarIntencion =>", {
       intent,
       nivel,
       facets: detectedFacets,
       commercial: detectedCommercial,
+      routingHints: detectedRoutingHints,
       canal,
       tenantId: tenant.id,
       messageId,
@@ -452,6 +486,7 @@ export async function handleUserSignalsTurn(
     detectedInterest,
     detectedFacets,
     detectedCommercial,
+    detectedRoutingHints,
     INTENCION_FINAL_CANONICA,
     emotion,
     promptBaseMem,
