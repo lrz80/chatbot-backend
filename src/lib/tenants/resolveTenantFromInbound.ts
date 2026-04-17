@@ -5,59 +5,92 @@ import { normalizeToNumber } from "../whatsapp/normalize";
 type Origen = "twilio" | "meta";
 
 export type ResolveTenantContext = {
-  tenant?: any;        // si ya viene resuelto (Meta / otros)
-  canal?: string;      // opcional
-  origen?: Origen;     // opcional
+  tenant?: any;
+  canal?: string;
+  origen?: Origen;
 };
+
+function normalizeResolvedTenant(row: any): any | null {
+  if (!row || typeof row !== "object") {
+    return null;
+  }
+
+  const settings =
+    row.settings && typeof row.settings === "object"
+      ? row.settings
+      : {};
+
+  const settingsBooking =
+    settings.booking && typeof settings.booking === "object"
+      ? settings.booking
+      : {};
+
+  const normalizedBookingUrl =
+    String(
+      row.booking_url ||
+      row.bookingUrl ||
+      settingsBooking.booking_url ||
+      ""
+    ).trim() || null;
+
+  return {
+    ...row,
+    booking_url: normalizedBookingUrl,
+    settings: {
+      ...settings,
+      booking: {
+        ...settingsBooking,
+        booking_url: normalizedBookingUrl,
+      },
+    },
+  };
+}
 
 export async function resolveTenantFromInbound(opts: {
   pool: Pool;
-  toRaw: string;               // body.To
-  origen: Origen;              // calculado en whatsapp.ts
+  toRaw: string;
+  origen: Origen;
   context?: ResolveTenantContext;
 }): Promise<any | null> {
   const { pool, toRaw, origen, context } = opts;
 
-  // 1) Si viene tenant en contexto, úsalo (Meta / otros pipelines)
   const ctxTenant = context?.tenant;
-  if (ctxTenant) return ctxTenant;
-
-  // 2) Normaliza el "To" (número del negocio)
-  const { numero, numeroSinMas } = normalizeToNumber(String(toRaw || ""));
-  const numeroLower = numero.toLowerCase();
-  const numeroSinMasLower = numeroSinMas.toLowerCase();
-
-  // 3) Lookup por origen
-  try {
-    if (origen === "twilio") {
-    // Queremos comparar SOLO dígitos para soportar:
-    // 'whatsapp:+1775...', '+1775...', 'tel:+1775...', '1775...'
-    const toDigits = numeroSinMas; // ya es sin '+'
-
-    const tenantRes = await pool.query(
-      `
-      SELECT *
-      FROM tenants
-      WHERE REGEXP_REPLACE(
-              REGEXP_REPLACE(LOWER(COALESCE(twilio_number, '')), '^(whatsapp:|tel:)', ''),
-              '[^0-9]',
-              '',
-              'g'
-            ) = $1
-      LIMIT 1
-      `,
-      [toDigits]
-    );
-
-    return tenantRes.rows[0] || null;
+  if (ctxTenant) {
+    return normalizeResolvedTenant(ctxTenant);
   }
 
-    // origen === "meta"
-    // Para Meta NO se resuelve por "To" (no es número).
-    // Debe venir resuelto por context.tenant en el pipeline de Meta.
-    // Si no viene, devolvemos null.
-    return null;
+  const { numero, numeroSinMas } = normalizeToNumber(String(toRaw || ""));
+  const toDigits = numeroSinMas;
 
+  try {
+    if (origen === "twilio") {
+      const tenantRes = await pool.query(
+        `
+        SELECT *
+        FROM tenants
+        WHERE REGEXP_REPLACE(
+                REGEXP_REPLACE(LOWER(COALESCE(twilio_number, '')), '^(whatsapp:|tel:)', ''),
+                '[^0-9]',
+                '',
+                'g'
+              ) = $1
+        LIMIT 1
+        `,
+        [toDigits]
+      );
+
+      const tenant = normalizeResolvedTenant(tenantRes.rows[0] || null);
+
+      console.log("[RESOLVE_TENANT_FROM_INBOUND][TENANT_BOOKING_DEBUG]", {
+        tenantId: tenant?.id ?? null,
+        booking_url: tenant?.booking_url ?? null,
+        settings_booking_url: tenant?.settings?.booking?.booking_url ?? null,
+      });
+
+      return tenant;
+    }
+
+    return null;
   } catch (e: any) {
     console.warn("⚠️ resolveTenantFromInbound failed:", {
       origen,
