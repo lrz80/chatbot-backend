@@ -2,7 +2,6 @@
 import type { Canal, CommercialSignal } from "../../../detectarIntencion";
 import type { LangCode } from "../../../i18n/lang";
 import { renderFastpathDmReply } from "../fastpath/renderFastpathDmReply";
-import { resolveBusinessInfoOverviewCanonicalBody } from "../businessInfo/resolveBusinessInfoOverviewCanonicalBody";
 import { buildStaticFastpathReplyPolicy } from "../fastpath/buildFastpathReplyPolicy";
 
 type IntentFacets = {
@@ -37,15 +36,16 @@ type ResolveUnhandledTurnFallbackArgs = {
   fallbackKind?: "default" | "post_completion_courtesy";
 };
 
+type ResolveUnhandledTurnFallbackSource =
+  | "explicit_exit_fallback"
+  | "payment_fallback"
+  | "unhandled_turn_generic_fallback"
+  | "unhandled_turn_post_completion_courtesy";
+
 type ResolveUnhandledTurnFallbackResult = {
   handled: boolean;
   reply: string;
-  source:
-    | "explicit_exit_fallback"
-    | "payment_fallback"
-    | "unhandled_turn_business_info_fallback"
-    | "unhandled_turn_generic_fallback"
-    | "unhandled_turn_post_completion_courtesy";
+  source: ResolveUnhandledTurnFallbackSource;
   intent: string | null;
   ctxPatch?: Record<string, unknown>;
 };
@@ -63,14 +63,30 @@ function isPaymentIntent(intent: string | null): boolean {
   return toTrimmedString(intent).toLowerCase() === "pago";
 }
 
-function buildLastResortFallbackText(): string {
-  return "I can help you with information about services, schedules, pricing, location, or bookings. Tell me what you’d like to know and I’ll guide you.";
+function buildEmergencyGuardText(idiomaDestino: LangCode): string {
+  return idiomaDestino === "es"
+    ? "¿Me puedes decir un poco más para ayudarte mejor?"
+    : "Could you share a bit more so I can help you better?";
 }
 
-async function resolvePostCompletionCourtesyFallback(
-  args: ResolveUnhandledTurnFallbackArgs,
-  finalIntent: string
-): Promise<ResolveUnhandledTurnFallbackResult> {
+async function renderFallbackReply(args: {
+  tenantId: string;
+  canal: Canal;
+  idiomaDestino: LangCode;
+  userInput: string;
+  contactoNorm: string;
+  messageId: string | null;
+  promptBaseMem: string;
+  finalIntent: string;
+  source: ResolveUnhandledTurnFallbackSource;
+  answerType: "overview" | "guided_next_step";
+  replySourceKind: "business_info" | "generic";
+  detectedCommercial?: CommercialSignal | null;
+  ctxPatch?: Record<string, unknown> | null;
+}): Promise<{
+  reply: string;
+  ctxPatch: Record<string, unknown>;
+}> {
   const rendered = await renderFastpathDmReply({
     tenantId: args.tenantId,
     canal: args.canal,
@@ -82,12 +98,12 @@ async function resolvePostCompletionCourtesyFallback(
     fastpathText: "",
     fp: {
       reply: "",
-      source: "unhandled_turn_post_completion_courtesy",
-      intent: finalIntent,
+      source: args.source,
+      intent: args.finalIntent,
       catalogPayload: undefined,
     },
-    detectedIntent: finalIntent,
-    intentFallback: finalIntent,
+    detectedIntent: args.finalIntent,
+    intentFallback: args.finalIntent,
     structuredService: {
       serviceId: null,
       serviceName: null,
@@ -96,15 +112,15 @@ async function resolvePostCompletionCourtesyFallback(
     },
     replyPolicy: buildStaticFastpathReplyPolicy({
       canal: args.canal,
-      answerType: "overview",
-      replySourceKind: "business_info",
+      answerType: args.answerType,
+      replySourceKind: args.replySourceKind,
       responsePolicyMode: "grounded_frame_only",
       hasResolvedEntity: false,
       isCatalogDbReply: false,
       isPriceSummaryReply: false,
       isPriceDisambiguationReply: false,
       isGroundedCatalogReply: false,
-      isGroundedCatalogOverviewDm: true,
+      isGroundedCatalogOverviewDm: args.answerType === "overview",
       shouldForceSalesClosingQuestion: false,
       shouldUseGroundedFrameOnly: true,
       canonicalBodyOwnsClosing: false,
@@ -115,7 +131,7 @@ async function resolvePostCompletionCourtesyFallback(
         wantsQuote: args.detectedCommercial?.wantsQuote === true,
         wantsHuman: args.detectedCommercial?.wantsHuman === true,
         urgency: args.detectedCommercial?.urgency ?? "low",
-        shouldUseSalesTone: true,
+        shouldUseSalesTone: args.source !== "explicit_exit_fallback",
         shouldUseSoftClosing: true,
         shouldUseDirectClosing: false,
         shouldSuggestHumanHandoff: false,
@@ -127,22 +143,38 @@ async function resolvePostCompletionCourtesyFallback(
 
   const reply = toTrimmedString(rendered.reply);
 
-  if (reply) {
-    return {
-      handled: true,
-      reply,
-      source: "unhandled_turn_post_completion_courtesy",
-      intent: finalIntent,
-      ctxPatch: rendered.ctxPatch || {},
-    };
-  }
+  return {
+    reply: reply || buildEmergencyGuardText(args.idiomaDestino),
+    ctxPatch: (rendered.ctxPatch || args.ctxPatch || {}) as Record<string, unknown>,
+  };
+}
+
+async function resolvePostCompletionCourtesyFallback(
+  args: ResolveUnhandledTurnFallbackArgs,
+  finalIntent: string
+): Promise<ResolveUnhandledTurnFallbackResult> {
+  const rendered = await renderFallbackReply({
+    tenantId: args.tenantId,
+    canal: args.canal,
+    idiomaDestino: args.idiomaDestino,
+    userInput: args.userInput,
+    contactoNorm: args.contactoNorm,
+    messageId: args.messageId,
+    promptBaseMem: args.promptBaseMem,
+    finalIntent,
+    source: "unhandled_turn_post_completion_courtesy",
+    answerType: "overview",
+    replySourceKind: "business_info",
+    detectedCommercial: args.detectedCommercial,
+    ctxPatch: args.ctxPatch || {},
+  });
 
   return {
     handled: true,
-    reply: buildLastResortFallbackText(),
-    source: "unhandled_turn_generic_fallback",
+    reply: rendered.reply,
+    source: "unhandled_turn_post_completion_courtesy",
     intent: finalIntent,
-    ctxPatch: args.ctxPatch || {},
+    ctxPatch: rendered.ctxPatch,
   };
 }
 
@@ -159,7 +191,7 @@ async function resolveExplicitExitFallback(
     yesno_resolution: null,
   };
 
-  const rendered = await renderFastpathDmReply({
+  const rendered = await renderFallbackReply({
     tenantId: args.tenantId,
     canal: args.canal,
     idiomaDestino: args.idiomaDestino,
@@ -167,58 +199,26 @@ async function resolveExplicitExitFallback(
     contactoNorm: args.contactoNorm,
     messageId: args.messageId,
     promptBaseMem: args.promptBaseMem,
-    fastpathText: "",
-    fp: {
-      reply: "",
-      source: "explicit_exit_fallback",
-      intent: finalIntent,
-      catalogPayload: undefined,
+    finalIntent,
+    source: "explicit_exit_fallback",
+    answerType: "guided_next_step",
+    replySourceKind: "generic",
+    detectedCommercial: {
+      purchaseIntent: "low",
+      wantsBooking: false,
+      wantsQuote: false,
+      wantsHuman: false,
+      urgency: "low",
     },
-    detectedIntent: finalIntent,
-    intentFallback: finalIntent,
-    structuredService: {
-      serviceId: null,
-      serviceName: null,
-      serviceLabel: null,
-      hasResolution: false,
-    },
-    replyPolicy: buildStaticFastpathReplyPolicy({
-      canal: args.canal,
-      answerType: "guided_next_step",
-      replySourceKind: "generic",
-      responsePolicyMode: "grounded_frame_only",
-      hasResolvedEntity: false,
-      isCatalogDbReply: false,
-      isPriceSummaryReply: false,
-      isPriceDisambiguationReply: false,
-      isGroundedCatalogReply: false,
-      isGroundedCatalogOverviewDm: false,
-      shouldForceSalesClosingQuestion: false,
-      shouldUseGroundedFrameOnly: true,
-      canonicalBodyOwnsClosing: false,
-      clarificationTarget: null,
-      commercialPolicy: {
-        purchaseIntent: "low",
-        wantsBooking: false,
-        wantsQuote: false,
-        wantsHuman: false,
-        urgency: "low",
-        shouldUseSalesTone: false,
-        shouldUseSoftClosing: true,
-        shouldUseDirectClosing: false,
-        shouldSuggestHumanHandoff: false,
-      },
-    }),
     ctxPatch: exitCtxPatch,
-    maxLines: 9999,
   });
 
   return {
     handled: true,
-    reply: toTrimmedString(rendered.reply),
+    reply: rendered.reply,
     source: "explicit_exit_fallback",
     intent: finalIntent,
-    ctxPatch: rendered.ctxPatch || exitCtxPatch,
+    ctxPatch: rendered.ctxPatch,
   };
 }
 
@@ -231,7 +231,7 @@ async function resolvePaymentFallback(
     actionContext: null,
   };
 
-  const rendered = await renderFastpathDmReply({
+  const rendered = await renderFallbackReply({
     tenantId: args.tenantId,
     canal: args.canal,
     idiomaDestino: args.idiomaDestino,
@@ -239,58 +239,20 @@ async function resolvePaymentFallback(
     contactoNorm: args.contactoNorm,
     messageId: args.messageId,
     promptBaseMem: args.promptBaseMem,
-    fastpathText: "",
-    fp: {
-      reply: "",
-      source: "payment_fallback",
-      intent: finalIntent,
-      catalogPayload: undefined,
-    },
-    detectedIntent: finalIntent,
-    intentFallback: finalIntent,
-    structuredService: {
-      serviceId: null,
-      serviceName: null,
-      serviceLabel: null,
-      hasResolution: false,
-    },
-    replyPolicy: buildStaticFastpathReplyPolicy({
-      canal: args.canal,
-      answerType: "guided_next_step",
-      replySourceKind: "generic",
-      responsePolicyMode: "grounded_frame_only",
-      hasResolvedEntity: false,
-      isCatalogDbReply: false,
-      isPriceSummaryReply: false,
-      isPriceDisambiguationReply: false,
-      isGroundedCatalogReply: false,
-      isGroundedCatalogOverviewDm: false,
-      shouldForceSalesClosingQuestion: false,
-      shouldUseGroundedFrameOnly: true,
-      canonicalBodyOwnsClosing: false,
-      clarificationTarget: null,
-      commercialPolicy: {
-        purchaseIntent: args.detectedCommercial?.purchaseIntent ?? "medium",
-        wantsBooking: false,
-        wantsQuote: args.detectedCommercial?.wantsQuote === true,
-        wantsHuman: args.detectedCommercial?.wantsHuman === true,
-        urgency: args.detectedCommercial?.urgency ?? "low",
-        shouldUseSalesTone: true,
-        shouldUseSoftClosing: true,
-        shouldUseDirectClosing: false,
-        shouldSuggestHumanHandoff: false,
-      },
-    }),
+    finalIntent,
+    source: "payment_fallback",
+    answerType: "guided_next_step",
+    replySourceKind: "generic",
+    detectedCommercial: args.detectedCommercial,
     ctxPatch: paymentCtxPatch,
-    maxLines: 9999,
   });
 
   return {
     handled: true,
-    reply: toTrimmedString(rendered.reply),
+    reply: rendered.reply,
     source: "payment_fallback",
     intent: finalIntent,
-    ctxPatch: rendered.ctxPatch || paymentCtxPatch,
+    ctxPatch: rendered.ctxPatch,
   };
 }
 
@@ -305,8 +267,6 @@ export async function resolveUnhandledTurnFallback(
     contactoNorm,
     messageId,
     promptBaseMem,
-    infoClave,
-    convoCtx,
     detectedIntent,
     intentFallback,
     detectedCommercial,
@@ -317,7 +277,7 @@ export async function resolveUnhandledTurnFallback(
   const finalIntent =
     toTrimmedString(detectedIntent) ||
     toTrimmedString(intentFallback) ||
-    "info_general";
+    "other";
 
   if (fallbackKind === "post_completion_courtesy") {
     return await resolvePostCompletionCourtesyFallback(args, finalIntent);
@@ -331,91 +291,27 @@ export async function resolveUnhandledTurnFallback(
     return await resolvePaymentFallback(args, finalIntent);
   }
 
-  const canonicalBusinessInfoBody =
-    await resolveBusinessInfoOverviewCanonicalBody({
-      tenantId,
-      canal,
-      idiomaDestino,
-      userInput,
-      promptBaseMem,
-      infoClave,
-      convoCtx,
-      overviewMode: "general_overview",
-    });
-
-  if (canonicalBusinessInfoBody) {
-    const rendered = await renderFastpathDmReply({
-      tenantId,
-      canal,
-      idiomaDestino,
-      userInput,
-      contactoNorm,
-      messageId,
-      promptBaseMem,
-      fastpathText: canonicalBusinessInfoBody,
-      fp: {
-        reply: canonicalBusinessInfoBody,
-        source: "unhandled_turn_business_info_fallback",
-        intent: finalIntent,
-        catalogPayload: undefined,
-      },
-      detectedIntent: finalIntent,
-      intentFallback: finalIntent,
-      structuredService: {
-        serviceId: null,
-        serviceName: null,
-        serviceLabel: null,
-        hasResolution: false,
-      },
-      replyPolicy: buildStaticFastpathReplyPolicy({
-        canal: args.canal,
-        answerType: "guided_next_step",
-        replySourceKind: "generic",
-        responsePolicyMode: "grounded_frame_only",
-        hasResolvedEntity: false,
-        isCatalogDbReply: false,
-        isPriceSummaryReply: false,
-        isPriceDisambiguationReply: false,
-        isGroundedCatalogReply: false,
-        isGroundedCatalogOverviewDm: false,
-        shouldForceSalesClosingQuestion: false,
-        shouldUseGroundedFrameOnly: true,
-        canonicalBodyOwnsClosing: false,
-        clarificationTarget: null,
-        commercialPolicy: {
-          purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
-          wantsBooking: detectedCommercial?.wantsBooking === true,
-          wantsQuote: detectedCommercial?.wantsQuote === true,
-          wantsHuman: detectedCommercial?.wantsHuman === true,
-          urgency: detectedCommercial?.urgency ?? "low",
-          shouldUseSalesTone: true,
-          shouldUseSoftClosing: true,
-          shouldUseDirectClosing: false,
-          shouldSuggestHumanHandoff: false,
-        },
-      }),
-      ctxPatch: ctxPatch || {},
-      maxLines: 9999,
-    });
-
-    const reply = toTrimmedString(rendered.reply);
-
-    if (reply) {
-      return {
-        handled: true,
-        reply,
-        source: "unhandled_turn_business_info_fallback",
-        intent: finalIntent,
-        ctxPatch: rendered.ctxPatch || {},
-      };
-    }
-  }
+  const rendered = await renderFallbackReply({
+    tenantId,
+    canal,
+    idiomaDestino,
+    userInput,
+    contactoNorm,
+    messageId,
+    promptBaseMem,
+    finalIntent,
+    source: "unhandled_turn_generic_fallback",
+    answerType: "guided_next_step",
+    replySourceKind: "generic",
+    detectedCommercial,
+    ctxPatch: ctxPatch || {},
+  });
 
   return {
     handled: true,
-    reply: buildLastResortFallbackText(),
+    reply: rendered.reply,
     source: "unhandled_turn_generic_fallback",
     intent: finalIntent,
-    ctxPatch: ctxPatch || {},
+    ctxPatch: rendered.ctxPatch,
   };
 }
