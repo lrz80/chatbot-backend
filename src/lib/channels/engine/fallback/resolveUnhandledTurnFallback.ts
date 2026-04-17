@@ -246,12 +246,66 @@ async function resolveExplicitExitFallback(
     };
   }
 
+  const renderedFallback = await renderFastpathDmReply({
+    tenantId: args.tenantId,
+    canal: args.canal,
+    idiomaDestino: args.idiomaDestino,
+    userInput: args.userInput,
+    contactoNorm: args.contactoNorm,
+    messageId: args.messageId,
+    promptBaseMem: args.promptBaseMem,
+    fastpathText: "",
+    fp: {
+      reply: "",
+      source: "explicit_exit_fallback",
+      intent: finalIntent,
+      catalogPayload: undefined,
+    },
+    detectedIntent: finalIntent,
+    intentFallback: finalIntent,
+    structuredService: {
+      serviceId: null,
+      serviceName: null,
+      serviceLabel: null,
+      hasResolution: false,
+    },
+    replyPolicy: buildStaticFastpathReplyPolicy({
+      canal: args.canal,
+      answerType: "guided_next_step",
+      replySourceKind: "generic",
+      responsePolicyMode: "grounded_frame_only",
+      hasResolvedEntity: false,
+      isCatalogDbReply: false,
+      isPriceSummaryReply: false,
+      isPriceDisambiguationReply: false,
+      isGroundedCatalogReply: false,
+      isGroundedCatalogOverviewDm: false,
+      shouldForceSalesClosingQuestion: false,
+      shouldUseGroundedFrameOnly: true,
+      canonicalBodyOwnsClosing: false,
+      clarificationTarget: null,
+      commercialPolicy: {
+        purchaseIntent: "low",
+        wantsBooking: false,
+        wantsQuote: false,
+        wantsHuman: false,
+        urgency: "low",
+        shouldUseSalesTone: false,
+        shouldUseSoftClosing: true,
+        shouldUseDirectClosing: false,
+        shouldSuggestHumanHandoff: false,
+      },
+    }),
+    ctxPatch: exitCtxPatch,
+    maxLines: 9999,
+  });
+
   return {
     handled: true,
-    reply: "No problem.",
+    reply: toTrimmedString(renderedFallback.reply),
     source: "explicit_exit_fallback",
     intent: finalIntent,
-    ctxPatch: exitCtxPatch,
+    ctxPatch: renderedFallback.ctxPatch || exitCtxPatch,
   };
 }
 
