@@ -10,6 +10,44 @@ export type ResolveTenantContext = {
   origen?: Origen;
 };
 
+function extractBookingUrlFromLinks(links: unknown): string | null {
+  if (!links || typeof links !== "object") {
+    return null;
+  }
+
+  const obj = links as Record<string, unknown>;
+
+  const direct =
+    String(
+      obj.booking_url ||
+      obj.bookingUrl ||
+      ""
+    ).trim() || null;
+
+  if (direct) {
+    return direct;
+  }
+
+  const bookingNode =
+    obj.booking && typeof obj.booking === "object"
+      ? (obj.booking as Record<string, unknown>)
+      : null;
+
+  const nested =
+    String(
+      bookingNode?.booking_url ||
+      bookingNode?.bookingUrl ||
+      bookingNode?.url ||
+      ""
+    ).trim() || null;
+
+  if (nested) {
+    return nested;
+  }
+
+  return null;
+}
+
 function normalizeResolvedTenant(row: any): any | null {
   if (!row || typeof row !== "object") {
     return null;
@@ -25,11 +63,19 @@ function normalizeResolvedTenant(row: any): any | null {
       ? settings.booking
       : {};
 
+  const links =
+    row.links && typeof row.links === "object"
+      ? row.links
+      : {};
+
+  const linksBookingUrl = extractBookingUrlFromLinks(links);
+
   const normalizedBookingUrl =
     String(
       row.booking_url ||
       row.bookingUrl ||
       settingsBooking.booking_url ||
+      linksBookingUrl ||
       ""
     ).trim() || null;
 
@@ -43,6 +89,7 @@ function normalizeResolvedTenant(row: any): any | null {
         booking_url: normalizedBookingUrl,
       },
     },
+    links,
   };
 }
 
@@ -59,7 +106,7 @@ export async function resolveTenantFromInbound(opts: {
     return normalizeResolvedTenant(ctxTenant);
   }
 
-  const { numero, numeroSinMas } = normalizeToNumber(String(toRaw || ""));
+  const { numeroSinMas } = normalizeToNumber(String(toRaw || ""));
   const toDigits = numeroSinMas;
 
   try {
@@ -79,12 +126,20 @@ export async function resolveTenantFromInbound(opts: {
         [toDigits]
       );
 
-      const tenant = normalizeResolvedTenant(tenantRes.rows[0] || null);
+      const row = tenantRes.rows[0] || null;
+
+      console.log("[RESOLVE_TENANT_FROM_INBOUND][LINKS_DEBUG]", {
+        tenantId: row?.id ?? null,
+        links: row?.links ?? null,
+      });
+
+      const tenant = normalizeResolvedTenant(row);
 
       console.log("[RESOLVE_TENANT_FROM_INBOUND][TENANT_BOOKING_DEBUG]", {
         tenantId: tenant?.id ?? null,
         booking_url: tenant?.booking_url ?? null,
         settings_booking_url: tenant?.settings?.booking?.booking_url ?? null,
+        links_booking_url: tenant?.links?.booking_url ?? null,
       });
 
       return tenant;
