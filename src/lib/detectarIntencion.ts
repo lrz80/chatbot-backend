@@ -33,7 +33,12 @@ export type CommercialSignal = {
 
 export type IntentRoutingHints = {
   catalogScope: "none" | "overview" | "targeted";
-  businessInfoScope: "none" | "overview" | "facet";
+  businessInfoScope:
+    | "none"
+    | "overview"
+    | "schedule"
+    | "location"
+    | "availability";
 };
 
 export type IntentSource = "llm" | "fallback";
@@ -386,9 +391,6 @@ function buildIntentRoutingHints(args: {
   const asksLocation = args.facets.asksLocation === true;
   const asksAvailability = args.facets.asksAvailability === true;
 
-  const hasBusinessInfoFacet =
-    asksSchedules || asksLocation || asksAvailability;
-
   const isCatalogTargetedScope =
     scope === "entity" || scope === "family" || scope === "variant";
 
@@ -402,11 +404,26 @@ function buildIntentRoutingHints(args: {
       ? "overview"
       : "none";
 
+  const hasOnlyScheduleFacet =
+    asksSchedules && !asksPrices && !asksLocation && !asksAvailability;
+
+  const hasOnlyLocationFacet =
+    asksLocation && !asksPrices && !asksSchedules && !asksAvailability;
+
+  const hasOnlyAvailabilityFacet =
+    asksAvailability && !asksPrices && !asksSchedules && !asksLocation;
+
+  const isGeneralScope = scope === "general";
+
   const businessInfoScope: IntentRoutingHints["businessInfoScope"] =
-    hasBusinessInfoFacet
-      ? "facet"
-      : intent === "info_general" && scope === "general"
+    intent === "info_general" && isGeneralScope
       ? "overview"
+      : intent === "horario" && hasOnlyScheduleFacet && isGeneralScope
+      ? "schedule"
+      : intent === "ubicacion" && hasOnlyLocationFacet && isGeneralScope
+      ? "location"
+      : intent === "disponibilidad" && hasOnlyAvailabilityFacet && isGeneralScope
+      ? "availability"
       : "none";
 
   return {
