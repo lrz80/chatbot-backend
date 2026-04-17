@@ -1,4 +1,5 @@
 // src/lib/catalog/buildCatalogReferenceClassificationInput.ts
+import type { IntentRoutingHints } from "../detectarIntencion";
 import type { CatalogReferenceClassificationInput } from "./types";
 import { buildCatalogReferenceContext } from "./buildCatalogReferenceContext";
 
@@ -8,13 +9,17 @@ type BuildCatalogReferenceClassificationInputArgs = {
 
   catalogReferenceIntent?: CatalogReferenceClassificationInput["catalogReferenceIntent"];
   isCatalogOverviewIntent?: boolean;
-  routingHints?: CatalogReferenceClassificationInput["routingHints"];
+  routingHints?: IntentRoutingHints | null;
 
   explicitEntityCandidate?: CatalogReferenceClassificationInput["explicitEntityCandidate"];
   explicitVariantCandidate?: CatalogReferenceClassificationInput["explicitVariantCandidate"];
   explicitFamilyCandidate?: CatalogReferenceClassificationInput["explicitFamilyCandidate"];
   structuredComparison?: CatalogReferenceClassificationInput["structuredComparison"];
 };
+
+type NormalizedCatalogRoutingHints = NonNullable<
+  CatalogReferenceClassificationInput["routingHints"]
+>;
 
 function normalizeUserText(input: string): string {
   return String(input || "").trim();
@@ -41,20 +46,29 @@ function normalizeCatalogReferenceIntent(
 }
 
 function normalizeRoutingHints(
-  input?: CatalogReferenceClassificationInput["routingHints"]
+  input?: IntentRoutingHints | null
 ): CatalogReferenceClassificationInput["routingHints"] {
   if (!input || typeof input !== "object") {
     return null;
   }
 
-  const catalogScope =
+  const catalogScope: NormalizedCatalogRoutingHints["catalogScope"] =
     input.catalogScope === "overview" || input.catalogScope === "targeted"
       ? input.catalogScope
       : "none";
 
-  const businessInfoScope =
-    input.businessInfoScope === "overview" || input.businessInfoScope === "facet"
-      ? input.businessInfoScope
+  const rawBusinessInfoScope = String(input.businessInfoScope || "")
+    .trim()
+    .toLowerCase();
+
+  const businessInfoScope: NormalizedCatalogRoutingHints["businessInfoScope"] =
+    rawBusinessInfoScope === "overview"
+      ? "overview"
+      : rawBusinessInfoScope === "facet" ||
+        rawBusinessInfoScope === "schedule" ||
+        rawBusinessInfoScope === "location" ||
+        rawBusinessInfoScope === "availability"
+      ? "facet"
       : "none";
 
   return {
