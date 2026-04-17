@@ -321,6 +321,31 @@ function decideHybridDomain(input: {
     };
   }
 
+  const hasExplicitCatalogOverviewSignal =
+    input.asksPrices &&
+    input.detectedRoutingHints?.catalogScope === "overview" &&
+    !input.asksSchedules &&
+    !input.asksLocation &&
+    !input.asksAvailability;
+
+  if (hasExplicitCatalogOverviewSignal) {
+    return {
+      routeTarget: "catalog",
+      reason: "catalog_overview_signal",
+    };
+  }
+
+  const hasExplicitCatalogTargetedSignal =
+    input.previewShouldRouteCatalog === true &&
+    input.detectedRoutingHints?.catalogScope === "targeted";
+
+  if (hasExplicitCatalogTargetedSignal) {
+    return {
+      routeTarget: "catalog",
+      reason: "catalog_targeted_signal",
+    };
+  }
+
   return {
     routeTarget: "continue_pipeline",
     reason: "insufficient_signal",

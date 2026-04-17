@@ -753,43 +753,28 @@ export async function runCatalogDomainTurn(
           disambiguationType: "variant",
           anchorShift: "none",
         }
-      : canonicalCatalogResolution?.resolutionKind === "ambiguous"
-      ? {
-          ...baseCatalogRoutingSignal,
-          shouldRouteCatalog: true,
-          referenceKind: "referential_followup",
-          source: "canonical_catalog_resolution",
-          targetServiceId: null,
-          targetServiceName: null,
-          targetVariantId: null,
-          targetVariantName: null,
-          targetFamilyKey: null,
-          targetFamilyName: null,
-          targetLevel: "multi_service",
-          disambiguationType: "service_choice",
-          anchorShift: "none",
-        }
       : baseCatalogRoutingSignal;
 
-  const hasFacetDrivenCatalogIntent =
-    detectedFacets?.asksPrices === true ||
-    detectedFacets?.asksSchedules === true;
-
-  const hasExplicitCatalogIntent =
-    intentOut === "precio" ||
-    intentOut === "planes_precios" ||
-    intentOut === "info_servicio" ||
-    intentOut === "combination_and_price" ||
-    intentOut === "catalogo" ||
-    intentOut === "catalog";
+  const hasCanonicalCatalogEntry =
+    Boolean(catalogRoutingSignal?.shouldRouteCatalog) ||
+    canonicalCatalogResolution?.resolutionKind === "resolved_single" ||
+    canonicalCatalogResolution?.resolutionKind === "resolved_service_variant_ambiguous";
 
   const canEnterCatalogFastpath =
     !shouldBypassCatalogFollowupReuse &&
-    (hasPendingCatalogChoice ||
-      Boolean(catalogRoutingSignal?.shouldRouteCatalog) ||
-      isStructuredCatalogTurn ||
-      hasExplicitCatalogIntent ||
-      hasFacetDrivenCatalogIntent);
+    (
+      hasPendingCatalogChoice ||
+      hasCanonicalCatalogEntry ||
+      (
+        isStructuredCatalogTurn &&
+        (
+          hasConcreteTargetThisTurn ||
+          canonicalCatalogResolution?.resolutionKind === "resolved_single" ||
+          canonicalCatalogResolution?.resolutionKind === "resolved_service_variant_ambiguous" ||
+          canonicalCatalogResolution?.resolutionKind === "ambiguous"
+        )
+      )
+    );
 
   if (shouldBypassCatalogFollowupReuse) {
     return { handled: false };

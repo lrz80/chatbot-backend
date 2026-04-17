@@ -16,6 +16,10 @@ export type CanonicalCatalogRouteDecision = {
   resolution: ResolveServiceDecision;
   resolvedServiceId: string | null;
   resolvedServiceName: string | null;
+  variantOptions?: Array<{
+    variantId: string;
+    variantName: string;
+  }>;
 };
 
 type Args = {
@@ -74,6 +78,36 @@ function areAllCandidatesVariants(
     candidates.length > 0 &&
     candidates.every((candidate) => candidate.candidateKind === "variant")
   );
+}
+
+function getVariantOptionsFromCandidates(
+  candidates: ResolveServiceCandidate[]
+): Array<{
+  variantId: string;
+  variantName: string;
+}> {
+  return candidates
+    .map((candidate) => {
+      const variantId = String(candidate.variantId || "").trim();
+      const variantName = String(candidate.variantName || "").trim();
+
+      if (!variantId || !variantName) {
+        return null;
+      }
+
+      return {
+        variantId,
+        variantName,
+      };
+    })
+    .filter(
+      (
+        item
+      ): item is {
+        variantId: string;
+        variantName: string;
+      } => Boolean(item)
+    );
 }
 
 function shouldRouteAmbiguousCatalog(
@@ -136,6 +170,7 @@ export async function getCanonicalCatalogRouteDecision(
         resolution,
         resolvedServiceId: null,
         resolvedServiceName: null,
+        variantOptions: [],
       };
     }
 
@@ -145,6 +180,7 @@ export async function getCanonicalCatalogRouteDecision(
       resolution,
       resolvedServiceId: resolution.hit?.id ?? null,
       resolvedServiceName: resolution.hit?.name ?? null,
+      variantOptions: [],
     };
   }
 
@@ -161,6 +197,7 @@ export async function getCanonicalCatalogRouteDecision(
         resolvedServiceId: uniqueServiceIds[0],
         resolvedServiceName:
           getResolvedServiceNameFromAmbiguousCandidates(candidates),
+        variantOptions: getVariantOptionsFromCandidates(candidates),
       };
     }
 
@@ -170,6 +207,7 @@ export async function getCanonicalCatalogRouteDecision(
       resolution,
       resolvedServiceId: null,
       resolvedServiceName: null,
+      variantOptions: [],
     };
   }
 
@@ -179,5 +217,6 @@ export async function getCanonicalCatalogRouteDecision(
     resolution,
     resolvedServiceId: null,
     resolvedServiceName: null,
+    variantOptions: [],
   };
 }

@@ -262,6 +262,30 @@ function normalizeLabel(raw: string): string {
   return out.trim();
 }
 
+function isPrimaryCatalogCandidate(cand: Candidate): boolean {
+  const categoryNorm = normalizeLabel(cand.category || "");
+  const roleNorm = normalizeLabel(cand.catalogRole || "");
+  const hasParent = !!cand.parentServiceId;
+
+  const isAddOnCategory =
+    categoryNorm === "add on" ||
+    categoryNorm === "addon" ||
+    categoryNorm === "add-on";
+
+  const isExtraRole =
+    roleNorm === "complemento / extra" ||
+    roleNorm === "complemento extra" ||
+    roleNorm === "extra" ||
+    roleNorm === "addon" ||
+    roleNorm === "add on" ||
+    roleNorm === "add-on";
+
+  if (isAddOnCategory || isExtraRole) return false;
+  if (hasParent) return false;
+
+  return true;
+}
+
 function countExactHits(queryTokens: string[], candidateTokens: string[]): number {
   if (!queryTokens.length || !candidateTokens.length) return 0;
   const qSet = new Set(queryTokens);
@@ -274,7 +298,7 @@ function uniqueOverlapTokens(queryTokens: string[], candidateTokens: string[]): 
   return Array.from(new Set(candidateTokens.filter((t) => qSet.has(t))));
 }
 
-function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
+function buildResolvableTokenDf(candidates: Candidate[]): Map<string, number> {
   const df = new Map<string, number>();
 
   for (const cand of candidates) {
@@ -283,6 +307,21 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
       ...(cand.variantNameTokens || []),
       ...(cand.categoryTokens || []),
       ...(cand.tipoTokens || []),
+    ]);
+
+    for (const token of seen) {
+      df.set(token, (df.get(token) || 0) + 1);
+    }
+  }
+
+  return df;
+}
+
+function buildSupportTokenDf(candidates: Candidate[]): Map<string, number> {
+  const df = new Map<string, number>();
+
+  for (const cand of candidates) {
+    const seen = new Set([
       ...(cand.supportTokens || []),
     ]);
 
@@ -619,13 +658,14 @@ export async function resolveServiceCandidatesFromText(
     return { kind: "none", hit: null, candidates: [] };
   }
 
-  const dfMap = buildTenantTokenDf(candidates);
+  const resolvableDfMap = buildResolvableTokenDf(candidates);
+  const supportDfMap = buildSupportTokenDf(candidates);
   const totalCandidates = candidates.length;
 
-  const observedQueryTokens = buildObservedQueryTokens(queryTokens, dfMap);
+  const observedQueryTokens = buildObservedQueryTokens(queryTokens, resolvableDfMap);
   const discriminativeQueryTokens = buildDiscriminativeQueryTokens(
     observedQueryTokens,
-    dfMap,
+    resolvableDfMap,
     totalCandidates
   );
 
@@ -641,14 +681,14 @@ export async function resolveServiceCandidatesFromText(
     discriminativeQueryTokens.length > 0
       ? discriminativeQueryTokens
       : observedQueryTokens,
-    dfMap,
+    resolvableDfMap,
     totalCandidates
   );
 
   const entityEvidenceQueryTokens = buildEntityEvidenceQueryTokens(
     observedQueryTokens,
     discriminativeQueryTokens,
-    dfMap,
+    resolvableDfMap,
     totalCandidates
   );
 
@@ -658,35 +698,35 @@ export async function resolveServiceCandidatesFromText(
     const nameScore = scoreTokensWeighted(
       resolvableQueryTokens,
       cand.serviceNameTokens,
-      dfMap,
+      resolvableDfMap,
       totalCandidates
     );
 
     const variantScore = scoreTokensWeighted(
       resolvableQueryTokens,
       cand.variantNameTokens,
-      dfMap,
+      resolvableDfMap,
       totalCandidates
     );
 
     const categoryScore = scoreTokensWeighted(
       observedQueryTokens,
       cand.categoryTokens,
-      dfMap,
+      resolvableDfMap,
       totalCandidates
     );
 
     const tipoScore = scoreTokensWeighted(
       observedQueryTokens,
       cand.tipoTokens,
-      dfMap,
+      resolvableDfMap,
       totalCandidates
     );
 
     const supportScore = scoreTokensWeighted(
       observedQueryTokens,
       cand.supportTokens,
-      dfMap,
+      supportDfMap,
       totalCandidates
     );
 
@@ -724,8 +764,7 @@ export async function resolveServiceCandidatesFromText(
 
     const hasResolvableEntityEvidence =
       overlapNameTokens.length > 0 ||
-      overlapVariantTokens.length > 0 ||
-      overlapResolvableSupportTokens.length > 0;
+      overlapVariantTokens.length > 0;
 
     if (!allOverlapTokens.length) {
       return {
@@ -1108,6 +1147,21 @@ export async function resolveServiceCandidatesFromText(
       secondScore,
       marginVsSecond,
     });
+
+    const primaryStructuralAmbiguousCandidates = structuralAmbiguousCandidates.filter(
+      (candidate) => {
+        const source = candidates.find((cand) => cand.serviceId === candidate.id);
+        return source ? isPrimaryCatalogCandidate(source) : false;
+      }
+    );
+
+    if (primaryStructuralAmbiguousCandidates.length >= 2) {
+      return {
+        kind: "ambiguous",
+        hit: null,
+        candidates: primaryStructuralAmbiguousCandidates,
+      };
+    }
 
     const isAmbiguous =
       !!best &&

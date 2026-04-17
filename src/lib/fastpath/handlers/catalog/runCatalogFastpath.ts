@@ -1257,14 +1257,8 @@ export async function runCatalogFastpath(
     referenceKind === "catalog_family";
 
   const hasExplicitCatalogIntent =
-    intentOutNorm === "precio" ||
-    intentOutNorm === "planes_precios" ||
     intentOutNorm === "catalogo" ||
-    intentOutNorm === "catalog" ||
-    intentOutNorm === "other_plans" ||
-    intentOutNorm === "catalog_alternatives" ||
-    intentOutNorm === "combination_and_price" ||
-    intentOutNorm === "catalog_combination";
+    intentOutNorm === "catalog";
 
   const disambiguationOriginalIntent = resolveDisambiguationOriginalIntent({
     intentOutNorm,
@@ -1355,14 +1349,14 @@ export async function runCatalogFastpath(
     hasFamilyStructuredCatalogTarget;
 
   const hasFacetDrivenCatalogIntent =
-    asksPrices || asksSchedules;
+    asksPrices === true;
 
   const allowGenericCatalogDbFallback =
     !hasAnyStructuredCatalogTarget &&
     (
-      hasExplicitCatalogRouting ||
-      hasExplicitCatalogIntent ||
-      hasFacetDrivenCatalogIntent
+      referenceKind === "catalog_overview" ||
+      executionRouteIntent === "catalog_overview" ||
+      isGenericCatalogOverviewByIntent
     );
 
   const shouldResolveExplicitCatalogTarget =
@@ -1387,10 +1381,12 @@ export async function runCatalogFastpath(
     !hasAnyStructuredCatalogTarget;
 
   const shouldNeverSilenceCatalogTurn =
-    catalogRoutingSignal.shouldRouteCatalog === true ||
-    hasExplicitCatalogRouting ||
-    hasExplicitCatalogIntent ||
-    hasFacetDrivenCatalogIntent;
+    catalogRoutingSignal.shouldRouteCatalog === true &&
+    (
+      hasAnyStructuredCatalogTarget ||
+      referenceKind === "catalog_overview" ||
+      executionRouteIntent === "catalog_overview"
+    );
 
   let canonicalCatalogResolution: CanonicalCatalogResolution | null =
     effectiveAuthority.status === "resolved_single" &&
@@ -2139,43 +2135,9 @@ export async function runCatalogFastpath(
   }
 
   if (shouldNeverSilenceCatalogTurn) {
-    const shouldFallbackToPriceOverview =
-      asksPrices === true ||
-      executionRouteIntent === "catalog_price" ||
-      executionRouteIntent === "catalog_alternatives";
-
-    if (shouldFallbackToPriceOverview) {
-      const { priceBlock } = await buildCatalogOverviewPriceBlock({
-        pool: input.pool,
-        tenantId: input.tenantId,
-        idiomaDestino: input.idiomaDestino,
-        normalizeCatalogRole: input.normalizeCatalogRole,
-        traducirTexto: input.traducirTexto,
-        renderGenericPriceSummaryReply: input.renderGenericPriceSummaryReply,
-      });
-
-      if (priceBlock.trim()) {
-        return {
-          handled: true,
-          reply: priceBlock,
-          source: "catalog_db",
-          intent: "precio",
-          catalogPayload: {
-            kind: "resolved_catalog_answer",
-            scope: "overview",
-            canonicalBlocks: {
-              priceBlock: priceBlock || null,
-            },
-          },
-          ctxPatch: {
-            last_catalog_at: Date.now(),
-            lastResolvedIntent: "price_or_plan",
-            pendingCatalogChoice: null,
-            pendingCatalogChoiceAt: null,
-          } as any,
-        };
-      }
-    }
+    return {
+      handled: false,
+    };
   }
 
   return {

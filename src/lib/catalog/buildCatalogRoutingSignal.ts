@@ -113,18 +113,6 @@ type BuildCatalogRoutingSignalArgs = {
   } | null;
 };
 
-const CATALOG_INTENTS = new Set([
-  "precio",
-  "planes_precios",
-  "info_servicio",
-  "catalogo",
-  "catalog",
-  "other_plans",
-  "catalog_alternatives",
-  "combination_and_price",
-  "catalog_combination",
-]);
-
 function normalizeText(input?: string | null): string {
   return String(input || "").trim().toLowerCase();
 }
@@ -246,23 +234,8 @@ function canIntentLayerRouteCatalog(args: {
   hasReusableAnchor: boolean;
   hasAmbiguousEntityCandidates: boolean;
 }): boolean {
-  const intentOut = normalizeText(args.intentOut);
-
-  if (!CATALOG_INTENTS.has(intentOut)) {
-    return false;
-  }
-
-  if (intentOut !== "info_servicio") {
-    return true;
-  }
-
-  return (
-    args.explicitTargetThisTurn ||
-    args.hasFreshCatalogContext ||
-    args.hasPendingChoice ||
-    args.hasReusableAnchor ||
-    args.hasAmbiguousEntityCandidates
-  );
+  void args;
+  return false;
 }
 
 function resolveRouteIntentFromSignals(args: {
@@ -562,35 +535,24 @@ export function buildCatalogRoutingSignal({
   }
 
   if (allowsDbCatalogPath) {
-    const resolvedRouteIntent = resolveRouteIntentFromSignals({
-      intentOut: normalizedIntentOut,
-      classification: catalogReferenceClassification,
-      referenceKind: "none",
-      targetServiceId,
-      targetVariantId,
-      targetFamilyKey,
-      hasFreshCatalogContext,
-    });
-
     return {
-      shouldRouteCatalog: true,
-      routeIntent: resolvedRouteIntent,
+      shouldRouteCatalog: false,
+      routeIntent: "unknown",
       referenceKind: "none",
-      source: "intent_layer",
+      source: "none",
       allowsDbCatalogPath,
       hasFreshCatalogContext,
-      previousCatalogPlans,
+      previousCatalogPlans: shouldDropStaleTargets ? [] : previousCatalogPlans,
 
-      targetServiceId,
-      targetServiceName,
-      targetVariantId,
-      targetVariantName,
-      targetFamilyKey,
-      targetFamilyName,
-      targetLevel: effectiveTargetLevel,
-      disambiguationType: effectiveDisambiguationType,
-      anchorShift,
-      candidateOptions,
+      targetServiceId: shouldDropStaleTargets ? null : targetServiceId,
+      targetServiceName: shouldDropStaleTargets ? null : targetServiceName,
+      targetVariantId: shouldDropStaleTargets ? null : targetVariantId,
+      targetVariantName: shouldDropStaleTargets ? null : targetVariantName,
+      targetFamilyKey: shouldDropStaleTargets ? null : targetFamilyKey,
+      targetFamilyName: shouldDropStaleTargets ? null : targetFamilyName,
+      targetLevel: "none",
+      disambiguationType: "none",
+      anchorShift: "none",
     };
   }
 
