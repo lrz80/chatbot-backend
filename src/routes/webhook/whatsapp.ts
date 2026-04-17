@@ -68,11 +68,8 @@ import { queryWithTimeout } from "../../lib/dbQuery";
 
 import { renderFastpathDmReply } from "../../lib/channels/engine/fastpath/renderFastpathDmReply";
 import { resolveBusinessInfoOverviewCanonicalBody } from "../../lib/channels/engine/businessInfo/resolveBusinessInfoOverviewCanonicalBody";
-import { composeFacetReply } from "../../lib/channels/engine/turn/composeFacetReply";
 
 import { resolveUnhandledTurnFallback } from "../../lib/channels/engine/fallback/resolveUnhandledTurnFallback";
-import { renderGenericPriceSummaryReply } from "../../lib/services/pricing/renderGenericPriceSummaryReply";
-import { normalizeCatalogRole } from "../../lib/catalog/normalizeCatalogRole";
 import { runCatalogDomainTurn } from "../../lib/fastpath/runCatalogDomainTurn";
 import { resolveBusinessInfoFacetsCanonicalBody } from "../../lib/channels/engine/businessInfo/resolveBusinessInfoFacetsCanonicalBody";
 import {
@@ -80,8 +77,8 @@ import {
   buildStaticFastpathReplyPolicy,
 } from "../../lib/channels/engine/fastpath/buildFastpathReplyPolicy";
 
-import { buildCatalogTurnAugmentation } from '../../../src/lib/channels/engine/turn/buildCatalogTurnAugmentation';
-import type { VisualTurnEvidence } from '../../../src/lib/channels/engine/turn/types';
+import { buildCatalogTurnAugmentation } from '../../lib/channels/engine/turn/buildCatalogTurnAugmentation';
+import type { VisualTurnEvidence } from '../../lib/channels/engine/turn/types';
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
