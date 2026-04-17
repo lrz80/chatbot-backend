@@ -298,10 +298,15 @@ function decideHybridDomain(input: {
       input.detectedRoutingHints.businessInfoScope !== "none"
     );
 
+  const hasStrongCanonicalCatalogResolution =
+    canonicalResolutionKind === "resolved_single" ||
+    canonicalResolutionKind === "resolved_service_variant_ambiguous";
+
   if (
     hasExplicitBusinessInfoScope &&
     !input.asksPrices &&
-    canonicalResolutionKind === "none"
+    !hasStrongCanonicalCatalogResolution &&
+    input.detectedRoutingHints?.catalogScope !== "targeted"
   ) {
     return {
       routeTarget: "business_info",
