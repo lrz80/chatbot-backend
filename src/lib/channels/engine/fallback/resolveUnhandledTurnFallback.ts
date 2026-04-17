@@ -41,6 +41,7 @@ type ResolveUnhandledTurnFallbackResult = {
   handled: boolean;
   reply: string;
   source:
+    | "explicit_exit_fallback"
     | "unhandled_turn_business_info_fallback"
     | "unhandled_turn_generic_fallback"
     | "unhandled_turn_post_completion_courtesy";
@@ -50,6 +51,12 @@ type ResolveUnhandledTurnFallbackResult = {
 
 function toTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isExplicitExitIntent(intent: string | null): boolean {
+  const normalized = toTrimmedString(intent).toLowerCase();
+
+  return normalized === "no_interesado" || normalized === "despedida";
 }
 
 function buildLastResortFallbackText(): string {
@@ -160,6 +167,94 @@ async function resolvePostCompletionCourtesyFallback(
   };
 }
 
+async function resolveExplicitExitFallback(
+  args: ResolveUnhandledTurnFallbackArgs,
+  finalIntent: string
+): Promise<ResolveUnhandledTurnFallbackResult> {
+  const exitCtxPatch = {
+    ...(args.ctxPatch || {}),
+    actionContext: null,
+    pending_cta: null,
+    awaiting_yes_no_action: null,
+    awaiting_yesno: false,
+    yesno_resolution: null,
+  };
+
+  const rendered = await renderFastpathDmReply({
+    tenantId: args.tenantId,
+    canal: args.canal,
+    idiomaDestino: args.idiomaDestino,
+    userInput: args.userInput,
+    contactoNorm: args.contactoNorm,
+    messageId: args.messageId,
+    promptBaseMem: args.promptBaseMem,
+    fastpathText: "",
+    fp: {
+      reply: "",
+      source: "explicit_exit_fallback",
+      intent: finalIntent,
+      catalogPayload: undefined,
+    },
+    detectedIntent: finalIntent,
+    intentFallback: finalIntent,
+    structuredService: {
+      serviceId: null,
+      serviceName: null,
+      serviceLabel: null,
+      hasResolution: false,
+    },
+    replyPolicy: buildStaticFastpathReplyPolicy({
+      canal: args.canal,
+      answerType: "guided_next_step",
+      replySourceKind: "generic",
+      responsePolicyMode: "grounded_frame_only",
+      hasResolvedEntity: false,
+      isCatalogDbReply: false,
+      isPriceSummaryReply: false,
+      isPriceDisambiguationReply: false,
+      isGroundedCatalogReply: false,
+      isGroundedCatalogOverviewDm: false,
+      shouldForceSalesClosingQuestion: false,
+      shouldUseGroundedFrameOnly: true,
+      canonicalBodyOwnsClosing: false,
+      clarificationTarget: null,
+      commercialPolicy: {
+        purchaseIntent: "low",
+        wantsBooking: false,
+        wantsQuote: false,
+        wantsHuman: false,
+        urgency: "low",
+        shouldUseSalesTone: false,
+        shouldUseSoftClosing: true,
+        shouldUseDirectClosing: false,
+        shouldSuggestHumanHandoff: false,
+      },
+    }),
+    ctxPatch: exitCtxPatch,
+    maxLines: 9999,
+  });
+
+  const reply = toTrimmedString(rendered.reply);
+
+  if (reply) {
+    return {
+      handled: true,
+      reply,
+      source: "explicit_exit_fallback",
+      intent: finalIntent,
+      ctxPatch: rendered.ctxPatch || exitCtxPatch,
+    };
+  }
+
+  return {
+    handled: true,
+    reply: "No problem.",
+    source: "explicit_exit_fallback",
+    intent: finalIntent,
+    ctxPatch: exitCtxPatch,
+  };
+}
+
 export async function resolveUnhandledTurnFallback(
   args: ResolveUnhandledTurnFallbackArgs
 ): Promise<ResolveUnhandledTurnFallbackResult> {
@@ -187,6 +282,10 @@ export async function resolveUnhandledTurnFallback(
 
   if (fallbackKind === "post_completion_courtesy") {
     return await resolvePostCompletionCourtesyFallback(args, finalIntent);
+  }
+
+  if (isExplicitExitIntent(finalIntent)) {
+    return await resolveExplicitExitFallback(args, finalIntent);
   }
 
   const canonicalBusinessInfoBody =
