@@ -1,5 +1,4 @@
 // src/lib/fastpath/handlers/catalog/helpers/catalogScheduleBlock.ts
-
 import {
   extractSchedulesOnly,
   extractStructuredSchedules,
@@ -8,13 +7,22 @@ import { withSectionTitle } from "./catalogReplyBlocks";
 
 export type ScheduleTarget =
   | { type: "none" }
-  | { type: "general" };
+  | { type: "general" }
+  | { type: "service"; serviceId: string; serviceName: string };
 
 type BuildScheduleBlockInput = {
   idiomaDestino: string;
   infoClave?: string | null;
   scheduleTarget?: ScheduleTarget;
 };
+
+function normalizeText(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
 
 function normalizeScheduleTarget(
   target?: ScheduleTarget | null
@@ -27,7 +35,28 @@ function normalizeScheduleTarget(
     return { type: "none" };
   }
 
+  if (
+    target.type === "service" &&
+    String(target.serviceId || "").trim() &&
+    String(target.serviceName || "").trim()
+  ) {
+    return {
+      type: "service",
+      serviceId: String(target.serviceId).trim(),
+      serviceName: String(target.serviceName).trim(),
+    };
+  }
+
   return { type: "general" };
+}
+
+function lineMatchesService(line: string, serviceName: string): boolean {
+  const lineNorm = normalizeText(line);
+  const serviceNorm = normalizeText(serviceName);
+
+  if (!lineNorm || !serviceNorm) return false;
+
+  return lineNorm.includes(serviceNorm);
 }
 
 export function buildScheduleBlock(input: BuildScheduleBlockInput): string {
@@ -37,16 +66,41 @@ export function buildScheduleBlock(input: BuildScheduleBlockInput): string {
     return "";
   }
 
-  // Dejamos el extractor estructurado evaluado para que este helper
-  // dependa de una fuente preparada para evolución futura, pero sin
-  // introducir todavía filtrado frágil por texto.
   const structuredEntries = extractStructuredSchedules(input.infoClave);
-  const schedulesOnly =
-    structuredEntries.length > 0
-      ? structuredEntries.map((entry) => entry.rawLine).join("\n").trim()
-      : extractSchedulesOnly(input.infoClave);
 
-  if (!String(schedulesOnly || "").trim()) {
+  let lines: string[] = [];
+
+  if (structuredEntries.length > 0) {
+    const rawLines = structuredEntries
+      .map((entry) => String(entry?.rawLine || "").trim())
+      .filter(Boolean);
+
+    if (scheduleTarget.type === "service") {
+      lines = rawLines.filter((line) =>
+        lineMatchesService(line, scheduleTarget.serviceName)
+      );
+    } else {
+      lines = rawLines;
+    }
+  } else {
+    const schedulesOnly = extractSchedulesOnly(input.infoClave);
+    const rawLines = String(schedulesOnly || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (scheduleTarget.type === "service") {
+      lines = rawLines.filter((line) =>
+        lineMatchesService(line, scheduleTarget.serviceName)
+      );
+    } else {
+      lines = rawLines;
+    }
+  }
+
+  const finalBody = lines.join("\n").trim();
+
+  if (!finalBody) {
     return "";
   }
 
@@ -54,6 +108,6 @@ export function buildScheduleBlock(input: BuildScheduleBlockInput): string {
     input.idiomaDestino,
     "Horarios:",
     "Schedules:",
-    schedulesOnly
+    finalBody
   );
 }

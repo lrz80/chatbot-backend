@@ -156,6 +156,15 @@ function shouldUseConversationAnchor(input: {
   return false;
 }
 
+function blocksContinuationByExplicitIntent(intent: string | null): boolean {
+  const normalized = String(intent || "").trim().toLowerCase();
+
+  return (
+    normalized === "no_interesado" ||
+    normalized === "despedida"
+  );
+}
+
 function decideHybridDomain(input: {
   hasPendingCatalogChoice: boolean;
   hasConversationAnchor: boolean;
@@ -690,7 +699,7 @@ export async function handleFastpathHybridTurn(
       canonicalCatalogRouteDecision: rawCanonicalCatalogRouteDecision,
     });
 
-  const continuationDecision = decideTurnContinuation({
+  const rawContinuationDecision = decideTurnContinuation({
     userInput,
     continuationContext: convoCtx?.continuationContext ?? null,
     currentTurnSignals: {
@@ -712,6 +721,15 @@ export async function handleFastpathHybridTurn(
       wantsBooking: Boolean(detectedCommercial?.wantsBooking),
     },
   });
+
+  const continuationDecision = blocksContinuationByExplicitIntent(currentIntent)
+    ? {
+        shouldContinue: false,
+        confidence: 1,
+        targetDomain: null,
+        reason: "explicit_exit_intent",
+      }
+    : rawContinuationDecision;
 
   const domainDecision = decideHybridDomain({
     hasPendingCatalogChoice,

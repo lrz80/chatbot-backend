@@ -491,7 +491,8 @@ async function buildGroundedFrameOnly(input: {
             "If intro is allowed, it must feel human, warm, and direct, without sounding like a template or system message.",
             "Do not make the intro long.",
             "The closing must be soft, brief, low-pressure, and non-transactional.",
-            "The closing should sound like availability for further help, not like a booking question.",
+            "The closing should be a short availability-for-help statement after the link, not a restatement of the link and not a booking question.",
+            "Do not restate that the user can reserve or book using the link if the canonical body is already the link.",
             "The closing must not be a question about scheduling.",
             "If PROMPT_BASE contains an explicit tenant CTA for this kind of turn, prefer it only if it does not push the user into another booking-step question.",
           ]
