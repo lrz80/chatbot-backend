@@ -80,6 +80,9 @@ import {
   buildStaticFastpathReplyPolicy,
 } from "../../lib/channels/engine/fastpath/buildFastpathReplyPolicy";
 
+import { buildCatalogTurnAugmentation } from '../../../src/lib/channels/engine/turn/buildCatalogTurnAugmentation';
+import type { VisualTurnEvidence } from '../../../src/lib/channels/engine/turn/types';
+
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
   tenant?: any;
@@ -184,6 +187,32 @@ export async function procesarMensajeWhatsApp(
 
   const userInput = turn.userInputRaw;
   const messageId = turn.messageId;
+
+  const numMedia = Number(body?.NumMedia || 0);
+  const captionText =
+    typeof body?.Body === "string" && body.Body.trim().length > 0
+      ? body.Body.trim()
+      : null;
+
+  let visualEvidence: VisualTurnEvidence | null = null;
+
+  if (numMedia > 0) {
+    const mediaContentType = String(body?.MediaContentType0 || "");
+    const mediaUrl = String(body?.MediaUrl0 || "");
+
+    visualEvidence = {
+      hasVisualReference: mediaContentType.startsWith("image/") || Boolean(mediaUrl),
+      extractedText: [],
+      confidence: 0,
+      source: "none",
+    };
+  }
+
+  const turnAugmentation = buildCatalogTurnAugmentation({
+    userText: userInput,
+    captionText,
+    visualEvidence,
+  });
 
   const tenant = turn.tenant;
 
@@ -773,6 +802,29 @@ export async function procesarMensajeWhatsApp(
     return false;
   }
 
+  function shouldPersistExternalActionForBusinessInfo(params: {
+    resolvedBusinessIntent: string;
+    overviewMode: "general_overview" | "guided_entry";
+    wantsBusinessFacets: boolean;
+    asksSchedules: boolean;
+    asksLocation: boolean;
+    asksAvailability: boolean;
+  }): boolean {
+    if (params.overviewMode === "guided_entry") {
+      return false;
+    }
+
+    if (!params.wantsBusinessFacets) {
+      return false;
+    }
+
+    if (params.asksLocation || params.asksAvailability) {
+      return false;
+    }
+
+    return params.asksSchedules && params.resolvedBusinessIntent === "horario";
+  }
+
   async function tryBusinessInfoOutsideFastpath(params: {
     intent: string | null;
     detectedFacets?: IntentFacets | null;
@@ -832,6 +884,7 @@ export async function procesarMensajeWhatsApp(
             asksLocation,
             asksAvailability,
           },
+          routingHints: (signals as any)?.detectedRoutingHints || null,
         })
       : await resolveBusinessInfoOverviewCanonicalBody({
           tenantId: tenant.id,
@@ -874,6 +927,23 @@ export async function procesarMensajeWhatsApp(
           ? "disponibilidad"
           : "info_general"
         : routeIntent;
+
+    const shouldPersistExternalAction =
+      shouldPersistExternalActionForBusinessInfo({
+        resolvedBusinessIntent,
+        overviewMode,
+        wantsBusinessFacets,
+        asksSchedules,
+        asksLocation,
+        asksAvailability,
+      });
+
+    const nextActionContext = shouldPersistExternalAction
+      ? selectExternalActionForDomain({
+          tenant,
+          sourceDomain: "business_info",
+        })
+      : null;
 
     const rendered = await renderFastpathDmReply({
       tenantId: tenant.id,
@@ -931,11 +1001,7 @@ export async function procesarMensajeWhatsApp(
       }),
       ctxPatch: {
         ...(finalCtxPatch || {}),
-        actionContext:
-          selectExternalActionForDomain({
-            tenant,
-            sourceDomain: "business_info",
-          }) ?? null,
+        actionContext: nextActionContext,
       },
       maxLines: MAX_WHATSAPP_LINES,
     });
@@ -1782,6 +1848,7 @@ export async function procesarMensajeWhatsApp(
       referentialFollowup: signals?.referentialFollowup === true,
       followupNeedsAnchor: signals?.followupNeedsAnchor === true,
       followupEntityKind: signals?.followupEntityKind || null,
+      turnAugmentation,
     });
 
     if (hybridRes.ctxPatch) {
@@ -1844,37 +1911,15 @@ export async function procesarMensajeWhatsApp(
         );
 
       if (isAmbiguousCatalogFamilyTurn) {
-        const composed = await composeFacetReply({
-          pool,
+        console.log("[WHATSAPP][AMBIGUOUS_CATALOG_FAMILY_DEFERRED]", {
           tenantId: tenant.id,
           canal,
-          idiomaDestino,
-          userInput,
           contactoNorm,
-          messageId: messageId || null,
-          promptBaseMem,
-          infoClave: String(tenant?.info_clave || ""),
-          detectedIntent: "precio",
-          intentFallback: "precio",
-          detectedFacets: {
-            ...(nextDetectedFacets || {}),
-            asksPrices: true,
-          },
-          detectedCommercial,
-          normalizeCatalogRole,
-          traducirTexto: async (texto: string, idioma: string, modo?: any) => {
-            return await traducirMensaje(texto, idioma);
-          },
-          renderGenericPriceSummaryReply,
+          userInput,
+          detectedIntent: nextIntent,
+          canonicalCatalogResolutionKind:
+            canonicalCatalogResolution?.resolutionKind || null,
         });
-
-        if (composed.handled && composed.reply) {
-          return await replyAndExit(
-            composed.reply,
-            composed.source || "catalog_family_ambiguous_composed",
-            composed.intent || "precio"
-          );
-        }
       }
     }
 
@@ -1891,6 +1936,7 @@ export async function procesarMensajeWhatsApp(
       if (handledExternalAction) {
         return;
       }
+
 
       const handledBusinessInfo = await tryBusinessInfoOutsideFastpath({
         intent: nextIntent,
@@ -1909,34 +1955,15 @@ export async function procesarMensajeWhatsApp(
       hybridRes.routeTarget === "continue_pipeline" &&
       !shouldUseGuidedEntryOutsideFastpath
     ) {
-      const composed = await composeFacetReply({
-        pool,
+      console.log("[WHATSAPP][CONTINUE_PIPELINE_NO_AUTO_COMPOSE]", {
         tenantId: tenant.id,
         canal,
-        idiomaDestino,
-        userInput,
         contactoNorm,
-        messageId: messageId || null,
-        promptBaseMem,
-        infoClave: String(tenant?.info_clave || ""),
+        userInput,
         detectedIntent: nextIntent,
-        intentFallback: nextIntent,
-        detectedFacets: nextDetectedFacets,
-        detectedCommercial,
-        normalizeCatalogRole,
-        traducirTexto: async (texto: string, idioma: string, modo?: any) => {
-          return await traducirMensaje(texto, idioma);
-        },
-        renderGenericPriceSummaryReply,
+        canonicalCatalogResolutionKind:
+          hybridRes.routeContext?.canonicalCatalogResolution?.resolutionKind || null,
       });
-
-      if (composed.handled && composed.reply) {
-        return await replyAndExit(
-          composed.reply,
-          composed.source || "facet_composer",
-          composed.intent || null
-        );
-      }
     }
   } else {
     console.log("🔒 DOMAIN ROUTER SKIPPED", {

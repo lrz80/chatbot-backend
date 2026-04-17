@@ -1,6 +1,6 @@
 // src/lib/channels/engine/businessInfo/resolveBusinessInfoFacetsCanonicalBody.ts
 import type { Pool } from "pg";
-import type { Canal } from "../../../detectarIntencion";
+import type { Canal, IntentRoutingHints } from "../../../detectarIntencion";
 import type { LangCode } from "../../../i18n/lang";
 import { withSectionTitle } from "../../../fastpath/handlers/catalog/helpers/catalogReplyBlocks";
 import {
@@ -27,6 +27,7 @@ type Args = {
     asksLocation?: boolean;
     asksAvailability?: boolean;
   };
+  routingHints?: IntentRoutingHints | null;
 };
 
 type EffectiveFacets = {
@@ -110,6 +111,7 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     facets,
     userInput,
     convoCtx,
+    routingHints,
   } = args;
 
   const effectiveFacets = resolveEffectiveFacets({
@@ -131,11 +133,15 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     tenantId,
     userInput,
     facets: effectiveFacets,
+    routingHints: routingHints || null,
   });
 
   const blocks: string[] = [];
 
-  if (effectiveFacets.asksSchedules === true) {
+  if (
+    effectiveFacets.asksSchedules === true &&
+    facetTargets.scheduleTarget.type !== "none"
+  ) {
     const scheduleBlock = buildScheduleBlock({
       idiomaDestino,
       infoClave,
@@ -147,7 +153,10 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     }
   }
 
-  if (effectiveFacets.asksLocation === true) {
+  if (
+    effectiveFacets.asksLocation === true &&
+    facetTargets.locationTarget.type === "general"
+  ) {
     const locationBody = buildLocationBlockFromInfoClave(infoClave);
 
     const locationBlock = withSectionTitle(
@@ -162,7 +171,10 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     }
   }
 
-  if (effectiveFacets.asksAvailability === true) {
+  if (
+    effectiveFacets.asksAvailability === true &&
+    facetTargets.availabilityTarget.type === "general"
+  ) {
     const availabilityBody = buildAvailabilityBlockFromInfoClave(infoClave);
 
     const availabilityBlock = withSectionTitle(

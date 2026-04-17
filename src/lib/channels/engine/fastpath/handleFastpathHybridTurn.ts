@@ -14,6 +14,7 @@ import {
 } from "./buildFastpathTurnPolicy";
 import { getCanonicalCatalogRouteDecision } from "./getCanonicalCatalogRouteDecision";
 import { decideTurnContinuation } from "../continuation/decideTurnContinuation";
+import type { CatalogTurnAugmentation } from "../turn/types";
 
 export type FastpathHybridRoute =
   | "catalog"
@@ -40,6 +41,7 @@ export type FastpathHybridArgs = {
   referentialFollowup?: boolean;
   followupNeedsAnchor?: boolean;
   followupEntityKind?: "service" | "plan" | "package" | null;
+  turnAugmentation?: CatalogTurnAugmentation | null;
 };
 
 export type FastpathHybridResult = {
@@ -60,6 +62,8 @@ export type FastpathHybridResult = {
         variantName: string;
       }>;
     };
+    needsCatalogClarification?: boolean;
+    clarificationSource?: "visual_reference" | null;
   };
 };
 
@@ -255,45 +259,10 @@ function decideHybridDomain(input: {
     };
   }
 
-  if (input.detectedRoutingHints?.catalogScope === "targeted") {
-    return {
-      routeTarget: "catalog",
-      reason: "catalog_targeted_signal",
-    };
-  }
-
-  if (
-    input.asksSchedules ||
-    input.asksLocation ||
-    input.asksAvailability ||
-    (input.detectedRoutingHints?.businessInfoScope &&
-      input.detectedRoutingHints.businessInfoScope !== "none")
-  ) {
-    return {
-      routeTarget: "business_info",
-      reason: "business_info_signal",
-    };
-  }
-
-  if (
-    (input.detectedRoutingHints?.catalogScope === "overview" &&
-      input.asksPrices) ||
-    (input.previewShouldRouteCatalog &&
-      input.asksPrices &&
-      input.detectedRoutingHints?.businessInfoScope === "none")
-  ) {
-    return {
-      routeTarget: "catalog",
-      reason: "catalog_overview_signal",
-    };
-  }
-
   const hasCurrentTurnCatalogEvidence =
     canonicalResolutionKind === "resolved_single" ||
     canonicalResolutionKind === "resolved_service_variant_ambiguous" ||
-    canonicalResolutionKind === "ambiguous" ||
-    input.previewClassificationKind === "entity_specific" ||
-    input.previewClassificationKind === "catalog_family";
+    canonicalResolutionKind === "ambiguous";
 
   if (
     shouldUseConversationAnchor({
@@ -320,6 +289,23 @@ function decideHybridDomain(input: {
         input.conversationAnchor?.domain === "business_info"
           ? "business_info_anchor_continuation"
           : "catalog_anchor_continuation",
+    };
+  }
+
+  const hasExplicitBusinessInfoScope =
+    Boolean(
+      input.detectedRoutingHints?.businessInfoScope &&
+      input.detectedRoutingHints.businessInfoScope !== "none"
+    );
+
+  if (
+    hasExplicitBusinessInfoScope &&
+    !input.asksPrices &&
+    canonicalResolutionKind === "none"
+  ) {
+    return {
+      routeTarget: "business_info",
+      reason: "business_info_signal",
     };
   }
 
@@ -586,12 +572,20 @@ export async function handleFastpathHybridTurn(
     contactoNorm,
     referentialFollowup,
     followupNeedsAnchor,
+    turnAugmentation,
   } = args;
 
   const currentIntent = detectedIntent || intentFallback || null;
   const normalizedCurrentIntent = String(currentIntent || "")
     .trim()
     .toLowerCase();
+
+  const catalogResolvableText =
+    String(turnAugmentation?.catalogResolvableText || "").trim() ||
+    String(userInput || "").trim();
+
+  const hasVisualCatalogContext =
+    turnAugmentation?.hasVisualCatalogContext === true;
 
   const asksPrices = detectedFacets?.asksPrices === true;
   const asksSchedules = detectedFacets?.asksSchedules === true;
@@ -611,7 +605,6 @@ export async function handleFastpathHybridTurn(
     (
       normalizedCurrentIntent === "duda" ||
       normalizedCurrentIntent === "info_general" ||
-      normalizedCurrentIntent === "info_servicio" ||
       normalizedCurrentIntent === ""
     );
 
@@ -648,7 +641,7 @@ export async function handleFastpathHybridTurn(
     hasPendingCatalogChoice || hasVariantSelectionContinuation;
 
   const previewClassificationInput = buildCatalogReferenceClassificationInput({
-    userText: userInput,
+    userText: catalogResolvableText,
     convoCtx,
     catalogReferenceIntent: null,
     isCatalogOverviewIntent:
@@ -686,7 +679,7 @@ export async function handleFastpathHybridTurn(
     : await getCanonicalCatalogRouteDecision({
         pool,
         tenantId,
-        userInput,
+        userInput: catalogResolvableText,
       });
 
   const canonicalResolutionMeta = extractCanonicalCatalogResolutionMeta({
@@ -730,6 +723,49 @@ export async function handleFastpathHybridTurn(
         reason: "explicit_exit_intent",
       }
     : rawContinuationDecision;
+
+    const canonicalResolutionKind = String(
+    rawCanonicalCatalogRouteDecision?.resolutionKind || "none"
+  ).trim();
+
+  const unresolvedVisualCatalogReference =
+    hasVisualCatalogContext &&
+    canonicalResolutionKind !== "resolved_single" &&
+    canonicalResolutionKind !== "resolved_service_variant_ambiguous" &&
+    (
+      normalizedCurrentIntent === "info_servicio" ||
+      normalizedCurrentIntent === "precio" ||
+      normalizedCurrentIntent === "duda" ||
+      normalizedCurrentIntent === ""
+    );
+
+  if (unresolvedVisualCatalogReference) {
+    console.log("[FASTPATH_HYBRID][VISUAL_CATALOG_UNRESOLVED]", {
+      tenantId,
+      canal,
+      contactoNorm,
+      userInput,
+      catalogResolvableText,
+      canonicalResolutionKind,
+    });
+
+    return {
+      handled: false,
+      routeTarget: "catalog",
+      intent: currentIntent,
+      routeContext: {
+        catalogReferenceClassification: effectiveCatalogReferenceClassification,
+        canonicalCatalogResolution: {
+          resolutionKind: canonicalResolutionKind,
+          resolvedServiceId: canonicalResolutionMeta.resolvedServiceId,
+          resolvedServiceName: canonicalResolutionMeta.resolvedServiceName,
+          variantOptions: canonicalResolutionMeta.variantOptions,
+        },
+        needsCatalogClarification: true,
+        clarificationSource: "visual_reference",
+      } as any,
+    };
+  }
 
   const domainDecision = decideHybridDomain({
     hasPendingCatalogChoice,

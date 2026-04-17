@@ -42,6 +42,7 @@ type ResolveUnhandledTurnFallbackResult = {
   reply: string;
   source:
     | "explicit_exit_fallback"
+    | "payment_fallback"
     | "unhandled_turn_business_info_fallback"
     | "unhandled_turn_generic_fallback"
     | "unhandled_turn_post_completion_courtesy";
@@ -55,37 +56,15 @@ function toTrimmedString(value: unknown): string {
 
 function isExplicitExitIntent(intent: string | null): boolean {
   const normalized = toTrimmedString(intent).toLowerCase();
-
   return normalized === "no_interesado" || normalized === "despedida";
+}
+
+function isPaymentIntent(intent: string | null): boolean {
+  return toTrimmedString(intent).toLowerCase() === "pago";
 }
 
 function buildLastResortFallbackText(): string {
   return "I can help you with information about services, schedules, pricing, location, or bookings. Tell me what you’d like to know and I’ll guide you.";
-}
-
-function buildCourtesyInstruction(
-  conversationState?: {
-    activeFlow?: string | null;
-    activeStep?: string | null;
-  } | null
-): string {
-  const activeFlow = toTrimmedString(conversationState?.activeFlow);
-  const activeStep = toTrimmedString(conversationState?.activeStep);
-
-  const stateContext =
-    activeFlow && activeStep
-      ? `Conversation state: flow=${activeFlow}, step=${activeStep}.`
-      : "Conversation state indicates a completed flow.";
-
-  return [
-    "The user is sending a brief courtesy or acknowledgment after a completed process.",
-    stateContext,
-    "Reply with a short courtesy acknowledgment only.",
-    "Do not introduce business overview, service list, pricing, location, schedules, or booking explanation.",
-    "Do not restart discovery.",
-    "Do not ask broad follow-up questions.",
-    "A brief optional soft closing is allowed only if it does not reopen the sales flow.",
-  ].join(" ");
 }
 
 async function resolvePostCompletionCourtesyFallback(
@@ -234,19 +213,25 @@ async function resolveExplicitExitFallback(
     maxLines: 9999,
   });
 
-  const reply = toTrimmedString(rendered.reply);
+  return {
+    handled: true,
+    reply: toTrimmedString(rendered.reply),
+    source: "explicit_exit_fallback",
+    intent: finalIntent,
+    ctxPatch: rendered.ctxPatch || exitCtxPatch,
+  };
+}
 
-  if (reply) {
-    return {
-      handled: true,
-      reply,
-      source: "explicit_exit_fallback",
-      intent: finalIntent,
-      ctxPatch: rendered.ctxPatch || exitCtxPatch,
-    };
-  }
+async function resolvePaymentFallback(
+  args: ResolveUnhandledTurnFallbackArgs,
+  finalIntent: string
+): Promise<ResolveUnhandledTurnFallbackResult> {
+  const paymentCtxPatch = {
+    ...(args.ctxPatch || {}),
+    actionContext: null,
+  };
 
-  const renderedFallback = await renderFastpathDmReply({
+  const rendered = await renderFastpathDmReply({
     tenantId: args.tenantId,
     canal: args.canal,
     idiomaDestino: args.idiomaDestino,
@@ -257,7 +242,7 @@ async function resolveExplicitExitFallback(
     fastpathText: "",
     fp: {
       reply: "",
-      source: "explicit_exit_fallback",
+      source: "payment_fallback",
       intent: finalIntent,
       catalogPayload: undefined,
     },
@@ -285,27 +270,27 @@ async function resolveExplicitExitFallback(
       canonicalBodyOwnsClosing: false,
       clarificationTarget: null,
       commercialPolicy: {
-        purchaseIntent: "low",
+        purchaseIntent: args.detectedCommercial?.purchaseIntent ?? "medium",
         wantsBooking: false,
-        wantsQuote: false,
-        wantsHuman: false,
-        urgency: "low",
-        shouldUseSalesTone: false,
+        wantsQuote: args.detectedCommercial?.wantsQuote === true,
+        wantsHuman: args.detectedCommercial?.wantsHuman === true,
+        urgency: args.detectedCommercial?.urgency ?? "low",
+        shouldUseSalesTone: true,
         shouldUseSoftClosing: true,
         shouldUseDirectClosing: false,
         shouldSuggestHumanHandoff: false,
       },
     }),
-    ctxPatch: exitCtxPatch,
+    ctxPatch: paymentCtxPatch,
     maxLines: 9999,
   });
 
   return {
     handled: true,
-    reply: toTrimmedString(renderedFallback.reply),
-    source: "explicit_exit_fallback",
+    reply: toTrimmedString(rendered.reply),
+    source: "payment_fallback",
     intent: finalIntent,
-    ctxPatch: renderedFallback.ctxPatch || exitCtxPatch,
+    ctxPatch: rendered.ctxPatch || paymentCtxPatch,
   };
 }
 
@@ -340,6 +325,10 @@ export async function resolveUnhandledTurnFallback(
 
   if (isExplicitExitIntent(finalIntent)) {
     return await resolveExplicitExitFallback(args, finalIntent);
+  }
+
+  if (isPaymentIntent(finalIntent)) {
+    return await resolvePaymentFallback(args, finalIntent);
   }
 
   const canonicalBusinessInfoBody =

@@ -1,5 +1,6 @@
 // src/lib/channels/engine/businessInfo/resolveBusinessInfoFacetTargets.ts
 import type { Pool } from "pg";
+import type { IntentRoutingHints } from "../../../detectarIntencion";
 import { resolveServiceCandidatesFromText } from "../../../services/pricing/resolveServiceIdFromText";
 
 export type BusinessInfoScheduleTarget =
@@ -30,6 +31,7 @@ type ResolveBusinessInfoFacetTargetsArgs = {
     asksLocation?: boolean;
     asksAvailability?: boolean;
   };
+  routingHints?: IntentRoutingHints | null;
 };
 
 function hasMeaningfulFacets(args: ResolveBusinessInfoFacetTargetsArgs): boolean {
@@ -46,6 +48,27 @@ function buildDefaultTargets(): BusinessInfoFacetTargets {
     locationTarget: { type: "none" },
     availabilityTarget: { type: "none" },
   };
+}
+
+function hasExplicitGeneralScheduleScope(
+  args: ResolveBusinessInfoFacetTargetsArgs
+): boolean {
+  const scope = String(args.routingHints?.businessInfoScope || "").trim().toLowerCase();
+  return scope === "schedule" || scope === "overview";
+}
+
+function hasExplicitGeneralLocationScope(
+  args: ResolveBusinessInfoFacetTargetsArgs
+): boolean {
+  const scope = String(args.routingHints?.businessInfoScope || "").trim().toLowerCase();
+  return scope === "location" || scope === "overview";
+}
+
+function hasExplicitGeneralAvailabilityScope(
+  args: ResolveBusinessInfoFacetTargetsArgs
+): boolean {
+  const scope = String(args.routingHints?.businessInfoScope || "").trim().toLowerCase();
+  return scope === "availability" || scope === "overview";
 }
 
 export async function resolveBusinessInfoFacetTargets(
@@ -71,17 +94,23 @@ export async function resolveBusinessInfoFacetTargets(
         serviceId: resolved.hit.id,
         serviceName: resolved.hit.name,
       };
-    } else {
+    } else if (hasExplicitGeneralScheduleScope(args)) {
       targets.scheduleTarget = { type: "general" };
+    } else {
+      targets.scheduleTarget = { type: "none" };
     }
   }
 
   if (args.facets.asksLocation === true) {
-    targets.locationTarget = { type: "general" };
+    targets.locationTarget = hasExplicitGeneralLocationScope(args)
+      ? { type: "general" }
+      : { type: "none" };
   }
 
   if (args.facets.asksAvailability === true) {
-    targets.availabilityTarget = { type: "general" };
+    targets.availabilityTarget = hasExplicitGeneralAvailabilityScope(args)
+      ? { type: "general" }
+      : { type: "none" };
   }
 
   return targets;
