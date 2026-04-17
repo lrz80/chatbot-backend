@@ -414,15 +414,26 @@ function buildIntentRoutingHints(args: {
     asksAvailability && !asksPrices && !asksSchedules && !asksLocation;
 
   const isGeneralScope = scope === "general";
+  const isCatalogScoped =
+    scope === "entity" || scope === "family" || scope === "variant";
 
   const businessInfoScope: IntentRoutingHints["businessInfoScope"] =
-    intent === "info_general" && isGeneralScope
+    intent === "info_general" && (isGeneralScope || scope === "none")
       ? "overview"
-      : intent === "horario" && hasOnlyScheduleFacet && isGeneralScope
+      : intent === "horario" &&
+        hasOnlyScheduleFacet &&
+        !asksPrices &&
+        !isCatalogScoped
       ? "schedule"
-      : intent === "ubicacion" && hasOnlyLocationFacet && isGeneralScope
+      : intent === "ubicacion" &&
+        hasOnlyLocationFacet &&
+        !asksPrices &&
+        !isCatalogScoped
       ? "location"
-      : intent === "disponibilidad" && hasOnlyAvailabilityFacet && isGeneralScope
+      : intent === "disponibilidad" &&
+        hasOnlyAvailabilityFacet &&
+        !asksPrices &&
+        !isCatalogScoped
       ? "availability"
       : "none";
 
