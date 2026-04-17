@@ -471,9 +471,32 @@ async function buildGroundedFrameOnly(input: {
             "Do not replace an explicit tenant CTA with a generic closing.",
             "Return one short closing that keeps the conversation moving naturally only when there is no explicit tenant CTA.",
           ]
+        : input.replyPolicy.answerType === "action_link"
+        ? [
+            "This is a grounded action-link turn.",
+            input.replyPolicy.shouldForceNullIntro
+              ? "Intro must be null."
+              : "Return exactly one short intro before the canonical body.",
+            input.replyPolicy.shouldForceNullClosing
+              ? "Closing must be null."
+              : "Return exactly one short closing after the canonical body.",
+            "You are only framing the canonical body.",
+            "The canonical body is the action link and must be preserved exactly.",
+            "Do not rewrite, summarize, paraphrase, compress, expand, or replace the canonical body.",
+            "Do not mention facts not explicit in the canonical body.",
+            "Do not restate schedules, prices, conditions, availability, or booking steps outside the canonical body.",
+            "Do not ask the user to choose a time, date, slot, or booking option after the link.",
+            "Do not ask a transactional booking follow-up question after the link.",
+            "If intro is allowed, it should briefly acknowledge the next step in a natural DM tone.",
+            "If intro is allowed, it must feel human, warm, and direct, without sounding like a template or system message.",
+            "Do not make the intro long.",
+            "The closing must be soft, brief, low-pressure, and non-transactional.",
+            "The closing should sound like availability for further help, not like a booking question.",
+            "The closing must not be a question about scheduling.",
+            "If PROMPT_BASE contains an explicit tenant CTA for this kind of turn, prefer it only if it does not push the user into another booking-step question.",
+          ]
         : input.replyPolicy.answerType === "direct_answer" ||
-          input.replyPolicy.answerType === "comparison" ||
-          input.replyPolicy.answerType === "action_link"
+          input.replyPolicy.answerType === "comparison"
         ? [
             "This is a resolved grounded answer.",
             input.replyPolicy.shouldForceNullIntro
@@ -821,7 +844,7 @@ export async function renderFastpathDmReply(
   const isExternalActionLinkReply =
     externalAction?.type === "link" &&
     normalizeText(externalAction?.targetUrl).length > 0;
-    
+
   const isStandaloneActionLinkReply =
     fpSource === "external_action_link" || isExternalActionLinkReply;
 
@@ -1050,7 +1073,7 @@ export async function renderFastpathDmReply(
         : replyPolicy.answerType === "comparison"
         ? "This is a comparison turn. Keep the body exact and use only a brief consultative frame."
         : replyPolicy.answerType === "action_link"
-        ? "This is an action-link turn. Preserve the body and keep framing minimal."
+        ? "This is an action-link turn. Preserve the body exactly, keep framing minimal, and close softly without asking a booking-step question."
         : "This is a direct grounded answer. Preserve the body and use only a brief conversational frame.",
       replyPolicy.shouldForceNullIntro
         ? "Intro must be null."

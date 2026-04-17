@@ -1128,7 +1128,7 @@ export async function procesarMensajeWhatsApp(
       },
       replyPolicy: buildStaticFastpathReplyPolicy({
         canal,
-        answerType: "direct_answer",
+        answerType: "action_link",
         replySourceKind: "business_info",
         responsePolicyMode: "grounded_frame_only",
         hasResolvedEntity: false,
