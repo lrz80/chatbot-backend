@@ -343,11 +343,12 @@ function resolveAnswerType(input: {
     return "action_link";
   }
 
-  if (
-    input.replySourceKind === "business_info" ||
-    input.isGroundedCatalogOverviewDm
-  ) {
+  if (input.replySourceKind === "business_info") {
     return "overview";
+  }
+
+  if (input.isGroundedCatalogOverviewDm) {
+    return "direct_answer";
   }
 
   if (
