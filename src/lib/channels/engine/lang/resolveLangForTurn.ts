@@ -331,7 +331,8 @@ export async function resolveLangForTurn(
   } else if (ambiguousTurn && storedLang) {
     idiomaDestino = storedLang;
   } else {
-    idiomaDestino = normalizedTenantBase;
+  idiomaDestino =
+    normalizeLangCode(langRes.finalLang) ?? normalizedTenantBase;
   }
 
   const normalizedToken = normalizeChoice(text);
