@@ -225,20 +225,6 @@ function decideHybridDomain(input: {
     }
   }
 
-  const hasExplicitCatalogExecutionSignal =
-    input.asksPrices ||
-    input.asksSchedules ||
-    input.asksAvailability ||
-    input.detectedRoutingHints?.catalogScope === "overview" ||
-    (
-      input.detectedRoutingHints?.catalogScope === "targeted" &&
-      (
-        input.normalizedCurrentIntent === "precio" ||
-        input.normalizedCurrentIntent === "planes_precios" ||
-        input.normalizedCurrentIntent === "horario"
-      )
-    );
-    
   const canonicalResolutionKind = String(
     input.canonicalCatalogRouteDecision?.resolutionKind || "none"
   ).trim();
@@ -247,11 +233,8 @@ function decideHybridDomain(input: {
     input.canonicalCatalogRouteDecision?.shouldRouteCatalog === true;
 
   if (
-    (
-      canonicalResolutionKind === "resolved_single" ||
-      canonicalResolutionKind === "resolved_service_variant_ambiguous"
-    ) &&
-    hasExplicitCatalogExecutionSignal
+    canonicalResolutionKind === "resolved_single" ||
+    canonicalResolutionKind === "resolved_service_variant_ambiguous"
   ) {
     return {
       routeTarget: "catalog",

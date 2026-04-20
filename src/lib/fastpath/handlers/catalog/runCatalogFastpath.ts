@@ -417,7 +417,18 @@ function isExplicitCatalogQuestion(params: {
     params.routeIntent === "referential_followup" ||
     params.intentOut === "precio" ||
     params.intentOut === "planes_precios" ||
-    params.intentOut === "info_servicio" ||
+    (
+      params.intentOut === "info_servicio" &&
+      (
+        params.routeIntent === "entity_detail" ||
+        params.routeIntent === "variant_detail" ||
+        params.asksIncludesOnly === true ||
+        (
+          params.asksSchedules === true &&
+          params.routeIntent === "catalog_includes"
+        )
+      )
+    ) ||
     params.intentOut === "combination_and_price" ||
     params.asksPrices === true ||
     params.asksIncludesOnly === true ||
@@ -429,6 +440,62 @@ function isExplicitCatalogQuestion(params: {
       )
     )
   );
+}
+
+function shouldTreatAsGenericServiceInterest(params: {
+  intentOutNorm: string;
+  routeIntent: string;
+  asksPrices: boolean;
+  asksIncludesOnly: boolean;
+  asksSchedules: boolean;
+  asksAvailability: boolean;
+  hasPendingCatalogChoice: boolean;
+  hasPendingSelectedVariant: boolean;
+  hasTargetVariantId: boolean;
+  hasIncomingCanonicalVariantAmbiguous: boolean;
+}): boolean {
+  const {
+    intentOutNorm,
+    routeIntent,
+    asksPrices,
+    asksIncludesOnly,
+    asksSchedules,
+    asksAvailability,
+    hasPendingCatalogChoice,
+    hasPendingSelectedVariant,
+    hasTargetVariantId,
+    hasIncomingCanonicalVariantAmbiguous,
+  } = params;
+
+  if (intentOutNorm !== "info_servicio") {
+    return false;
+  }
+
+  if (asksPrices || asksIncludesOnly || asksSchedules || asksAvailability) {
+    return false;
+  }
+
+  if (
+    routeIntent === "catalog_price" ||
+    routeIntent === "catalog_includes" ||
+    routeIntent === "variant_detail" ||
+    routeIntent === "catalog_combination" ||
+    routeIntent === "catalog_compare" ||
+    routeIntent === "catalog_alternatives"
+  ) {
+    return false;
+  }
+
+  if (
+    hasPendingCatalogChoice ||
+    hasPendingSelectedVariant ||
+    hasTargetVariantId ||
+    hasIncomingCanonicalVariantAmbiguous
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 async function resolveCanonicalCatalogTarget(input: {
@@ -1268,6 +1335,19 @@ export async function runCatalogFastpath(
     asksSchedules,
   });
 
+  const isGenericServiceInterestTurn = shouldTreatAsGenericServiceInterest({
+    intentOutNorm,
+    routeIntent: executionRouteIntent || routeIntent,
+    asksPrices,
+    asksIncludesOnly,
+    asksSchedules,
+    asksAvailability: Boolean(input.facets?.asksAvailability),
+    hasPendingCatalogChoice: Boolean(pendingCatalogChoice),
+    hasPendingSelectedVariant: Boolean(pendingSelectedVariant),
+    hasTargetVariantId: Boolean(targetVariantId),
+    hasIncomingCanonicalVariantAmbiguous,
+  });
+
   type QuestionType =
     | "combination_and_price"
     | "price_or_plan"
@@ -1600,7 +1680,7 @@ export async function runCatalogFastpath(
         });
       }
 
-      if (!shouldForceResolvedVariant) {
+      if (!shouldForceResolvedVariant && !isGenericServiceInterestTurn) {
         const variantDisambiguationResult =
           await maybeBuildVariantDisambiguationResult({
             pool: input.pool,
@@ -1785,7 +1865,7 @@ export async function runCatalogFastpath(
     }
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
-      if (!shouldForceResolvedVariant) {
+      if (!shouldForceResolvedVariant && !isGenericServiceInterestTurn) {
         const variantDisambiguationResult =
           await maybeBuildVariantDisambiguationResult({
             pool: input.pool,
@@ -1908,7 +1988,7 @@ export async function runCatalogFastpath(
     });
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
-      if (!shouldForceResolvedVariant) {
+      if (!shouldForceResolvedVariant && !isGenericServiceInterestTurn) {
         const variantDisambiguationResult =
           await maybeBuildVariantDisambiguationResult({
             pool: input.pool,
