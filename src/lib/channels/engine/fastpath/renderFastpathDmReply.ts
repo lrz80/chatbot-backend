@@ -435,6 +435,11 @@ async function buildGroundedFrameOnly(input: {
   fpIntent: string;
   resolvedCatalogClosingMode: "default" | "availability_statement" | "none";
   replyPolicy: RenderFastpathDmReplyInput["replyPolicy"];
+    conversationFrame?: {
+    isOpeningTurn: boolean;
+    shouldUseContextualIntro: boolean;
+    dayPart: "morning" | "afternoon" | "evening" | null;
+  };
 }): Promise<{
   intro: string | null;
   closing: string | null;
@@ -465,7 +470,11 @@ async function buildGroundedFrameOnly(input: {
         : input.replyPolicy.answerType === "overview"
         ? [
             "This is a grounded business overview turn.",
-            "Intro must be null.",
+            input.conversationFrame?.shouldUseContextualIntro
+              ? "Return exactly one short intro before the canonical body."
+              : "Intro must be null.",
+            "If intro is present, it must be a brief contextual conversational opening aligned with the turn metadata.",
+            "If intro is present, it may naturally reflect the indicated day part in the target language.",
             "Do not ask a broad discovery question before the canonical body.",
             "Do not restate, summarize, or paraphrase the canonical body.",
             "If PROMPT_BASE contains an explicit tenant CTA, use that CTA as the closing.",
@@ -595,6 +604,10 @@ async function buildGroundedFrameOnly(input: {
       shouldUseSoftClosing: commercialPolicy.shouldUseSoftClosing,
       shouldUseDirectClosing: commercialPolicy.shouldUseDirectClosing,
       shouldSuggestHumanHandoff: commercialPolicy.shouldSuggestHumanHandoff,
+      isOpeningTurn: input.conversationFrame?.isOpeningTurn ?? false,
+      shouldUseContextualIntro:
+        input.conversationFrame?.shouldUseContextualIntro ?? false,
+      dayPart: input.conversationFrame?.dayPart ?? null,
     }),
     "",
     "PROMPT_BASE:",
@@ -742,6 +755,12 @@ export type RenderFastpathDmReplyInput = {
   };
   ctxPatch: any;
   maxLines?: number;
+
+  conversationFrame?: {
+    isOpeningTurn: boolean;
+    shouldUseContextualIntro: boolean;
+    dayPart: "morning" | "afternoon" | "evening" | null;
+  };
 };
 
 export type RenderFastpathDmReplyResult = {
@@ -1150,6 +1169,7 @@ export async function renderFastpathDmReply(
           ? "none"
           : "default",
       replyPolicy,
+      conversationFrame: input.conversationFrame,
     });
 
     if (isCatalogChoiceReply && !String(frame.intro || "").trim()) {
@@ -1169,6 +1189,7 @@ export async function renderFastpathDmReply(
             ? "none"
             : "default",
         replyPolicy,
+        conversationFrame: input.conversationFrame,
       });
     }
 
