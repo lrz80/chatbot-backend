@@ -12,6 +12,11 @@ export type HandleSingleServiceCatalogInput = {
   catalogRoutingSignal: any;
   catalogReferenceClassification?: any;
 
+  asksPrices?: boolean;
+  asksSchedules?: boolean;
+  asksLocation?: boolean;
+  asksAvailability?: boolean;
+
   rows: any[];
 
   catalogRouteIntent?: string | null;
@@ -194,15 +199,10 @@ export async function handleSingleServiceCatalog(
       : null,
   });
 
-  const asksSchedules =
-    input.catalogRoutingSignal?.asksSchedules === true ||
-    input.catalogReferenceClassification?.asksSchedules === true ||
-    false;
-
-  const asksPrices =
-    input.catalogRoutingSignal?.asksPrices === true ||
-    input.catalogReferenceClassification?.asksPrices === true ||
-    false;
+  const asksSchedules = input.asksSchedules === true;
+  const asksPrices = input.asksPrices === true;
+  const asksLocation = input.asksLocation === true;
+  const asksAvailability = input.asksAvailability === true;
 
   if (singleHit?.id) {
     const targetServiceId = toTrimmedString(singleHit.id);
@@ -527,9 +527,21 @@ export async function handleSingleServiceCatalog(
       (r) => String(r.service_id || "") === targetServiceId
     );
 
+    const isScheduleOnlyTurn =
+      asksSchedules === true &&
+      asksPrices !== true &&
+      asksLocation !== true &&
+      asksAvailability !== true;
+
     const hasServicePriceRow = !!matchedRow;
 
-    if (pricedVariants.length === 0 && !hasServicePriceRow && !asksSchedules) {
+    if (singleHit?.id && isScheduleOnlyTurn) {
+      return {
+        handled: false,
+      };
+    }
+
+    if (pricedVariants.length === 0 && !hasServicePriceRow && !isScheduleOnlyTurn) {
       const canonicalReply =
         input.idiomaDestino === "en"
           ? `• ${targetServiceName}\n• Price: not available in the catalog`
@@ -551,7 +563,7 @@ export async function handleSingleServiceCatalog(
       };
     }
 
-    if (matchedRow && !asksSchedules && asksPrices) {
+    if (matchedRow && !isScheduleOnlyTurn && asksPrices) {
       const min = toNullableNumber(matchedRow.min_price);
       const max = toNullableNumber(matchedRow.max_price);
 
