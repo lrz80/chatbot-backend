@@ -194,6 +194,16 @@ export async function handleSingleServiceCatalog(
       : null,
   });
 
+  const asksSchedules =
+    input.catalogRoutingSignal?.asksSchedules === true ||
+    input.catalogReferenceClassification?.asksSchedules === true ||
+    false;
+
+  const asksPrices =
+    input.catalogRoutingSignal?.asksPrices === true ||
+    input.catalogReferenceClassification?.asksPrices === true ||
+    false;
+
   if (singleHit?.id) {
     const targetServiceId = toTrimmedString(singleHit.id);
     const targetServiceName = toTrimmedString(singleHit.name);
@@ -443,7 +453,7 @@ export async function handleSingleServiceCatalog(
       };
     }
 
-    if (pricedVariants.length > 1 && !chosenVariant) {
+    if (pricedVariants.length > 1 && !chosenVariant && !asksSchedules) {
       console.log("[PRICE][single] multiple priced variants -> list for selection", {
         targetServiceId,
         targetServiceName,
@@ -519,7 +529,7 @@ export async function handleSingleServiceCatalog(
 
     const hasServicePriceRow = !!matchedRow;
 
-    if (pricedVariants.length === 0 && !hasServicePriceRow) {
+    if (pricedVariants.length === 0 && !hasServicePriceRow && !asksSchedules) {
       const canonicalReply =
         input.idiomaDestino === "en"
           ? `• ${targetServiceName}\n• Price: not available in the catalog`
@@ -541,7 +551,7 @@ export async function handleSingleServiceCatalog(
       };
     }
 
-    if (matchedRow) {
+    if (matchedRow && !asksSchedules && asksPrices) {
       const min = toNullableNumber(matchedRow.min_price);
       const max = toNullableNumber(matchedRow.max_price);
 
