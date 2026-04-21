@@ -233,8 +233,9 @@ function decideHybridDomain(input: {
     input.canonicalCatalogRouteDecision?.shouldRouteCatalog === true;
 
   if (
-    canonicalResolutionKind === "resolved_single" ||
-    canonicalResolutionKind === "resolved_service_variant_ambiguous"
+    (canonicalResolutionKind === "resolved_single" ||
+      canonicalResolutionKind === "resolved_service_variant_ambiguous") &&
+    !input.isGuidedBusinessEntryTurn
   ) {
     return {
       routeTarget: "catalog",
@@ -624,20 +625,6 @@ export async function handleFastpathHybridTurn(
 
   const isMixedScheduleAndPriceTurn = asksSchedules && asksPrices;
 
-  const isGuidedBusinessEntryTurn =
-    !asksSchedules &&
-    !asksPrices &&
-    !asksLocation &&
-    !asksAvailability &&
-    !detectedCommercial?.wantsBooking &&
-    !detectedCommercial?.wantsQuote &&
-    !detectedCommercial?.wantsHuman &&
-    (
-      normalizedCurrentIntent === "duda" ||
-      normalizedCurrentIntent === "info_general" ||
-      normalizedCurrentIntent === ""
-    );
-
   const hasPendingCatalogChoice =
     Boolean(convoCtx?.pendingCatalogChoice) &&
     (
@@ -656,6 +643,23 @@ export async function handleFastpathHybridTurn(
       convoCtx.presented_variant_options.length > 0
     );
 
+  const isGuidedBusinessEntryTurn =
+    !asksSchedules &&
+    !asksPrices &&
+    !asksLocation &&
+    !asksAvailability &&
+    !detectedCommercial?.wantsBooking &&
+    !detectedCommercial?.wantsQuote &&
+    !detectedCommercial?.wantsHuman &&
+    !hasPendingCatalogChoice &&
+    !hasVariantSelectionContinuation &&
+    (
+      normalizedCurrentIntent === "duda" ||
+      normalizedCurrentIntent === "info_general" ||
+      normalizedCurrentIntent === "info_servicio" ||
+      normalizedCurrentIntent === ""
+    );
+    
   const conversationAnchor = convoCtx?.conversationAnchor ?? null;
 
   const hasConversationAnchor =
