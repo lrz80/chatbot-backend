@@ -1354,7 +1354,7 @@ export async function runCatalogFastpath(
   console.log("[CATALOG][GENERIC_SERVICE_INTEREST_GUARD]", {
     userInput: input.userInput,
     intentOutNorm,
-    rawRouteIntent: routeIntent,
+    routeIntent,
     executionRouteIntent,
     asksPrices,
     asksIncludesOnly,
@@ -1668,6 +1668,136 @@ export async function runCatalogFastpath(
 
   if (executionRouteIntent === "catalog_includes" || executionRouteIntent === "entity_detail") {
     if (canonicalCatalogResolution?.status === "resolved_single") {
+            if (isGenericServiceInterestTurn) {
+        const { rows } = await input.pool.query<{
+          service_id: string;
+          service_name: string;
+          min_price: number | string | null;
+          max_price: number | string | null;
+          parent_service_id: string | null;
+          category: string | null;
+          catalog_role: string | null;
+        }>(
+          `
+          WITH variant_prices AS (
+            SELECT
+              s.id AS service_id,
+              s.name AS service_name,
+              s.parent_service_id,
+              s.category,
+              s.catalog_role,
+              MIN(v.price)::numeric AS min_price,
+              MAX(v.price)::numeric AS max_price
+            FROM services s
+            JOIN service_variants v
+              ON v.service_id = s.id
+             AND v.active = true
+            WHERE s.tenant_id = $1
+              AND s.active = true
+              AND v.price IS NOT NULL
+            GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
+          ),
+          base_prices AS (
+            SELECT
+              s.id AS service_id,
+              s.name AS service_name,
+              s.parent_service_id,
+              s.category,
+              s.catalog_role,
+              MIN(s.price_base)::numeric AS min_price,
+              MAX(s.price_base)::numeric AS max_price
+            FROM services s
+            WHERE s.tenant_id = $1
+              AND s.active = true
+              AND s.price_base IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM service_variants v
+                WHERE v.service_id = s.id
+                  AND v.active = true
+                  AND v.price IS NOT NULL
+              )
+            GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
+          )
+          SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role
+          FROM (
+            SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM variant_prices
+            UNION ALL
+            SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM base_prices
+          ) x;
+          `,
+          [input.tenantId]
+        );
+
+        const resolvedRoutingSignal = {
+          ...catalogRoutingSignal,
+          targetServiceId:
+            pendingSelectedVariant?.serviceId || canonicalCatalogResolution.serviceId,
+          targetServiceName:
+            pendingSelectedVariant?.serviceName || canonicalCatalogResolution.serviceName,
+          targetVariantId: null,
+          targetVariantName: null,
+          targetFamilyKey: null,
+          targetFamilyName: null,
+          targetLevel: "service",
+          disambiguationType: "none",
+        };
+
+        const singleServiceCatalogResult = await handleSingleServiceCatalog({
+          pool: input.pool,
+          tenantId: input.tenantId,
+          userInput: input.userInput,
+          idiomaDestino: input.idiomaDestino,
+          convoCtx: input.convoCtx,
+          routeIntent: executionRouteIntent,
+          catalogRoutingSignal: resolvedRoutingSignal,
+          catalogReferenceClassification: input.catalogReferenceClassification,
+          rows,
+          catalogRouteIntent: executionRouteIntent,
+        });
+
+        if (singleServiceCatalogResult.handled) {
+          return {
+            ...singleServiceCatalogResult,
+            ctxPatch: {
+              ...(singleServiceCatalogResult.ctxPatch || {}),
+              ...clearPendingCatalogChoiceCtxPatch(),
+            },
+          };
+        }
+
+        const resolvedServiceDetailResult = await handleResolvedServiceDetail({
+          pool: input.pool,
+          userInput: input.userInput,
+          idiomaDestino: input.idiomaDestino,
+          intentOut: input.intentOut || "info_servicio",
+          hit: {
+            serviceId:
+              pendingSelectedVariant?.serviceId ||
+              canonicalCatalogResolution.serviceId,
+            id:
+              pendingSelectedVariant?.serviceId ||
+              canonicalCatalogResolution.serviceId,
+          },
+          traducirMensaje: async (texto: string) => texto,
+          convoCtx: input.convoCtx,
+        });
+
+        if (resolvedServiceDetailResult.handled) {
+          return {
+            ...resolvedServiceDetailResult,
+            ctxPatch: {
+              ...(resolvedServiceDetailResult.ctxPatch || {}),
+              ...clearPendingCatalogChoiceCtxPatch(),
+            },
+          };
+        }
+
+        return {
+          handled: false,
+        };
+      }
+      
       const canonicalVariantOptions = Array.isArray(
         input.canonicalCatalogResolution?.variantOptions
       )
