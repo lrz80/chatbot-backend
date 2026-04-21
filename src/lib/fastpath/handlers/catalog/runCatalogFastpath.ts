@@ -497,6 +497,44 @@ function shouldTreatAsGenericServiceInterest(params: {
   return true;
 }
 
+function shouldOpenVariantChoiceForTurn(params: {
+  routeIntent: string;
+  intentOutNorm: string;
+  asksPrices: boolean;
+  asksIncludesOnly: boolean;
+  asksSchedules: boolean;
+  asksAvailability: boolean;
+  hasPendingCatalogChoice: boolean;
+  hasPendingSelectedVariant: boolean;
+  hasTargetVariantId: boolean;
+  hasIncomingCanonicalVariantAmbiguous: boolean;
+}): boolean {
+  if (
+    shouldTreatAsGenericServiceInterest({
+      intentOutNorm: params.intentOutNorm,
+      routeIntent: params.routeIntent,
+      asksPrices: params.asksPrices,
+      asksIncludesOnly: params.asksIncludesOnly,
+      asksSchedules: params.asksSchedules,
+      asksAvailability: params.asksAvailability,
+      hasPendingCatalogChoice: params.hasPendingCatalogChoice,
+      hasPendingSelectedVariant: params.hasPendingSelectedVariant,
+      hasTargetVariantId: params.hasTargetVariantId,
+      hasIncomingCanonicalVariantAmbiguous:
+        params.hasIncomingCanonicalVariantAmbiguous,
+    })
+  ) {
+    return false;
+  }
+
+  return shouldRequireVariantChoice({
+    routeIntent: params.routeIntent,
+    asksPrices: params.asksPrices,
+    asksIncludesOnly: params.asksIncludesOnly,
+    asksSchedules: params.asksSchedules,
+  });
+}
+
 async function resolveCanonicalCatalogTarget(input: {
   pool: Pool;
   tenantId: string;
@@ -995,7 +1033,7 @@ export async function runCatalogFastpath(
   console.log("[RUN_CATALOG_FASTPATH_ENTRY]", {
     userInput: input.userInput,
   });
-  
+
   const catalogRoutingSignal = input.catalogRoutingSignal;
 
   const incomingCanonicalResolution = normalizeIncomingCanonicalResolution(
@@ -1343,6 +1381,19 @@ export async function runCatalogFastpath(
   });
 
   const isGenericServiceInterestTurn = shouldTreatAsGenericServiceInterest({
+    intentOutNorm,
+    routeIntent: executionRouteIntent || routeIntent,
+    asksPrices,
+    asksIncludesOnly,
+    asksSchedules,
+    asksAvailability: Boolean(input.facets?.asksAvailability),
+    hasPendingCatalogChoice: Boolean(pendingCatalogChoice),
+    hasPendingSelectedVariant: Boolean(pendingSelectedVariant),
+    hasTargetVariantId: Boolean(targetVariantId),
+    hasIncomingCanonicalVariantAmbiguous,
+  });
+
+  const shouldOpenVariantChoice = shouldOpenVariantChoiceForTurn({
     intentOutNorm,
     routeIntent: executionRouteIntent || routeIntent,
     asksPrices,
@@ -1818,6 +1869,7 @@ export async function runCatalogFastpath(
         : [];
 
       const shouldForceCanonicalVariantChoice =
+        shouldOpenVariantChoice &&
         String(input.canonicalCatalogResolution?.resolutionKind || "") ===
           "resolved_service_variant_ambiguous" &&
         canonicalVariantOptions.length > 1;
@@ -1833,7 +1885,7 @@ export async function runCatalogFastpath(
         });
       }
 
-      if (!shouldForceResolvedVariant && !isGenericServiceInterestTurn) {
+      if (!shouldForceResolvedVariant && shouldOpenVariantChoice) {
         const variantDisambiguationResult =
           await maybeBuildVariantDisambiguationResult({
             pool: input.pool,
@@ -1845,7 +1897,7 @@ export async function runCatalogFastpath(
             asksSchedules,
             originalIntent: disambiguationOriginalIntent,
             idiomaDestino: input.idiomaDestino,
-            forceSkip: isGenericServiceInterestTurn,
+            forceSkip: !shouldOpenVariantChoice,
           });
 
         if (variantDisambiguationResult) {
@@ -2019,7 +2071,7 @@ export async function runCatalogFastpath(
     }
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
-      if (!shouldForceResolvedVariant && !isGenericServiceInterestTurn) {
+      if (!shouldForceResolvedVariant && shouldOpenVariantChoice) {
         const variantDisambiguationResult =
           await maybeBuildVariantDisambiguationResult({
             pool: input.pool,
@@ -2031,7 +2083,7 @@ export async function runCatalogFastpath(
             asksSchedules,
             originalIntent: disambiguationOriginalIntent,
             idiomaDestino: input.idiomaDestino,
-            forceSkip: isGenericServiceInterestTurn,
+            forceSkip: !shouldOpenVariantChoice,
           });
 
         if (variantDisambiguationResult) {
@@ -2143,7 +2195,7 @@ export async function runCatalogFastpath(
     });
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
-      if (!shouldForceResolvedVariant && !isGenericServiceInterestTurn) {
+      if (!shouldForceResolvedVariant && shouldOpenVariantChoice) {
         const variantDisambiguationResult =
           await maybeBuildVariantDisambiguationResult({
             pool: input.pool,
@@ -2155,7 +2207,7 @@ export async function runCatalogFastpath(
             asksSchedules,
             originalIntent: disambiguationOriginalIntent,
             idiomaDestino: input.idiomaDestino,
-            forceSkip: isGenericServiceInterestTurn,
+            forceSkip: !shouldOpenVariantChoice,
           });
 
         if (variantDisambiguationResult) {
