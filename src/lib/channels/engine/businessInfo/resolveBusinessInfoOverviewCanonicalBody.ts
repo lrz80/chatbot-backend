@@ -102,6 +102,31 @@ function isLowAutonomyTurn(userInput: string): boolean {
   return false;
 }
 
+function shouldFocusSpecificServiceInGuidedEntry(input: {
+  userInput: string;
+  overviewMode: "general_overview" | "guided_entry";
+}): boolean {
+  if (input.overviewMode !== "guided_entry") {
+    return false;
+  }
+
+  const normalized = normalizeText(input.userInput);
+  if (!normalized) {
+    return false;
+  }
+
+  const tokens = tokenize(normalized);
+
+  // Turnos muy cortos siguen siendo entry amplio
+  if (tokens.length <= 3) {
+    return false;
+  }
+
+  // Si no está preguntando por precio/horario/ubicación/disponibilidad
+  // y sí describe un servicio/proyecto concreto, queremos enfoque específico.
+  return true;
+}
+
 function shouldSuppressOverviewForContinuation(input: {
   userInput: string;
   convoCtx?: any;
@@ -178,6 +203,10 @@ function buildSystemPrompt(params: {
           "- Do not ask questions in canonicalBody.",
           "- Do not include greetings, discovery questions, transition phrases, or next-step prompts in canonicalBody.",
           "- guided_entry must still be declarative and grounded.",
+          "- If USER_MESSAGE clearly points to one concrete service, project type, or offer path, canonicalBody must focus on that specific service only.",
+          "- In that case, do not list unrelated services, unrelated categories, or a broad company-wide overview.",
+          "- If BUSINESS_SOURCE supports that specific service, summarize only that service in a compact grounded way.",
+          "- If BUSINESS_SOURCE does not support that specific service, return empty canonicalBody instead of broadening to unrelated services.",
         ]
       : [
           "- This is a general business-information overview turn.",
@@ -233,6 +262,8 @@ function buildUserPrompt(params: {
     "- Return only the grounded canonicalBody for business-info scope.",
     "- If the turn is an early commercial-interest opening, do not return a cold encyclopedic service list.",
     "- If the turn is an early commercial-interest opening, return a short declarative overview of the main grounded service categories or offer paths supported by BUSINESS_SOURCE.",
+    "- If USER_MESSAGE clearly mentions one concrete service or project type, focus canonicalBody on that service only.",
+    "- When USER_MESSAGE is specific, do not broaden the answer into a full business summary and do not list unrelated services.",
     "- Do not ask the user a question inside canonicalBody.",
     "- Do not include greetings, hooks, prompts, CTAs, or next-step invitations inside canonicalBody.",
     "- If the turn is a broad informational discovery turn, you may return a concise declarative overview of the main services.",
@@ -265,6 +296,9 @@ function buildRetryUserPrompt(params: {
     "- canonicalBody must not contain questions.",
     "- canonicalBody must not contain greetings, hooks, prompts, CTAs, or next-step invitations.",
     `- overviewMode is ${overviewMode}.`,
+    "- If USER_MESSAGE is specific to one service or project type, canonicalBody must stay focused on that service only.",
+    "- Do not broaden a specific service request into a general company overview.",
+    "- Do not list unrelated services when regenerating a specific guided-entry answer.",
     "",
     "TASK:",
     "- Regenerate the JSON strictly.",
@@ -324,6 +358,7 @@ function parseResolverOutput(raw: string): BusinessInfoResolverOutput | null {
 function isValidOverviewCanonicalBody(input: {
   canonicalBody: string;
   overviewMode: "general_overview" | "guided_entry";
+  userInput: string;
 }): boolean {
   const canonicalBody = toTrimmedString(input.canonicalBody);
   if (!canonicalBody) return false;
@@ -333,6 +368,25 @@ function isValidOverviewCanonicalBody(input: {
     input.overviewMode === "guided_entry"
   ) {
     if (canonicalBody.includes("?")) {
+      return false;
+    }
+  }
+
+  const shouldFocusSpecific =
+    shouldFocusSpecificServiceInGuidedEntry({
+      userInput: input.userInput,
+      overviewMode: input.overviewMode,
+    });
+
+  if (shouldFocusSpecific) {
+    const normalizedBody = normalizeText(canonicalBody);
+
+    // Evita respuestas demasiado amplias para un guided_entry específico
+    if (
+      normalizedBody.includes("specializes in") &&
+      normalizedBody.includes("including") &&
+      normalizedBody.includes(",")
+    ) {
       return false;
     }
   }
@@ -384,6 +438,7 @@ async function resolveOverviewWithRetry(input: {
     isValidOverviewCanonicalBody({
       canonicalBody: firstParsed.canonicalBody,
       overviewMode: input.overviewMode,
+      userInput: input.userMessage,
     })
   ) {
     return firstParsed;
@@ -424,6 +479,7 @@ async function resolveOverviewWithRetry(input: {
     !isValidOverviewCanonicalBody({
       canonicalBody: retryParsed.canonicalBody,
       overviewMode: input.overviewMode,
+      userInput: input.userMessage,
     })
   ) {
     return null;
