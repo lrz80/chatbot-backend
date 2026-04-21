@@ -178,6 +178,7 @@ function decideHybridDomain(input: {
   inBooking: boolean;
   isMixedScheduleAndPriceTurn: boolean;
   isGuidedBusinessEntryTurn: boolean;
+  isScheduleOnlyTurn: boolean;
   asksPrices: boolean;
   asksSchedules: boolean;
   asksLocation: boolean;
@@ -232,10 +233,18 @@ function decideHybridDomain(input: {
   const canonicalShouldRouteCatalog =
     input.canonicalCatalogRouteDecision?.shouldRouteCatalog === true;
 
+  if (input.isScheduleOnlyTurn) {
+    return {
+      routeTarget: "business_info",
+      reason: "business_info_signal",
+    };
+  }
+
   if (
     (canonicalResolutionKind === "resolved_single" ||
       canonicalResolutionKind === "resolved_service_variant_ambiguous") &&
-    !input.isGuidedBusinessEntryTurn
+    !input.isGuidedBusinessEntryTurn &&
+    !input.isScheduleOnlyTurn
   ) {
     return {
       routeTarget: "catalog",
@@ -643,6 +652,12 @@ export async function handleFastpathHybridTurn(
       convoCtx.presented_variant_options.length > 0
     );
 
+  const isScheduleOnlyTurn =
+    asksSchedules === true &&
+    asksPrices !== true &&
+    asksLocation !== true &&
+    asksAvailability !== true;
+
   const isGuidedBusinessEntryTurn =
     !asksSchedules &&
     !asksPrices &&
@@ -659,7 +674,7 @@ export async function handleFastpathHybridTurn(
       normalizedCurrentIntent === "info_servicio" ||
       normalizedCurrentIntent === ""
     );
-    
+
   const conversationAnchor = convoCtx?.conversationAnchor ?? null;
 
   const hasConversationAnchor =
@@ -810,6 +825,7 @@ export async function handleFastpathHybridTurn(
     inBooking: args.inBooking,
     isMixedScheduleAndPriceTurn,
     isGuidedBusinessEntryTurn,
+    isScheduleOnlyTurn,
     asksPrices,
     asksSchedules,
     asksLocation,
