@@ -1396,6 +1396,13 @@ export async function runCatalogFastpath(
 
   const intentOutNorm = String(input.intentOut || "").trim().toLowerCase();
 
+  console.log("[CATALOG][INTENT_NORM_DEBUG]", {
+    userInput: input.userInput,
+    inputIntentOut: input.intentOut ?? null,
+    inputDetectedIntent: input.detectedIntent ?? null,
+    intentOutNorm,
+  });
+
   const isGenericCatalogOverviewByIntent =
     !hasAnyStructuredCatalogTarget &&
     (
@@ -1451,6 +1458,22 @@ export async function runCatalogFastpath(
     hasPendingSelectedVariant: Boolean(pendingSelectedVariant),
     hasTargetVariantId: Boolean(targetVariantId),
     hasIncomingCanonicalVariantAmbiguous,
+  });
+
+  console.log("[CATALOG][VARIANT_CHOICE_GATE_DEBUG]", {
+    userInput: input.userInput,
+    intentOutNorm,
+    routeIntent: executionRouteIntent || routeIntent,
+    asksPrices,
+    asksIncludesOnly,
+    asksSchedules,
+    asksAvailability: Boolean(input.facets?.asksAvailability),
+    hasPendingCatalogChoice: Boolean(pendingCatalogChoice),
+    hasPendingSelectedVariant: Boolean(pendingSelectedVariant),
+    hasTargetVariantId: Boolean(targetVariantId),
+    hasIncomingCanonicalVariantAmbiguous,
+    isGenericServiceInterestTurn,
+    shouldOpenVariantChoice,
   });
 
   console.log("[CATALOG][GENERIC_SERVICE_INTEREST_GUARD]", {
