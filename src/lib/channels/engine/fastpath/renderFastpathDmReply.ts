@@ -907,6 +907,15 @@ export async function renderFastpathDmReply(
   const isVariantChoiceReply = catalogPayload?.kind === "variant_choice";
   const isCatalogChoiceReply = isServiceChoiceReply || isVariantChoiceReply;
 
+  const effectiveReplyPolicy = isCatalogChoiceReply
+    ? {
+        ...replyPolicy,
+        shouldForceNullIntro: false,
+        shouldForceNullClosing: false,
+        shouldAskQuestion: true,
+      }
+    : replyPolicy;
+
   const isResolvedCatalogAnswer =
     catalogPayload?.kind === "resolved_catalog_answer" ||
     fpSource === "catalog_db";
@@ -1039,21 +1048,21 @@ export async function renderFastpathDmReply(
 
   const shouldAllowIntro =
     !isCatalogListReply &&
-    !replyPolicy.shouldForceNullIntro &&
+    !effectiveReplyPolicy.shouldForceNullIntro &&
     (
-      !bypassWriterModel || isResolvedCatalogAnswer
+      !bypassWriterModel || isResolvedCatalogAnswer || isCatalogChoiceReply
     );
 
   const shouldAllowOutro =
     resolvedCatalogClosingMode !== "none" &&
-    !replyPolicy.shouldForceNullClosing &&
-    !replyPolicy.canonicalBodyOwnsClosing;
+    !effectiveReplyPolicy.shouldForceNullClosing &&
+    !effectiveReplyPolicy.canonicalBodyOwnsClosing;
 
   const shouldEndWithSalesQuestion =
     resolvedCatalogClosingMode === "default" &&
-    !replyPolicy.shouldForceNullClosing &&
+    !effectiveReplyPolicy.shouldForceNullClosing &&
     !isCatalogChoiceReply &&
-    replyPolicy.shouldAskQuestion;
+    effectiveReplyPolicy.shouldAskQuestion;
 
   const responsePolicy = {
     mode: isCatalogChoiceReply
@@ -1077,8 +1086,8 @@ export async function renderFastpathDmReply(
       replyPolicy.hasResolvedEntity,
     canOfferBookingTimes: false,
     canUseOfficialLinks: true,
-    unresolvedEntity: replyPolicy.shouldOpenChoice,
-    clarificationTarget: replyPolicy.clarificationTarget,
+    unresolvedEntity: effectiveReplyPolicy.shouldOpenChoice,
+    clarificationTarget: effectiveReplyPolicy.clarificationTarget,
     singleResolvedEntityOnly:
       (isResolvedCatalogAnswer || replyPolicy.hasResolvedEntity) &&
       !isCatalogDbReply,
@@ -1168,7 +1177,7 @@ export async function renderFastpathDmReply(
           : resolvedCatalogClosingMode === "none"
           ? "none"
           : "default",
-      replyPolicy,
+      replyPolicy: effectiveReplyPolicy,
       conversationFrame: input.conversationFrame,
     });
 
@@ -1188,7 +1197,7 @@ export async function renderFastpathDmReply(
             : resolvedCatalogClosingMode === "none"
             ? "none"
             : "default",
-        replyPolicy,
+        replyPolicy: effectiveReplyPolicy,
         conversationFrame: input.conversationFrame,
       });
     }
@@ -1197,9 +1206,9 @@ export async function renderFastpathDmReply(
     const normalizedClosing = String(frame.closing || "").trim();
 
     const safeIntro =
-      replyPolicy.shouldForceNullIntro ? "" : normalizedIntro;
+      effectiveReplyPolicy.shouldForceNullIntro ? "" : normalizedIntro;
 
-    if (replyPolicy.shouldForceNullClosing || resolvedCatalogClosingMode === "none") {
+    if (effectiveReplyPolicy.shouldForceNullClosing || resolvedCatalogClosingMode === "none") {
       frame = {
         intro: safeIntro || null,
         closing: null,
