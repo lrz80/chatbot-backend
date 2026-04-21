@@ -246,6 +246,10 @@ export async function resolveLangForTurn(
   const explicitLang = detectExplicitLanguageSwitch(text);
   const threadLang = normalizeLangCode((convoCtx as any)?.thread_lang);
 
+  const preferredLang =
+    normalizeLangCode((convoCtx as any)?.preferred_lang) ??
+    normalizeLangCode((convoCtx as any)?.facts_summary?.preferred_lang);
+
   const estimateFlow = (convoCtx as any)?.estimateFlow;
   const estimateFlowActive =
     estimateFlow &&
@@ -273,7 +277,7 @@ export async function resolveLangForTurn(
   const baseResolution = resolveTurnLanguage({
     forcedLang: forcedLangThisTurn,
     detectedLang: langRes.detectedLang,
-    storedLang,
+    storedLang: preferredLang ?? storedLang,
     threadLang,
     tenantBase: normalizedTenantBase,
     policy: languagePolicy,
@@ -328,11 +332,15 @@ export async function resolveLangForTurn(
     });
   } else if (ambiguousTurn && threadLang) {
     idiomaDestino = threadLang;
+  } else if (ambiguousTurn && preferredLang) {
+    idiomaDestino = preferredLang;
   } else if (ambiguousTurn && storedLang) {
     idiomaDestino = storedLang;
+  } else if (preferredLang && !langRes.inBookingLang) {
+    idiomaDestino = preferredLang;
   } else {
-  idiomaDestino =
-    normalizeLangCode(langRes.finalLang) ?? normalizedTenantBase;
+    idiomaDestino =
+      normalizeLangCode(langRes.finalLang) ?? normalizedTenantBase;
   }
 
   const normalizedToken = normalizeChoice(text);

@@ -10,14 +10,14 @@ export type DetectIdiomaResult = {
   source: DetectIdiomaSource;
 };
 
-function normalizeLangCode(value: unknown): string | null {
+function normalizeLangCode(value: unknown): "es" | "en" | null {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return null;
 
-  const normalized = raw.replace("_", "-").split("-")[0]?.trim();
+  const normalized = raw.replace(/_/g, "-").split("-")[0]?.trim();
   if (!normalized) return null;
 
-  if (/^[a-z]{2}$/.test(normalized)) {
+  if (normalized === "es" || normalized === "en") {
     return normalized;
   }
 
@@ -87,12 +87,20 @@ export async function detectarIdioma(texto: string): Promise<DetectIdiomaResult>
         {
           role: "system",
           content: [
-            "Detect the primary language of the user's message.",
+            "Detect the dominant language of the user's message for reply purposes.",
             "Return valid JSON only.",
             'Use this exact schema: {"lang":"xx","confidence":0.0}.',
-            "lang must be a lowercase ISO 639-1 code when possible, such as en, es, pt, fr, it, de.",
-            "confidence must be a number between 0 and 1.",
-            "If the language cannot be determined reliably, return {\"lang\":null,\"confidence\":0}."
+            "Supported output languages are only: es or en.",
+            "Confidence must be a number between 0 and 1.",
+            "If the message is mixed-language, choose the language that carries the main user intent, not greetings, fillers, or isolated words.",
+            "Service names, product names, brands, and borrowed nouns do not define the reply language by themselves.",
+            "A short greeting like hi, hello, hola, or buenos does not outweigh the rest of the sentence.",
+            "If the language cannot be determined reliably between es and en, return {\"lang\":null,\"confidence\":0}.",
+            "Examples:",
+            'Input: "Hi, estoy interesada en las clases de cycling" -> {"lang":"es","confidence":0.92}',
+            'Input: "Hola, I want pricing" -> {"lang":"en","confidence":0.78}',
+            'Input: "hello" -> {"lang":"en","confidence":0.95}',
+            'Input: "hola" -> {"lang":"es","confidence":0.95}'
           ].join(" "),
         },
         {
