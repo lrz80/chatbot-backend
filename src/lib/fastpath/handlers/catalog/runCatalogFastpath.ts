@@ -1878,6 +1878,10 @@ export async function runCatalogFastpath(
           routeIntent: executionRouteIntent,
           catalogRoutingSignal: resolvedRoutingSignal,
           catalogReferenceClassification: input.catalogReferenceClassification,
+          asksPrices,
+          asksSchedules,
+          asksLocation: Boolean(input.facets?.asksLocation),
+          asksAvailability: Boolean(input.facets?.asksAvailability),
           rows,
           catalogRouteIntent: executionRouteIntent,
         });
@@ -2064,6 +2068,10 @@ export async function runCatalogFastpath(
         routeIntent: executionRouteIntent,
         catalogRoutingSignal: resolvedRoutingSignal,
         catalogReferenceClassification: input.catalogReferenceClassification,
+        asksPrices,
+        asksSchedules,
+        asksLocation: Boolean(input.facets?.asksLocation),
+        asksAvailability: Boolean(input.facets?.asksAvailability),
         rows,
         catalogRouteIntent: executionRouteIntent,
       });
@@ -2195,6 +2203,10 @@ export async function runCatalogFastpath(
         routeIntent: executionRouteIntent,
         catalogRoutingSignal: resolvedRoutingSignal,
         catalogReferenceClassification: input.catalogReferenceClassification,
+        asksPrices,
+        asksSchedules,
+        asksLocation: Boolean(input.facets?.asksLocation),
+        asksAvailability: Boolean(input.facets?.asksAvailability),
         rows,
         catalogRouteIntent: executionRouteIntent,
       });
@@ -2324,6 +2336,10 @@ export async function runCatalogFastpath(
         routeIntent: executionRouteIntent,
         catalogRoutingSignal: resolvedRoutingSignal,
         catalogReferenceClassification: input.catalogReferenceClassification,
+        asksPrices,
+        asksSchedules,
+        asksLocation: Boolean(input.facets?.asksLocation),
+        asksAvailability: Boolean(input.facets?.asksAvailability),
         rows,
         catalogRouteIntent: executionRouteIntent,
       });
