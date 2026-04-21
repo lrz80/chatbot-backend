@@ -1607,8 +1607,18 @@ export async function procesarMensajeWhatsApp(
       Boolean((convoCtx as any)?.last_plan_list?.length) ||
       Boolean((convoCtx as any)?.last_package_list?.length) ||
       Boolean((convoCtx as any)?.pending_link_lookup) ||
+      Boolean((convoCtx as any)?.pendingCatalogChoice) ||
       Boolean((convoCtx as any)?.last_service_id) ||
-      Boolean((convoCtx as any)?.structuredService);
+      Boolean((convoCtx as any)?.structuredService) ||
+      (
+        Array.isArray((convoCtx as any)?.presentedVariantOptions) &&
+        (convoCtx as any).presentedVariantOptions.length > 0
+      ) ||
+      (
+        Array.isArray((convoCtx as any)?.last_variant_options) &&
+        (convoCtx as any).last_variant_options.length > 0
+      ) ||
+      Boolean((convoCtx as any)?.continuationContext?.lastTurn);
 
     const normalizedInput = String(userInput || "")
       .normalize("NFD")
