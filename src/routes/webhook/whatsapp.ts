@@ -1610,14 +1610,6 @@ export async function procesarMensajeWhatsApp(
       Boolean((convoCtx as any)?.last_service_id) ||
       Boolean((convoCtx as any)?.structuredService);
 
-    const NEW_INTENT_RESET_SET = new Set<string>([
-      "agendar",
-      "booking_start",
-      "info_servicio",
-      "precio",
-      "planes_precios",
-    ]);
-
     const normalizedInput = String(userInput || "")
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
@@ -1652,12 +1644,24 @@ export async function procesarMensajeWhatsApp(
         !isClearlyLongSentence
       );
 
-    if (
-      intentNow &&
-      NEW_INTENT_RESET_SET.has(intentNow) &&
+    const shouldResetStaleSelectionContext =
+      Boolean(intentNow) &&
       hasStaleSelectionContext &&
-      !looksLikeSelectionReply
-    ) {
+      !looksLikeSelectionReply &&
+      (
+        detectedFacets?.asksSchedules === true ||
+        detectedFacets?.asksPrices === true ||
+        detectedFacets?.asksLocation === true ||
+        detectedFacets?.asksAvailability === true ||
+        intentNow === "agendar" ||
+        intentNow === "booking_start" ||
+        intentNow === "info_servicio" ||
+        intentNow === "precio" ||
+        intentNow === "planes_precios" ||
+        intentNow === "horario"
+      );
+
+    if (shouldResetStaleSelectionContext) {
       (convoCtx as any).expectingVariant = false;
       (convoCtx as any).selectedServiceId = null;
 
@@ -1732,7 +1736,6 @@ export async function procesarMensajeWhatsApp(
       };
     }
   }
-
   // ===============================
   // 🎯 Booking vs Info General de Horarios
   // ===============================
