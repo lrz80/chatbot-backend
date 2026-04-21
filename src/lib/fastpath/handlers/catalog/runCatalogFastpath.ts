@@ -529,9 +529,16 @@ function shouldOpenVariantChoiceForTurn(params: {
 
   return shouldRequireVariantChoice({
     routeIntent: params.routeIntent,
+    intentOutNorm: params.intentOutNorm,
     asksPrices: params.asksPrices,
     asksIncludesOnly: params.asksIncludesOnly,
     asksSchedules: params.asksSchedules,
+    asksAvailability: params.asksAvailability,
+    hasPendingCatalogChoice: params.hasPendingCatalogChoice,
+    hasPendingSelectedVariant: params.hasPendingSelectedVariant,
+    hasTargetVariantId: params.hasTargetVariantId,
+    hasIncomingCanonicalVariantAmbiguous:
+      params.hasIncomingCanonicalVariantAmbiguous,
   });
 }
 
@@ -589,17 +596,45 @@ async function resolveCanonicalCatalogTarget(input: {
 
 function shouldRequireVariantChoice(params: {
   routeIntent: string;
+  intentOutNorm: string;
   asksPrices: boolean;
   asksIncludesOnly: boolean;
   asksSchedules: boolean;
+  asksAvailability: boolean;
+  hasPendingCatalogChoice: boolean;
+  hasPendingSelectedVariant: boolean;
+  hasTargetVariantId: boolean;
+  hasIncomingCanonicalVariantAmbiguous: boolean;
 }): boolean {
+  if (
+    shouldTreatAsGenericServiceInterest({
+      intentOutNorm: params.intentOutNorm,
+      routeIntent: params.routeIntent,
+      asksPrices: params.asksPrices,
+      asksIncludesOnly: params.asksIncludesOnly,
+      asksSchedules: params.asksSchedules,
+      asksAvailability: params.asksAvailability,
+      hasPendingCatalogChoice: params.hasPendingCatalogChoice,
+      hasPendingSelectedVariant: params.hasPendingSelectedVariant,
+      hasTargetVariantId: params.hasTargetVariantId,
+      hasIncomingCanonicalVariantAmbiguous:
+        params.hasIncomingCanonicalVariantAmbiguous,
+    })
+  ) {
+    return false;
+  }
+
   return (
     params.routeIntent === "catalog_price" ||
     params.routeIntent === "catalog_includes" ||
     params.routeIntent === "variant_detail" ||
     params.asksPrices === true ||
     params.asksIncludesOnly === true ||
-    params.asksSchedules === true
+    params.asksSchedules === true ||
+    params.hasPendingCatalogChoice === true ||
+    params.hasPendingSelectedVariant === true ||
+    params.hasTargetVariantId === true ||
+    params.hasIncomingCanonicalVariantAmbiguous === true
   );
 }
 
@@ -744,6 +779,11 @@ async function maybeBuildVariantDisambiguationResult(input: {
   asksPrices: boolean;
   asksIncludesOnly: boolean;
   asksSchedules: boolean;
+  asksAvailability: boolean;
+  hasPendingCatalogChoice: boolean;
+  hasPendingSelectedVariant: boolean;
+  hasTargetVariantId: boolean;
+  hasIncomingCanonicalVariantAmbiguous: boolean;
   originalIntent: "precio" | "info_servicio";
   idiomaDestino: string;
   forceSkip?: boolean;
@@ -751,9 +791,16 @@ async function maybeBuildVariantDisambiguationResult(input: {
   if (
     !shouldRequireVariantChoice({
       routeIntent: input.routeIntent,
+      intentOutNorm: input.originalIntent === "precio" ? "precio" : "info_servicio",
       asksPrices: input.asksPrices,
       asksIncludesOnly: input.asksIncludesOnly,
       asksSchedules: input.asksSchedules,
+      asksAvailability: input.asksAvailability,
+      hasPendingCatalogChoice: input.hasPendingCatalogChoice,
+      hasPendingSelectedVariant: input.hasPendingSelectedVariant,
+      hasTargetVariantId: input.hasTargetVariantId,
+      hasIncomingCanonicalVariantAmbiguous:
+        input.hasIncomingCanonicalVariantAmbiguous,
     })
   ) {
     return null;
@@ -1606,7 +1653,7 @@ export async function runCatalogFastpath(
         ? Array.from(new Set(variantOptions.map((option) => option.serviceId)))
         : [];
 
-      if (allAreVariants && singleServiceId.length === 1) {
+      if (allAreVariants && singleServiceId.length === 1 && shouldOpenVariantChoice) {
         const serviceId = singleServiceId[0];
         const serviceName =
           variantOptions.find((option) => option.serviceId === serviceId)?.serviceName || null;
@@ -1895,6 +1942,11 @@ export async function runCatalogFastpath(
             asksPrices,
             asksIncludesOnly,
             asksSchedules,
+            asksAvailability: Boolean(input.facets?.asksAvailability),
+            hasPendingCatalogChoice: Boolean(pendingCatalogChoice),
+            hasPendingSelectedVariant: Boolean(pendingSelectedVariant),
+            hasTargetVariantId: Boolean(targetVariantId),
+            hasIncomingCanonicalVariantAmbiguous,
             originalIntent: disambiguationOriginalIntent,
             idiomaDestino: input.idiomaDestino,
             forceSkip: !shouldOpenVariantChoice,
@@ -2081,6 +2133,11 @@ export async function runCatalogFastpath(
             asksPrices,
             asksIncludesOnly,
             asksSchedules,
+            asksAvailability: Boolean(input.facets?.asksAvailability),
+            hasPendingCatalogChoice: Boolean(pendingCatalogChoice),
+            hasPendingSelectedVariant: Boolean(pendingSelectedVariant),
+            hasTargetVariantId: Boolean(targetVariantId),
+            hasIncomingCanonicalVariantAmbiguous,
             originalIntent: disambiguationOriginalIntent,
             idiomaDestino: input.idiomaDestino,
             forceSkip: !shouldOpenVariantChoice,
@@ -2205,6 +2262,11 @@ export async function runCatalogFastpath(
             asksPrices,
             asksIncludesOnly,
             asksSchedules,
+            asksAvailability: Boolean(input.facets?.asksAvailability),
+            hasPendingCatalogChoice: Boolean(pendingCatalogChoice),
+            hasPendingSelectedVariant: Boolean(pendingSelectedVariant),
+            hasTargetVariantId: Boolean(targetVariantId),
+            hasIncomingCanonicalVariantAmbiguous,
             originalIntent: disambiguationOriginalIntent,
             idiomaDestino: input.idiomaDestino,
             forceSkip: !shouldOpenVariantChoice,
