@@ -1,3 +1,4 @@
+//src/lib/fastpath/handlers/catalog/getCatalogIntentFlags.ts
 type CatalogFacets = {
   asksPrices?: boolean;
   asksSchedules?: boolean;
@@ -29,13 +30,6 @@ export function getCatalogIntentFlags(
 
   const isCombinationIntent = routeIntent === "catalog_combination";
 
-  const asksIncludesOnly =
-    routeIntent === "catalog_includes" ||
-    routeIntent === "entity_detail" ||
-    routeIntent === "variant_detail";
-
-  const isAskingOtherCatalogOptions = routeIntent === "catalog_alternatives";
-
   const asksSchedules =
     Boolean(facets.asksSchedules) || routeIntent === "catalog_schedule";
 
@@ -44,6 +38,18 @@ export function getCatalogIntentFlags(
   const asksLocation = Boolean(facets.asksLocation);
 
   const asksAvailability = Boolean(facets.asksAvailability);
+
+  const asksIncludesOnly =
+    !asksSchedules &&
+    !asksLocation &&
+    !asksAvailability &&
+    (
+      routeIntent === "catalog_includes" ||
+      routeIntent === "entity_detail" ||
+      routeIntent === "variant_detail"
+    );
+
+  const isAskingOtherCatalogOptions = routeIntent === "catalog_alternatives";
 
   return {
     isCombinationIntent,

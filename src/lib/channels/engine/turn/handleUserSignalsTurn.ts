@@ -227,13 +227,37 @@ export async function handleUserSignalsTurn(
     });
 
     if (intent) {
-      detectedIntent = intent;
+      let resolvedIntent = intent;
+
+      const hasConcreteInfoFacet =
+        detectedFacets.asksSchedules === true ||
+        detectedFacets.asksPrices === true ||
+        detectedFacets.asksLocation === true ||
+        detectedFacets.asksAvailability === true;
+
+      // Un saludo no puede dominar un turno que ya trae una pregunta concreta.
+      if (resolvedIntent === "saludo" && hasConcreteInfoFacet) {
+        if (detectedFacets.asksSchedules === true) {
+          resolvedIntent = "horario";
+        } else if (detectedFacets.asksPrices === true) {
+          resolvedIntent = "precio";
+        } else if (
+          detectedFacets.asksLocation === true ||
+          detectedFacets.asksAvailability === true
+        ) {
+          resolvedIntent = "info_general";
+        } else {
+          resolvedIntent = "info_servicio";
+        }
+      }
+
+      detectedIntent = resolvedIntent;
       detectedInterest = nivel;
-      INTENCION_FINAL_CANONICA = intent;
+      INTENCION_FINAL_CANONICA = resolvedIntent;
 
       transition({
         patchCtx: {
-          last_intent: intent,
+          last_intent: resolvedIntent,
           last_interest_level: nivel,
           commercialSignal: detectedCommercial,
         },
