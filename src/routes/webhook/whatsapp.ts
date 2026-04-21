@@ -1695,6 +1695,41 @@ export async function procesarMensajeWhatsApp(
       (convoCtx as any).presentedVariantOptions = null;
       (convoCtx as any).last_variant_options = null;
       (convoCtx as any).last_variant_options_at = null;
+
+      (convoCtx as any).continuationContext = null;
+      (convoCtx as any).last_assistant_turn = null;
+
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        expectingVariant: false,
+        selectedServiceId: null,
+        last_plan_list: null,
+        last_plan_list_at: null,
+        last_package_list: null,
+        last_package_list_at: null,
+        last_list_kind: null,
+        last_list_kind_at: null,
+        pending_link_lookup: null,
+        pending_link_at: null,
+        pending_link_options: null,
+        last_service_id: null,
+        last_service_name: null,
+        last_service_label: null,
+        last_entity_kind: null,
+        last_entity_at: null,
+        structuredService: null,
+        pendingCatalogChoice: null,
+        pendingCatalogChoiceAt: null,
+        lastPresentedEntityIds: null,
+        lastPresentedFamilyKeys: null,
+        expectingVariantForEntityId: null,
+        expectedVariantIntent: null,
+        presentedVariantOptions: null,
+        last_variant_options: null,
+        last_variant_options_at: null,
+        continuationContext: null,
+        last_assistant_turn: null,
+      };
     }
   }
 
