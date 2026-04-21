@@ -624,13 +624,14 @@ function shouldRequireVariantChoice(params: {
     return false;
   }
 
+  // Una pregunta de horario NO debe abrir variant_choice por sí sola.
+  // Solo abrimos variantes cuando el turno realmente exige selección de variante.
   return (
     params.routeIntent === "catalog_price" ||
     params.routeIntent === "catalog_includes" ||
     params.routeIntent === "variant_detail" ||
     params.asksPrices === true ||
     params.asksIncludesOnly === true ||
-    params.asksSchedules === true ||
     params.hasPendingCatalogChoice === true ||
     params.hasPendingSelectedVariant === true ||
     params.hasTargetVariantId === true ||
