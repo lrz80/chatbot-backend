@@ -992,6 +992,10 @@ function normalizeIncomingCanonicalResolution(input: {
 export async function runCatalogFastpath(
   input: RunCatalogFastpathInput
 ): Promise<FastpathResult> {
+  console.log("[RUN_CATALOG_FASTPATH_ENTRY]", {
+    userInput: input.userInput,
+  });
+  
   const catalogRoutingSignal = input.catalogRoutingSignal;
 
   const incomingCanonicalResolution = normalizeIncomingCanonicalResolution(
@@ -1797,7 +1801,7 @@ export async function runCatalogFastpath(
           handled: false,
         };
       }
-      
+
       const canonicalVariantOptions = Array.isArray(
         input.canonicalCatalogResolution?.variantOptions
       )
