@@ -253,29 +253,9 @@ export async function procesarMensajeWhatsApp(
 
   const isNewLead = await ensureClienteBase(pool, tenant.id, canal, contactoNorm);
 
-  // ✅ FORZAR IDIOMA SOLO en saludo inicial claro
-  // No usar detectarIdioma aquí para forzar cualquier turno.
-  // La resolución general la hace resolveLangForTurn().
-  try {
-    const t0 = String(userInput || "").trim().toLowerCase();
-    const isClearHello = /^(hello|hi|hey)\b/i.test(t0);
-    const isClearHola = /^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)\b/i.test(t0);
-
-    let forcedLang: LangCode | null = null;
-
-    if (isClearHello) forcedLang = "en";
-    else if (isClearHola) forcedLang = "es";
-
-    // Solo forzamos si realmente es saludo claro.
-    // isNewLead por sí solo NO debe forzar idioma si el mensaje no lo deja claro.
-    if (forcedLang) {
-      await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, forcedLang);
-      idiomaDestino = forcedLang;
-      forcedLangThisTurn = forcedLang;
-    }
-  } catch (e: any) {
-    console.error("❌ LANG FORCED ERROR:", e?.message || e);
-  }
+  // ✅ whatsapp.ts no fuerza idioma por contenido parcial.
+  // La resolución de idioma vive en resolveLangForTurn().
+  forcedLangThisTurn = null;
 
   await capiLeadFirstInbound({
     pool,
@@ -1532,6 +1512,35 @@ export async function procesarMensajeWhatsApp(
     ...(convoCtx || {}),
     ...(signals.convoCtx || {}),
   };
+
+  // ✅ Segunda pasada canónica de idioma con el contexto ya hidratado.
+  // whatsapp.ts sigue siendo dispatcher: no interpreta semántica,
+  // solo vuelve a pedir la resolución oficial con mejor contexto.
+  {
+    const langOutAfterSignals = await resolveLangForTurn({
+      pool,
+      tenant,
+      canal,
+      contactoNorm,
+      userInput,
+      convoCtx,
+      tenantBase,
+      forcedLangThisTurn: null,
+    });
+
+    const nextIdiomaDestino = langOutAfterSignals.idiomaDestino;
+
+    if (nextIdiomaDestino !== idiomaDestino) {
+      idiomaDestino = nextIdiomaDestino;
+      promptBase = langOutAfterSignals.promptBase;
+      promptBaseMem = langOutAfterSignals.promptBaseMem;
+
+      convoCtx = {
+        ...(convoCtx || {}),
+        ...(langOutAfterSignals.convoCtx || {}),
+      };
+    }
+  }
 
   let hasPendingCta = hasPendingCtaAwaitingConfirmation(convoCtx);
 
