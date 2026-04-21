@@ -10,12 +10,28 @@ export type HandleResolvedServiceDetailInput = {
   hit: any;
   traducirMensaje: (texto: string, idiomaDestino: string) => Promise<string>;
   convoCtx: any;
+
+  asksPrices?: boolean;
+  asksSchedules?: boolean;
+  asksLocation?: boolean;
+  asksAvailability?: boolean;
 };
 
 export async function handleResolvedServiceDetail(
   input: HandleResolvedServiceDetailInput
 ): Promise<FastpathResult> {
   const serviceId = String(input.hit?.serviceId || input.hit?.id || "").trim();
+
+  const asksPrices = input.asksPrices === true;
+  const asksSchedules = input.asksSchedules === true;
+  const asksLocation = input.asksLocation === true;
+  const asksAvailability = input.asksAvailability === true;
+
+  const isScheduleOnlyTurn =
+    asksSchedules === true &&
+    asksPrices !== true &&
+    asksLocation !== true &&
+    asksAvailability !== true;
 
   if (!serviceId) {
     return {
@@ -81,7 +97,13 @@ export async function handleResolvedServiceDetail(
     }))
     .filter((option) => option.variantId && option.label);
 
-  if (variantOptions.length > 1) {
+    if (variantOptions.length > 1) {
+    if (isScheduleOnlyTurn) {
+      return {
+        handled: false,
+      };
+    }
+
     return {
       handled: true,
       reply: "",

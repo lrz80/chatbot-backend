@@ -1911,6 +1911,10 @@ export async function runCatalogFastpath(
           },
           traducirMensaje: async (texto: string) => texto,
           convoCtx: input.convoCtx,
+          asksPrices,
+          asksSchedules,
+          asksLocation: Boolean(input.facets?.asksLocation),
+          asksAvailability: Boolean(input.facets?.asksAvailability),
         });
 
         if (resolvedServiceDetailResult.handled) {
@@ -2101,6 +2105,10 @@ export async function runCatalogFastpath(
         },
         traducirMensaje: async (texto: string) => texto,
         convoCtx: input.convoCtx,
+        asksPrices,
+        asksSchedules,
+        asksLocation: Boolean(input.facets?.asksLocation),
+        asksAvailability: Boolean(input.facets?.asksAvailability),
       });
 
       if (resolvedServiceDetailResult.handled) {
