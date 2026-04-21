@@ -477,7 +477,6 @@ function shouldTreatAsGenericServiceInterest(params: {
 
   if (
     routeIntent === "catalog_price" ||
-    routeIntent === "catalog_includes" ||
     routeIntent === "variant_detail" ||
     routeIntent === "catalog_combination" ||
     routeIntent === "catalog_compare" ||
@@ -559,7 +558,6 @@ function shouldRequireVariantChoice(params: {
   return (
     params.routeIntent === "catalog_price" ||
     params.routeIntent === "catalog_includes" ||
-    params.routeIntent === "entity_detail" ||
     params.routeIntent === "variant_detail" ||
     params.asksPrices === true ||
     params.asksIncludesOnly === true ||
@@ -710,6 +708,7 @@ async function maybeBuildVariantDisambiguationResult(input: {
   asksSchedules: boolean;
   originalIntent: "precio" | "info_servicio";
   idiomaDestino: string;
+  forceSkip?: boolean;
 }): Promise<FastpathResult | null> {
   if (
     !shouldRequireVariantChoice({
@@ -719,6 +718,10 @@ async function maybeBuildVariantDisambiguationResult(input: {
       asksSchedules: input.asksSchedules,
     })
   ) {
+    return null;
+  }
+
+  if (input.forceSkip === true) {
     return null;
   }
 
@@ -1348,6 +1351,22 @@ export async function runCatalogFastpath(
     hasIncomingCanonicalVariantAmbiguous,
   });
 
+  console.log("[CATALOG][GENERIC_SERVICE_INTEREST_GUARD]", {
+    userInput: input.userInput,
+    intentOutNorm,
+    rawRouteIntent: routeIntent,
+    executionRouteIntent,
+    asksPrices,
+    asksIncludesOnly,
+    asksSchedules,
+    asksAvailability: Boolean(input.facets?.asksAvailability),
+    hasPendingCatalogChoice: Boolean(pendingCatalogChoice),
+    hasPendingSelectedVariant: Boolean(pendingSelectedVariant),
+    hasTargetVariantId: Boolean(targetVariantId),
+    hasIncomingCanonicalVariantAmbiguous,
+    isGenericServiceInterestTurn,
+  });
+
   type QuestionType =
     | "combination_and_price"
     | "price_or_plan"
@@ -1692,6 +1711,7 @@ export async function runCatalogFastpath(
             asksSchedules,
             originalIntent: disambiguationOriginalIntent,
             idiomaDestino: input.idiomaDestino,
+            forceSkip: isGenericServiceInterestTurn,
           });
 
         if (variantDisambiguationResult) {
@@ -1877,6 +1897,7 @@ export async function runCatalogFastpath(
             asksSchedules,
             originalIntent: disambiguationOriginalIntent,
             idiomaDestino: input.idiomaDestino,
+            forceSkip: isGenericServiceInterestTurn,
           });
 
         if (variantDisambiguationResult) {
@@ -2000,6 +2021,7 @@ export async function runCatalogFastpath(
             asksSchedules,
             originalIntent: disambiguationOriginalIntent,
             idiomaDestino: input.idiomaDestino,
+            forceSkip: isGenericServiceInterestTurn,
           });
 
         if (variantDisambiguationResult) {

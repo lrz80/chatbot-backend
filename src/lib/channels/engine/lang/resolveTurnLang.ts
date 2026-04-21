@@ -42,11 +42,79 @@ function countAlphaChars(text: string): number {
   return matches ? matches.length : 0;
 }
 
+function segmentTextForLanguageVoting(text: string): string[] {
+  const raw = String(text || "").trim();
+  if (!raw) return [];
+
+  type SegmentLike = {
+    segment: string;
+    isWordLike?: boolean;
+  };
+
+  type SegmenterLike = {
+    segment(input: string): Iterable<SegmentLike>;
+  };
+
+  const intlWithSegmenter = Intl as typeof Intl & {
+    Segmenter?: new (
+      locales?: string | string[],
+      options?: { granularity: "sentence" | "word" }
+    ) => SegmenterLike;
+  };
+
+  const sentenceSeg =
+    typeof intlWithSegmenter.Segmenter === "function"
+      ? new intlWithSegmenter.Segmenter(undefined, {
+          granularity: "sentence",
+        })
+      : null;
+
+  const wordSeg =
+    typeof intlWithSegmenter.Segmenter === "function"
+      ? new intlWithSegmenter.Segmenter(undefined, {
+          granularity: "word",
+        })
+      : null;
+
+  const sentenceCandidates = sentenceSeg
+    ? Array.from(sentenceSeg.segment(raw))
+        .map((item: SegmentLike) => String(item.segment || "").trim())
+        .filter((part) => part.length >= 4 && countAlphaChars(part) >= 3)
+    : [raw];
+
+  const result: string[] = [];
+
+  for (const sentence of sentenceCandidates) {
+    result.push(sentence);
+
+    if (!wordSeg) continue;
+
+    const words = Array.from(wordSeg.segment(sentence))
+      .filter((item: SegmentLike) => item.isWordLike === true)
+      .map((item: SegmentLike) => String(item.segment || "").trim())
+      .filter(Boolean);
+
+    if (words.length < 3) continue;
+
+    const windowSizes = [3, 4, 5, 6];
+
+    for (const size of windowSizes) {
+      if (words.length < size) continue;
+
+      for (let i = 0; i <= words.length - size; i++) {
+        const chunk = words.slice(i, i + size).join(" ").trim();
+        if (chunk.length >= 6 && countAlphaChars(chunk) >= 4) {
+          result.push(chunk);
+        }
+      }
+    }
+  }
+
+  return Array.from(new Set(result));
+}
+
 function splitIntoSemanticChunks(text: string): string[] {
-  return String(text || "")
-    .split(/[\n\r.!?;:]+/g)
-    .map((part) => part.trim())
-    .filter((part) => part.length >= 6 && countAlphaChars(part) >= 4);
+  return segmentTextForLanguageVoting(text);
 }
 
 async function detectDominantLanguageFromChunks(args: {
@@ -93,35 +161,37 @@ async function detectDominantLanguageFromChunks(args: {
   }
 
   const total = esScore + enScore;
-  if (total <= 0) {
+    if (total <= 0) {
+      return {
+        lang: null,
+        confidence: 0,
+        source: "none",
+      };
+    }
+
+    const winner: Lang = esScore >= enScore ? "es" : "en";
+    const winnerScore = Math.max(esScore, enScore);
+    const loserScore = Math.min(esScore, enScore);
+
+    const confidence = winnerScore / total;
+    const margin = winnerScore - loserScore;
+
+    const minEvidence = 8;
+
+    // exigimos evidencia agregada real, no una coincidencia aislada
+    if (winnerScore < minEvidence || confidence < 0.6 || margin < 2) {
+      return {
+        lang: null,
+        confidence: 0,
+        source: bestSource,
+      };
+    }
+
     return {
-      lang: null,
-      confidence: 0,
-      source: "none",
-    };
-  }
-
-  const winner: Lang = esScore >= enScore ? "es" : "en";
-  const winnerScore = Math.max(esScore, enScore);
-  const loserScore = Math.min(esScore, enScore);
-
-  const confidence = winnerScore / total;
-  const margin = winnerScore - loserScore;
-
-  // exigimos dominancia real para no voltear idioma por ruido
-  if (confidence < 0.6 || margin < 2) {
-    return {
-      lang: null,
-      confidence: 0,
+      lang: winner,
+      confidence,
       source: bestSource,
     };
-  }
-
-  return {
-    lang: winner,
-    confidence,
-    source: bestSource,
-  };
 }
 
 export async function resolveTurnLangClientFirst(
