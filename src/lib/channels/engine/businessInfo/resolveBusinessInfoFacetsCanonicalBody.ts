@@ -36,7 +36,9 @@ type EffectiveFacets = {
   asksAvailability: boolean;
 };
 
-function resolveContinuationBusinessInfoFacets(convoCtx?: any): EffectiveFacets | null {
+function resolveContinuationBusinessInfoFacets(
+  convoCtx?: any
+): EffectiveFacets | null {
   const lastTurn = convoCtx?.continuationContext?.lastTurn ?? null;
 
   if (!lastTurn || lastTurn.domain !== "business_info") {
@@ -91,13 +93,34 @@ function resolveEffectiveFacets(input: {
     return explicitFacets;
   }
 
-  const continuationFacets = resolveContinuationBusinessInfoFacets(input.convoCtx);
+  const continuationFacets = resolveContinuationBusinessInfoFacets(
+    input.convoCtx
+  );
 
   if (continuationFacets) {
     return continuationFacets;
   }
 
   return explicitFacets;
+}
+
+function resolveEffectiveScheduleTarget(input: {
+  asksSchedules: boolean;
+  scheduleTarget: BusinessInfoScheduleTarget | { type: string } | null | undefined;
+}): BusinessInfoScheduleTarget | null {
+  if (!input.asksSchedules) {
+    return null;
+  }
+
+  const currentType = String(input.scheduleTarget?.type || "").trim().toLowerCase();
+
+  if (currentType && currentType !== "none") {
+    return input.scheduleTarget as BusinessInfoScheduleTarget;
+  }
+
+  return {
+    type: "general",
+  } as BusinessInfoScheduleTarget;
 }
 
 export async function resolveBusinessInfoFacetsCanonicalBody(
@@ -138,14 +161,16 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
 
   const blocks: string[] = [];
 
-  if (
-    effectiveFacets.asksSchedules === true &&
-    facetTargets.scheduleTarget.type !== "none"
-  ) {
+  const effectiveScheduleTarget = resolveEffectiveScheduleTarget({
+    asksSchedules: effectiveFacets.asksSchedules,
+    scheduleTarget: facetTargets.scheduleTarget,
+  });
+
+  if (effectiveFacets.asksSchedules === true && effectiveScheduleTarget) {
     const scheduleBlock = buildScheduleBlock({
       idiomaDestino,
       infoClave,
-      scheduleTarget: facetTargets.scheduleTarget as BusinessInfoScheduleTarget,
+      scheduleTarget: effectiveScheduleTarget,
     });
 
     if (String(scheduleBlock || "").trim()) {
