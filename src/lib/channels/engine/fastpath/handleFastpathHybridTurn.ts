@@ -169,6 +169,65 @@ function blocksContinuationByExplicitIntent(intent: string | null): boolean {
   );
 }
 
+function shouldPrioritizeBusinessInfoDomain(input: {
+  asksPrices: boolean;
+  asksSchedules: boolean;
+  asksLocation: boolean;
+  asksAvailability: boolean;
+  detectedRoutingHints?: IntentRoutingHints | null;
+  canonicalCatalogRouteDecision: {
+    shouldRouteCatalog?: boolean;
+    resolutionKind?: string | null;
+  };
+  isGuidedBusinessEntryTurn: boolean;
+  isScheduleOnlyTurn: boolean;
+  inBooking: boolean;
+}): boolean {
+  if (input.inBooking) {
+    return false;
+  }
+
+  if (input.isScheduleOnlyTurn) {
+    return true;
+  }
+
+  if (input.isGuidedBusinessEntryTurn) {
+    return true;
+  }
+
+  const hasExplicitBusinessFacet =
+    input.asksSchedules || input.asksLocation || input.asksAvailability;
+
+  const hasExplicitBusinessInfoScope =
+    Boolean(
+      input.detectedRoutingHints?.businessInfoScope &&
+        input.detectedRoutingHints.businessInfoScope !== "none"
+    );
+
+  if (!hasExplicitBusinessFacet && !hasExplicitBusinessInfoScope) {
+    return false;
+  }
+
+  if (input.asksPrices) {
+    return false;
+  }
+
+  const canonicalResolutionKind = String(
+    input.canonicalCatalogRouteDecision?.resolutionKind || "none"
+  ).trim();
+
+  const isOnlyLexicalCatalogMatch =
+    canonicalResolutionKind === "resolved_single" ||
+    canonicalResolutionKind === "resolved_service_variant_ambiguous" ||
+    canonicalResolutionKind === "ambiguous";
+
+  if (!isOnlyLexicalCatalogMatch) {
+    return true;
+  }
+
+  return true;
+}
+
 function decideHybridDomain(input: {
   hasPendingCatalogChoice: boolean;
   hasConversationAnchor: boolean;
@@ -233,32 +292,22 @@ function decideHybridDomain(input: {
   const canonicalShouldRouteCatalog =
     input.canonicalCatalogRouteDecision?.shouldRouteCatalog === true;
 
-  if (input.isScheduleOnlyTurn) {
+  const mustPrioritizeBusinessInfo = shouldPrioritizeBusinessInfoDomain({
+    asksPrices: input.asksPrices,
+    asksSchedules: input.asksSchedules,
+    asksLocation: input.asksLocation,
+    asksAvailability: input.asksAvailability,
+    detectedRoutingHints: input.detectedRoutingHints || null,
+    canonicalCatalogRouteDecision: input.canonicalCatalogRouteDecision,
+    isGuidedBusinessEntryTurn: input.isGuidedBusinessEntryTurn,
+    isScheduleOnlyTurn: input.isScheduleOnlyTurn,
+    inBooking: input.inBooking,
+  });
+
+  if (mustPrioritizeBusinessInfo) {
     return {
       routeTarget: "business_info",
       reason: "business_info_signal",
-    };
-  }
-
-  if (
-    (canonicalResolutionKind === "resolved_single" ||
-      canonicalResolutionKind === "resolved_service_variant_ambiguous") &&
-    !input.isGuidedBusinessEntryTurn &&
-    !input.isScheduleOnlyTurn
-  ) {
-    return {
-      routeTarget: "catalog",
-      reason: "canonical_catalog_resolution",
-    };
-  }
-
-  if (
-    canonicalResolutionKind === "ambiguous" &&
-    canonicalShouldRouteCatalog
-  ) {
-    return {
-      routeTarget: "catalog",
-      reason: "canonical_catalog_resolution",
     };
   }
 
@@ -302,35 +351,6 @@ function decideHybridDomain(input: {
     };
   }
 
-  const hasExplicitBusinessInfoScope =
-    Boolean(
-      input.detectedRoutingHints?.businessInfoScope &&
-      input.detectedRoutingHints.businessInfoScope !== "none"
-    );
-
-  const hasStrongCanonicalCatalogResolution =
-    canonicalResolutionKind === "resolved_single" ||
-    canonicalResolutionKind === "resolved_service_variant_ambiguous";
-
-  if (
-    hasExplicitBusinessInfoScope &&
-    !input.asksPrices &&
-    !hasStrongCanonicalCatalogResolution &&
-    input.detectedRoutingHints?.catalogScope !== "targeted"
-  ) {
-    return {
-      routeTarget: "business_info",
-      reason: "business_info_signal",
-    };
-  }
-
-  if (input.isGuidedBusinessEntryTurn) {
-    return {
-      routeTarget: "business_info",
-      reason: "guided_entry",
-    };
-  }
-
   const hasExplicitCatalogOverviewSignal =
     input.asksPrices &&
     input.detectedRoutingHints?.catalogScope === "overview" &&
@@ -347,12 +367,39 @@ function decideHybridDomain(input: {
 
   const hasExplicitCatalogTargetedSignal =
     input.previewShouldRouteCatalog === true &&
-    input.detectedRoutingHints?.catalogScope === "targeted";
+    input.detectedRoutingHints?.catalogScope === "targeted" &&
+    !input.asksSchedules &&
+    !input.asksLocation &&
+    !input.asksAvailability;
 
   if (hasExplicitCatalogTargetedSignal) {
     return {
       routeTarget: "catalog",
       reason: "catalog_targeted_signal",
+    };
+  }
+
+  if (
+    (canonicalResolutionKind === "resolved_single" ||
+      canonicalResolutionKind === "resolved_service_variant_ambiguous") &&
+    !input.isGuidedBusinessEntryTurn &&
+    !input.isScheduleOnlyTurn &&
+    input.asksPrices
+  ) {
+    return {
+      routeTarget: "catalog",
+      reason: "canonical_catalog_resolution",
+    };
+  }
+
+  if (
+    canonicalResolutionKind === "ambiguous" &&
+    canonicalShouldRouteCatalog &&
+    input.asksPrices
+  ) {
+    return {
+      routeTarget: "catalog",
+      reason: "canonical_catalog_resolution",
     };
   }
 
