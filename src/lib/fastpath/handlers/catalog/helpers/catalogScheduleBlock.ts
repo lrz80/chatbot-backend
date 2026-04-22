@@ -76,9 +76,11 @@ export function buildScheduleBlock(input: BuildScheduleBlockInput): string {
       .filter(Boolean);
 
     if (scheduleTarget.type === "service") {
-      lines = rawLines.filter((line) =>
+      const matchedLines = rawLines.filter((line) =>
         lineMatchesService(line, scheduleTarget.serviceName)
       );
+
+      lines = matchedLines.length > 0 ? matchedLines : rawLines;
     } else {
       lines = rawLines;
     }
@@ -90,9 +92,11 @@ export function buildScheduleBlock(input: BuildScheduleBlockInput): string {
       .filter(Boolean);
 
     if (scheduleTarget.type === "service") {
-      lines = rawLines.filter((line) =>
+      const matchedLines = rawLines.filter((line) =>
         lineMatchesService(line, scheduleTarget.serviceName)
       );
+
+      lines = matchedLines.length > 0 ? matchedLines : rawLines;
     } else {
       lines = rawLines;
     }
