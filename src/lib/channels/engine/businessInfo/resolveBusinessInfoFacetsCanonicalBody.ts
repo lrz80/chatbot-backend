@@ -36,9 +36,7 @@ type EffectiveFacets = {
   asksAvailability: boolean;
 };
 
-function resolveContinuationBusinessInfoFacets(
-  convoCtx?: any
-): EffectiveFacets | null {
+function resolveContinuationBusinessInfoFacets(convoCtx?: any): EffectiveFacets | null {
   const lastTurn = convoCtx?.continuationContext?.lastTurn ?? null;
 
   if (!lastTurn || lastTurn.domain !== "business_info") {
@@ -93,34 +91,13 @@ function resolveEffectiveFacets(input: {
     return explicitFacets;
   }
 
-  const continuationFacets = resolveContinuationBusinessInfoFacets(
-    input.convoCtx
-  );
+  const continuationFacets = resolveContinuationBusinessInfoFacets(input.convoCtx);
 
   if (continuationFacets) {
     return continuationFacets;
   }
 
   return explicitFacets;
-}
-
-function resolveEffectiveScheduleTarget(input: {
-  asksSchedules: boolean;
-  scheduleTarget: BusinessInfoScheduleTarget | { type: string } | null | undefined;
-}): BusinessInfoScheduleTarget | null {
-  if (!input.asksSchedules) {
-    return null;
-  }
-
-  const currentType = String(input.scheduleTarget?.type || "").trim().toLowerCase();
-
-  if (currentType && currentType !== "none") {
-    return input.scheduleTarget as BusinessInfoScheduleTarget;
-  }
-
-  return {
-    type: "general",
-  } as BusinessInfoScheduleTarget;
 }
 
 export async function resolveBusinessInfoFacetsCanonicalBody(
@@ -131,7 +108,6 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     tenantId,
     idiomaDestino,
     infoClave,
-    promptBaseMem,
     facets,
     userInput,
     convoCtx,
@@ -162,35 +138,18 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
 
   const blocks: string[] = [];
 
-  const effectiveScheduleTarget = resolveEffectiveScheduleTarget({
-    asksSchedules: effectiveFacets.asksSchedules,
-    scheduleTarget: facetTargets.scheduleTarget,
-  });
-
-  if (effectiveFacets.asksSchedules === true && effectiveScheduleTarget) {
+  if (
+    effectiveFacets.asksSchedules === true &&
+    facetTargets.scheduleTarget.type !== "none"
+  ) {
     const scheduleBlock = buildScheduleBlock({
       idiomaDestino,
       infoClave,
-      scheduleTarget: effectiveScheduleTarget,
+      scheduleTarget: facetTargets.scheduleTarget as BusinessInfoScheduleTarget,
     });
 
     if (String(scheduleBlock || "").trim()) {
       blocks.push(String(scheduleBlock).trim());
-    } else {
-      const fallbackScheduleBody = String(promptBaseMem || "").trim();
-
-      if (fallbackScheduleBody) {
-        const scheduleFallbackBlock = withSectionTitle(
-          idiomaDestino,
-          "Horario:",
-          "Schedule:",
-          fallbackScheduleBody
-        );
-
-        if (String(scheduleFallbackBlock || "").trim()) {
-          blocks.push(String(scheduleFallbackBlock).trim());
-        }
-      }
     }
   }
 
