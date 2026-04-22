@@ -94,10 +94,11 @@ export async function resolveBusinessInfoFacetTargets(
         serviceId: resolved.hit.id,
         serviceName: resolved.hit.name,
       };
-    } else if (hasExplicitGeneralScheduleScope(args)) {
-      targets.scheduleTarget = { type: "general" };
     } else {
-      targets.scheduleTarget = { type: "none" };
+      // Si ya estamos en business_info y el usuario preguntó horario,
+      // jamás devolvemos "none" por defecto.
+      // Si no hay servicio único, caemos a horario general grounded.
+      targets.scheduleTarget = { type: "general" };
     }
   }
 
