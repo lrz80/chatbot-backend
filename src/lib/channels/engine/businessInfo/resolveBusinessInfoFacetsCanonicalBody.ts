@@ -171,6 +171,7 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
       idiomaDestino,
       infoClave,
       scheduleTarget: effectiveScheduleTarget,
+      userInput,
     });
 
     if (String(scheduleBlock || "").trim()) {
