@@ -14,6 +14,7 @@ type BuildScheduleBlockInput = {
   idiomaDestino: string;
   infoClave?: string | null;
   scheduleTarget?: ScheduleTarget;
+  userInput?: string | null;
 };
 
 function normalizeText(value: unknown): string {
@@ -59,6 +60,25 @@ function lineMatchesService(line: string, serviceName: string): boolean {
   return lineNorm.includes(serviceNorm);
 }
 
+function tokenizeMeaningfulWords(value: unknown): string[] {
+  const normalized = normalizeText(value);
+  if (!normalized) return [];
+
+  return normalized
+    .split(/[^a-z0-9]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 4);
+}
+
+function lineMatchesUserIntent(line: string, userInput?: string | null): boolean {
+  const lineNorm = normalizeText(line);
+  const tokens = tokenizeMeaningfulWords(userInput);
+
+  if (!lineNorm || tokens.length === 0) return false;
+
+  return tokens.some((token) => lineNorm.includes(token));
+}
+
 export function buildScheduleBlock(input: BuildScheduleBlockInput): string {
   const scheduleTarget = normalizeScheduleTarget(input.scheduleTarget);
 
@@ -76,13 +96,25 @@ export function buildScheduleBlock(input: BuildScheduleBlockInput): string {
       .filter(Boolean);
 
     if (scheduleTarget.type === "service") {
-      const matchedLines = rawLines.filter((line) =>
+      const matchedByService = rawLines.filter((line) =>
         lineMatchesService(line, scheduleTarget.serviceName)
       );
 
-      lines = matchedLines.length > 0 ? matchedLines : rawLines;
+      if (matchedByService.length > 0) {
+        lines = matchedByService;
+      } else {
+        const matchedByUserIntent = rawLines.filter((line) =>
+          lineMatchesUserIntent(line, input.userInput)
+        );
+
+        lines = matchedByUserIntent.length > 0 ? matchedByUserIntent : rawLines;
+      }
     } else {
-      lines = rawLines;
+      const matchedByUserIntent = rawLines.filter((line) =>
+        lineMatchesUserIntent(line, input.userInput)
+      );
+
+      lines = matchedByUserIntent.length > 0 ? matchedByUserIntent : rawLines;
     }
   } else {
     const schedulesOnly = extractSchedulesOnly(input.infoClave);
@@ -92,13 +124,25 @@ export function buildScheduleBlock(input: BuildScheduleBlockInput): string {
       .filter(Boolean);
 
     if (scheduleTarget.type === "service") {
-      const matchedLines = rawLines.filter((line) =>
+      const matchedByService = rawLines.filter((line) =>
         lineMatchesService(line, scheduleTarget.serviceName)
       );
 
-      lines = matchedLines.length > 0 ? matchedLines : rawLines;
+      if (matchedByService.length > 0) {
+        lines = matchedByService;
+      } else {
+        const matchedByUserIntent = rawLines.filter((line) =>
+          lineMatchesUserIntent(line, input.userInput)
+        );
+
+        lines = matchedByUserIntent.length > 0 ? matchedByUserIntent : rawLines;
+      }
     } else {
-      lines = rawLines;
+      const matchedByUserIntent = rawLines.filter((line) =>
+        lineMatchesUserIntent(line, input.userInput)
+      );
+
+      lines = matchedByUserIntent.length > 0 ? matchedByUserIntent : rawLines;
     }
   }
 
