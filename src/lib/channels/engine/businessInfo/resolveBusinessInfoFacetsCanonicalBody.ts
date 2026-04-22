@@ -112,15 +112,15 @@ function resolveEffectiveScheduleTarget(input: {
     return null;
   }
 
-  const currentType = String(input.scheduleTarget?.type || "").trim().toLowerCase();
+  const currentType = String(input.scheduleTarget?.type || "")
+    .trim()
+    .toLowerCase();
 
-  if (currentType && currentType !== "none") {
-    return input.scheduleTarget as BusinessInfoScheduleTarget;
+  if (!currentType || currentType === "none") {
+    return null;
   }
 
-  return {
-    type: "general",
-  } as BusinessInfoScheduleTarget;
+  return input.scheduleTarget as BusinessInfoScheduleTarget;
 }
 
 export async function resolveBusinessInfoFacetsCanonicalBody(
@@ -166,16 +166,18 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     scheduleTarget: facetTargets.scheduleTarget,
   });
 
-  if (effectiveFacets.asksSchedules === true && effectiveScheduleTarget) {
-    const scheduleBlock = buildScheduleBlock({
-      idiomaDestino,
-      infoClave,
-      scheduleTarget: effectiveScheduleTarget,
-      userInput,
-    });
+  if (effectiveFacets.asksSchedules === true) {
+    if (effectiveScheduleTarget) {
+      const scheduleBlock = buildScheduleBlock({
+        idiomaDestino,
+        infoClave,
+        scheduleTarget: effectiveScheduleTarget,
+        userInput,
+      });
 
-    if (String(scheduleBlock || "").trim()) {
-      blocks.push(String(scheduleBlock).trim());
+      if (String(scheduleBlock || "").trim()) {
+        blocks.push(String(scheduleBlock).trim());
+      }
     }
   }
 
