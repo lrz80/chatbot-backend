@@ -580,6 +580,69 @@ export async function procesarMensajeWhatsApp(
     return action;
   }
 
+  function buildExecutedDomainContextPatch(params: {
+    executedDomain: "business_info" | "catalog";
+    executedIntent: string | null;
+    assistantText: string;
+    actionContext?: ExternalActionContext | null;
+    catalogRefs?: {
+      serviceId?: string | null;
+      familyId?: string | null;
+      variantId?: string | null;
+    } | null;
+  }) {
+    const createdAt = new Date().toISOString();
+
+    const references =
+      params.executedDomain === "catalog"
+        ? {
+            serviceId: params.catalogRefs?.serviceId ?? null,
+            familyId: params.catalogRefs?.familyId ?? null,
+            variantId: params.catalogRefs?.variantId ?? null,
+          }
+        : {
+            serviceId: null,
+            familyId: null,
+            variantId: null,
+          };
+
+    const canonicalSource =
+      params.executedDomain === "catalog" ? "catalog" : "business_info";
+
+    const continuationLastTurn = {
+      domain: params.executedDomain,
+      references,
+      intent: params.executedIntent || null,
+      userText: userInput,
+      assistantText: params.assistantText,
+      canonicalSource,
+      createdAt,
+    };
+
+    return {
+      continuationContext: {
+        lastTurn: continuationLastTurn,
+      },
+      last_assistant_turn: continuationLastTurn,
+      actionContext: params.actionContext ?? null,
+
+      // importante: evita arrastrar resolución catalogal vieja
+      ...(params.executedDomain === "business_info"
+        ? {
+            structuredService: null,
+            pendingCatalogChoice: null,
+            pendingCatalogChoiceAt: null,
+            expectingVariant: false,
+            expectingVariantForEntityId: null,
+            expectedVariantIntent: null,
+            presentedVariantOptions: null,
+            last_variant_options: null,
+            last_variant_options_at: null,
+          }
+        : {}),
+    };
+  }
+
   // ✅ google_calendar_enabled flag (source of truth)
   let bookingEnabled = false;
   try {
@@ -983,14 +1046,6 @@ export async function procesarMensajeWhatsApp(
       maxLines: MAX_WHATSAPP_LINES,
     });
 
-    if (rendered.ctxPatch) {
-      transition({ patchCtx: rendered.ctxPatch });
-      finalCtxPatch = {
-        ...finalCtxPatch,
-        ...rendered.ctxPatch,
-      };
-    }
-
     const finalBusinessInfoText = await ensureReplyLanguage(
       String(rendered.reply || "").trim(),
       idiomaDestino
@@ -999,6 +1054,24 @@ export async function procesarMensajeWhatsApp(
     if (!finalBusinessInfoText) {
       return false;
     }
+
+    const executedBusinessInfoPatch = buildExecutedDomainContextPatch({
+      executedDomain: "business_info",
+      executedIntent: resolvedBusinessIntent,
+      assistantText: finalBusinessInfoText,
+      actionContext: nextActionContext,
+    });
+
+    const mergedBusinessInfoPatch = {
+      ...(rendered.ctxPatch || {}),
+      ...executedBusinessInfoPatch,
+    };
+
+    transition({ patchCtx: mergedBusinessInfoPatch });
+    finalCtxPatch = {
+      ...finalCtxPatch,
+      ...mergedBusinessInfoPatch,
+    };
 
     INTENCION_FINAL_CANONICA = resolvedBusinessIntent;
     lastIntent = resolvedBusinessIntent;
@@ -1122,14 +1195,6 @@ export async function procesarMensajeWhatsApp(
       maxLines: MAX_WHATSAPP_LINES,
     });
 
-    if (rendered.ctxPatch) {
-      transition({ patchCtx: rendered.ctxPatch });
-      finalCtxPatch = {
-        ...finalCtxPatch,
-        ...rendered.ctxPatch,
-      };
-    }
-
     const finalActionText = await ensureReplyLanguage(
       String(rendered.reply || "").trim(),
       idiomaDestino
@@ -1138,6 +1203,24 @@ export async function procesarMensajeWhatsApp(
     if (!finalActionText) {
       return false;
     }
+
+    const executedExternalActionPatch = buildExecutedDomainContextPatch({
+      executedDomain: "business_info",
+      executedIntent: "external_action",
+      assistantText: finalActionText,
+      actionContext: null,
+    });
+
+    const mergedExternalActionPatch = {
+      ...(rendered.ctxPatch || {}),
+      ...executedExternalActionPatch,
+    };
+
+    transition({ patchCtx: mergedExternalActionPatch });
+    finalCtxPatch = {
+      ...finalCtxPatch,
+      ...mergedExternalActionPatch,
+    };
 
     INTENCION_FINAL_CANONICA = "external_action";
     lastIntent = "external_action";
