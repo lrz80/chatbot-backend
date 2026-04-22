@@ -9,6 +9,7 @@ type ResolveScheduleGroupKeyFromInfoClaveArgs = {
   tenantId: string;
   infoClave: string;
   serviceId: string;
+  serviceName: string;
 };
 
 type StructuredScheduleEntry = {
@@ -38,7 +39,6 @@ function trimBulletPrefix(value: string): string {
 
 function findFirstSeparatorIndex(value: string): number {
   const separators = [" – ", " — ", " - ", ": "];
-
   let best = -1;
 
   for (const separator of separators) {
@@ -98,13 +98,33 @@ function extractScheduleGroups(infoClave: string): Array<{
   return groups;
 }
 
+function buildResolutionText(groupLabel: string, serviceName: string): string {
+  const left = String(groupLabel || "").trim();
+  const right = String(serviceName || "").trim();
+
+  if (!left && !right) {
+    return "";
+  }
+
+  if (!left) {
+    return right;
+  }
+
+  if (!right) {
+    return left;
+  }
+
+  return `${left}\n${right}`;
+}
+
 export async function resolveScheduleGroupKeyFromInfoClave(
   args: ResolveScheduleGroupKeyFromInfoClaveArgs
 ): Promise<string | null> {
   const serviceId = String(args.serviceId || "").trim();
+  const serviceName = String(args.serviceName || "").trim();
   const infoClave = String(args.infoClave || "").trim();
 
-  if (!serviceId || !infoClave) {
+  if (!serviceId || !serviceName || !infoClave) {
     return null;
   }
 
@@ -117,10 +137,15 @@ export async function resolveScheduleGroupKeyFromInfoClave(
   const matches: Array<{ scheduleGroupKey: string }> = [];
 
   for (const group of groups) {
+    const resolutionText = buildResolutionText(group.groupLabel, serviceName);
+    if (!resolutionText) {
+      continue;
+    }
+
     const resolved = await resolveServiceCandidatesFromText(
       args.pool,
       args.tenantId,
-      group.groupLabel,
+      resolutionText,
       { mode: "loose" }
     );
 

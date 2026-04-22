@@ -112,6 +112,7 @@ export async function resolveBusinessInfoFacetTargets(
         tenantId: args.tenantId,
         infoClave: args.infoClave,
         serviceId: resolved.hit.id,
+        serviceName: resolved.hit.name,
       });
 
       if (scheduleGroupKey) {
