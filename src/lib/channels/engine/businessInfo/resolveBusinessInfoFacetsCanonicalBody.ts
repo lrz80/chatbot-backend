@@ -155,6 +155,7 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     pool,
     tenantId,
     userInput,
+    infoClave,
     facets: effectiveFacets,
     routingHints: routingHints || null,
   });

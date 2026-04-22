@@ -2,11 +2,17 @@
 import type { Pool } from "pg";
 import type { IntentRoutingHints } from "../../../detectarIntencion";
 import { resolveServiceCandidatesFromText } from "../../../services/pricing/resolveServiceIdFromText";
+import { resolveScheduleGroupKeyFromInfoClave } from "./resolveScheduleGroupKeyFromInfoClave";
 
 export type BusinessInfoScheduleTarget =
   | { type: "none" }
   | { type: "general" }
-  | { type: "service"; serviceId: string; serviceName: string };
+  | {
+      type: "schedule_group";
+      serviceId: string;
+      serviceName: string;
+      scheduleGroupKey: string;
+    };
 
 export type BusinessInfoLocationTarget =
   | { type: "none" }
@@ -26,6 +32,7 @@ type ResolveBusinessInfoFacetTargetsArgs = {
   pool: Pool;
   tenantId: string;
   userInput: string;
+  infoClave: string;
   facets: {
     asksSchedules?: boolean;
     asksLocation?: boolean;
@@ -34,7 +41,9 @@ type ResolveBusinessInfoFacetTargetsArgs = {
   routingHints?: IntentRoutingHints | null;
 };
 
-function hasMeaningfulFacets(args: ResolveBusinessInfoFacetTargetsArgs): boolean {
+function hasMeaningfulFacets(
+  args: ResolveBusinessInfoFacetTargetsArgs
+): boolean {
   return (
     args.facets.asksSchedules === true ||
     args.facets.asksLocation === true ||
@@ -53,21 +62,30 @@ function buildDefaultTargets(): BusinessInfoFacetTargets {
 function hasExplicitGeneralScheduleScope(
   args: ResolveBusinessInfoFacetTargetsArgs
 ): boolean {
-  const scope = String(args.routingHints?.businessInfoScope || "").trim().toLowerCase();
+  const scope = String(args.routingHints?.businessInfoScope || "")
+    .trim()
+    .toLowerCase();
+
   return scope === "schedule" || scope === "overview";
 }
 
 function hasExplicitGeneralLocationScope(
   args: ResolveBusinessInfoFacetTargetsArgs
 ): boolean {
-  const scope = String(args.routingHints?.businessInfoScope || "").trim().toLowerCase();
+  const scope = String(args.routingHints?.businessInfoScope || "")
+    .trim()
+    .toLowerCase();
+
   return scope === "location" || scope === "overview";
 }
 
 function hasExplicitGeneralAvailabilityScope(
   args: ResolveBusinessInfoFacetTargetsArgs
 ): boolean {
-  const scope = String(args.routingHints?.businessInfoScope || "").trim().toLowerCase();
+  const scope = String(args.routingHints?.businessInfoScope || "")
+    .trim()
+    .toLowerCase();
+
   return scope === "availability" || scope === "overview";
 }
 
@@ -89,11 +107,23 @@ export async function resolveBusinessInfoFacetTargets(
     );
 
     if (resolved.kind === "resolved_single" && resolved.hit) {
-      targets.scheduleTarget = {
-        type: "service",
+      const scheduleGroupKey = await resolveScheduleGroupKeyFromInfoClave({
+        pool: args.pool,
+        tenantId: args.tenantId,
+        infoClave: args.infoClave,
         serviceId: resolved.hit.id,
-        serviceName: resolved.hit.name,
-      };
+      });
+
+      if (scheduleGroupKey) {
+        targets.scheduleTarget = {
+          type: "schedule_group",
+          serviceId: resolved.hit.id,
+          serviceName: resolved.hit.name,
+          scheduleGroupKey,
+        };
+      } else {
+        targets.scheduleTarget = { type: "none" };
+      }
     } else if (hasExplicitGeneralScheduleScope(args)) {
       targets.scheduleTarget = { type: "general" };
     } else {
