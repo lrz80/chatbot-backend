@@ -9,7 +9,7 @@ type ResolveScheduleGroupKeyFromInfoClaveArgs = {
   tenantId: string;
   infoClave: string;
   serviceId: string;
-  serviceName: string;
+  userInput: string;
 };
 
 type StructuredScheduleEntry = {
@@ -98,9 +98,9 @@ function extractScheduleGroups(infoClave: string): Array<{
   return groups;
 }
 
-function buildResolutionText(groupLabel: string, serviceName: string): string {
+function buildResolutionText(groupLabel: string, userInput: string): string {
   const left = String(groupLabel || "").trim();
-  const right = String(serviceName || "").trim();
+  const right = String(userInput || "").trim();
 
   if (!left && !right) {
     return "";
@@ -117,14 +117,40 @@ function buildResolutionText(groupLabel: string, serviceName: string): string {
   return `${left}\n${right}`;
 }
 
+function extractAnchoredServiceId(resolved: unknown): string | null {
+  if (!resolved || typeof resolved !== "object") {
+    return null;
+  }
+
+  const data = resolved as {
+    kind?: string;
+    hit?: { id?: string | null } | null;
+    serviceId?: string | null;
+  };
+
+  const kind = String(data.kind || "").trim().toLowerCase();
+
+  if (kind === "resolved_single") {
+    const id = String(data.hit?.id || "").trim();
+    return id || null;
+  }
+
+  if (kind === "ambiguous") {
+    const id = String(data.serviceId || "").trim();
+    return id || null;
+  }
+
+  return null;
+}
+
 export async function resolveScheduleGroupKeyFromInfoClave(
   args: ResolveScheduleGroupKeyFromInfoClaveArgs
 ): Promise<string | null> {
   const serviceId = String(args.serviceId || "").trim();
-  const serviceName = String(args.serviceName || "").trim();
+  const userInput = String(args.userInput || "").trim();
   const infoClave = String(args.infoClave || "").trim();
 
-  if (!serviceId || !serviceName || !infoClave) {
+  if (!serviceId || !userInput || !infoClave) {
     return null;
   }
 
@@ -137,7 +163,7 @@ export async function resolveScheduleGroupKeyFromInfoClave(
   const matches: Array<{ scheduleGroupKey: string }> = [];
 
   for (const group of groups) {
-    const resolutionText = buildResolutionText(group.groupLabel, serviceName);
+    const resolutionText = buildResolutionText(group.groupLabel, userInput);
     if (!resolutionText) {
       continue;
     }
@@ -149,11 +175,12 @@ export async function resolveScheduleGroupKeyFromInfoClave(
       { mode: "loose" }
     );
 
-    if (resolved.kind !== "resolved_single" || !resolved.hit) {
+    const anchoredServiceId = extractAnchoredServiceId(resolved);
+    if (!anchoredServiceId) {
       continue;
     }
 
-    if (String(resolved.hit.id).trim() !== serviceId) {
+    if (anchoredServiceId !== serviceId) {
       continue;
     }
 
