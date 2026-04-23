@@ -32,6 +32,15 @@ export type ResolveServiceDecision =
       candidates: ResolveServiceCandidate[];
     }
   | {
+      kind: "resolved_service_variant_ambiguous";
+      hit: Hit;
+      candidates: ResolveServiceCandidate[];
+      variantOptions: Array<{
+        variantId: string;
+        variantName: string;
+      }>;
+    }
+  | {
       kind: "ambiguous";
       hit: null;
       candidates: ResolveServiceCandidate[];
@@ -1337,20 +1346,44 @@ export async function resolveServiceCandidatesFromText(
       dominantOverlapTokens: best.dominantOverlapTokens,
     }));
 
-    console.log("[RESOLVE-SERVICE] servicio resuelto pero variante ambigua, devolviendo ambiguous", {
-      userText,
-      serviceId: best.cand.serviceId,
-      serviceName: best.cand.label,
-      variantOptions: variantCandidates.map((v) => ({
-        variantId: v.variantId,
-        variantName: v.variantName,
-      })),
-    });
+    const variantOptions = variantCandidates
+      .map((v) => {
+        const variantId = String(v.variantId || "").trim();
+        const variantName = String(v.variantName || "").trim();
+
+        if (!variantId || !variantName) {
+          return null;
+        }
+
+        return {
+          variantId,
+          variantName,
+        };
+      })
+      .filter(
+        (
+          item
+        ): item is {
+          variantId: string;
+          variantName: string;
+        } => Boolean(item)
+      );
+
+    console.log(
+      "[RESOLVE-SERVICE] servicio resuelto pero variante ambigua, devolviendo resolved_service_variant_ambiguous",
+      {
+        userText,
+        serviceId: best.cand.serviceId,
+        serviceName: best.cand.label,
+        variantOptions,
+      }
+    );
 
     return {
-      kind: "ambiguous",
-      hit: null,
+      kind: "resolved_service_variant_ambiguous",
+      hit: { id: best.cand.serviceId, name: best.cand.label },
       candidates: variantCandidates,
+      variantOptions,
     };
   }
 
@@ -1380,5 +1413,8 @@ export async function resolveServiceIdFromText(
     opts
   );
 
-  return result.kind === "resolved_single" ? result.hit : null;
+  return result.kind === "resolved_single" ||
+    result.kind === "resolved_service_variant_ambiguous"
+    ? result.hit
+    : null;
 }
