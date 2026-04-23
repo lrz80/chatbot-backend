@@ -970,6 +970,10 @@ export async function renderFastpathDmReply(
     return normalizeText(fastpathText);
   })();
 
+  const shouldRewriteGroundedInfoClaveBody =
+    fpSource === "info_clave_db" &&
+    Boolean(canonicalReply);
+
     const shouldReturnCanonicalDirectly =
       isCatalogListReply &&
       Boolean(canonicalReply);
@@ -1064,16 +1068,10 @@ export async function renderFastpathDmReply(
     !isCatalogChoiceReply &&
     effectiveReplyPolicy.shouldAskQuestion;
 
-  const shouldAllowGroundedBodyTranslation =
-    replyPolicy.replySourceKind === "business_info" &&
-    fpIntent === "horario" &&
-    Boolean(canonicalReply) &&
-    idiomaDestino === "en";
-
   const responsePolicy = {
     mode: isCatalogChoiceReply
       ? "clarify_only"
-      : shouldAllowGroundedBodyTranslation
+      : shouldRewriteGroundedInfoClaveBody
       ? "grounded_only"
       : isResolvedCatalogAnswer || isCatalogListReply || isInfoGeneralOverviewTurn
       ? "grounded_frame_only"
@@ -1109,7 +1107,7 @@ export async function renderFastpathDmReply(
     preserveExactLinks: true,
     allowIntro: isCatalogChoiceReply ? true : shouldAllowIntro,
     allowOutro: isCatalogChoiceReply ? true : shouldAllowOutro,
-    allowBodyRewrite: shouldAllowGroundedBodyTranslation,
+    allowBodyRewrite: shouldRewriteGroundedInfoClaveBody,
     mustEndWithSalesQuestion: isCatalogChoiceReply
       ? false
       : shouldEndWithSalesQuestion,
@@ -1151,6 +1149,7 @@ export async function renderFastpathDmReply(
       isResolvedCatalogAnswer,
       isCatalogChoiceReply,
       bypassWriterModel,
+      shouldRewriteGroundedInfoClaveBody,
     });
 
     if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
@@ -1168,6 +1167,67 @@ export async function renderFastpathDmReply(
           };
         }
       }
+    }
+
+    if (shouldRewriteGroundedInfoClaveBody) {
+      const promptConFastpath = buildDmWriterPrompt({
+        idiomaDestino,
+        promptBaseMem,
+        fastpathText: canonicalReply,
+      });
+
+      const translated = await answerWithPromptBase({
+        tenantId,
+        promptBase: promptConFastpath,
+        userInput,
+        history,
+        idiomaDestino,
+        canal,
+        maxLines,
+        fallbackText: canonicalReply,
+        runtimeCapabilities,
+        responsePolicy: {
+          mode: "grounded_only",
+          resolvedEntityType: null,
+          resolvedEntityId: null,
+          resolvedEntityLabel: null,
+          canMentionSpecificPrice: false,
+          canSelectSpecificCatalogItem: false,
+          canOfferBookingTimes: false,
+          canUseOfficialLinks: true,
+          unresolvedEntity: false,
+          clarificationTarget: null,
+          singleResolvedEntityOnly: false,
+          allowAlternativeEntities: false,
+          allowCrossSellEntities: false,
+          allowAddOnSuggestions: false,
+          preserveExactBody: true,
+          preserveExactOrder: true,
+          preserveExactBullets: true,
+          preserveExactNumbers: true,
+          preserveExactLinks: true,
+          allowIntro: true,
+          allowOutro: true,
+          allowBodyRewrite: true,
+          mustEndWithSalesQuestion: false,
+          reasoningNotes:
+            "Translate and rewrite the canonical body into the client's language without changing facts. Do not add, remove, reorder, or alter schedules, days, times, links, or availability. Keep the response grounded strictly in the canonical body.",
+        },
+      });
+
+      const nextCtxPatch = {
+        ...(ctxPatch || {}),
+        last_assistant_turn: buildLastAssistantTurnSnapshot({
+          replyPolicy,
+          closingText: null,
+          closingType: "none",
+        }),
+      };
+
+      return {
+        reply: stripMarkdownLinksForDm(String(translated.text || canonicalReply).trim()),
+        ctxPatch: nextCtxPatch,
+      };
     }
 
     let frame = await buildGroundedFrameOnly({
