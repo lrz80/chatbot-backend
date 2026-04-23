@@ -974,9 +974,16 @@ export async function renderFastpathDmReply(
     fpSource === "info_clave_db" &&
     Boolean(canonicalReply);
 
-    const shouldReturnCanonicalDirectly =
-      isCatalogListReply &&
-      Boolean(canonicalReply);
+  const canonicalReplyText = String(canonicalReply || "").trim();
+
+  const looksLikeCatalogFallbackNotice =
+    canonicalReplyText.toLowerCase().includes("not currently available in the catalog") ||
+    canonicalReplyText.toLowerCase().includes("free/trial option:");
+
+  const shouldReturnCanonicalDirectly =
+    isCatalogListReply &&
+    Boolean(canonicalReplyText) &&
+    !looksLikeCatalogFallbackNotice;
     
     const bypassWriterModel =
       replyPolicy.shouldUseGroundedFrameOnly ||

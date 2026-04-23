@@ -1075,6 +1075,60 @@ function normalizeIncomingCanonicalResolution(input: {
   };
 }
 
+function buildCanonicalVariantChoiceOptions(input: {
+  canonicalCatalogResolution?: {
+    resolutionKind?: string | null;
+    resolvedServiceId?: string | null;
+    resolvedServiceName?: string | null;
+    variantOptions?: Array<{
+      variantId: string;
+      variantName: string;
+    }> | null;
+  } | null;
+}): CatalogVariantDisambiguationOption[] {
+  const serviceId = String(
+    input.canonicalCatalogResolution?.resolvedServiceId || ""
+  ).trim();
+
+  const serviceNameRaw = input.canonicalCatalogResolution?.resolvedServiceName;
+  const serviceName =
+    typeof serviceNameRaw === "string" && serviceNameRaw.trim()
+      ? serviceNameRaw.trim()
+      : null;
+
+  if (!serviceId) {
+    return [];
+  }
+
+  const rawOptions = Array.isArray(input.canonicalCatalogResolution?.variantOptions)
+    ? input.canonicalCatalogResolution.variantOptions
+    : [];
+
+  const result: CatalogVariantDisambiguationOption[] = [];
+
+  for (const item of rawOptions) {
+    const variantId = String(item?.variantId || "").trim();
+    const variantName = String(item?.variantName || "").trim();
+
+    if (!variantId || !variantName) {
+      continue;
+    }
+
+    result.push({
+      kind: "variant",
+      serviceId,
+      variantId,
+      label: variantName,
+      serviceName,
+      variantName,
+      price: null,
+      currency: null,
+    });
+  }
+
+  return result;
+}
+
 export async function runCatalogFastpath(
   input: RunCatalogFastpathInput
 ): Promise<FastpathResult> {
@@ -2163,6 +2217,27 @@ export async function runCatalogFastpath(
     }
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
+      const canonicalVariantOptions = buildCanonicalVariantChoiceOptions({
+        canonicalCatalogResolution: input.canonicalCatalogResolution || null,
+      });
+
+      const shouldForceCanonicalVariantChoice =
+        shouldOpenVariantChoice &&
+        String(input.canonicalCatalogResolution?.resolutionKind || "") ===
+          "resolved_service_variant_ambiguous" &&
+        canonicalVariantOptions.length > 1;
+
+      if (shouldForceCanonicalVariantChoice) {
+        return buildCatalogDisambiguationResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          kind: "variant_choice",
+          options: canonicalVariantOptions,
+          serviceId: canonicalCatalogResolution.serviceId,
+          serviceName: canonicalCatalogResolution.serviceName,
+          originalIntent: disambiguationOriginalIntent,
+        });
+      }
+
       if (!shouldForceResolvedVariant && shouldOpenVariantChoice) {
         const variantDisambiguationResult =
           await maybeBuildVariantDisambiguationResult({
@@ -2296,6 +2371,27 @@ export async function runCatalogFastpath(
     });
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
+      const canonicalVariantOptions = buildCanonicalVariantChoiceOptions({
+        canonicalCatalogResolution: input.canonicalCatalogResolution || null,
+      });
+
+      const shouldForceCanonicalVariantChoice =
+        shouldOpenVariantChoice &&
+        String(input.canonicalCatalogResolution?.resolutionKind || "") ===
+          "resolved_service_variant_ambiguous" &&
+        canonicalVariantOptions.length > 1;
+
+      if (shouldForceCanonicalVariantChoice) {
+        return buildCatalogDisambiguationResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          kind: "variant_choice",
+          options: canonicalVariantOptions,
+          serviceId: canonicalCatalogResolution.serviceId,
+          serviceName: canonicalCatalogResolution.serviceName,
+          originalIntent: disambiguationOriginalIntent,
+        });
+      }
+
       if (!shouldForceResolvedVariant && shouldOpenVariantChoice) {
         const variantDisambiguationResult =
           await maybeBuildVariantDisambiguationResult({
