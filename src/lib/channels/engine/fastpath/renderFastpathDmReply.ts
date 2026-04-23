@@ -880,11 +880,6 @@ export async function renderFastpathDmReply(
   const isStandaloneActionLinkReply =
     fpSource === "external_action_link" || isExternalActionLinkReply;
 
-  const isCatalogListReply =
-    fpSource === "service_list_db" ||
-    fpSource === "catalog_list_db" ||
-    fpSource === "catalog_overview_db";
-
   const isInfoGeneralOverviewTurn = replyPolicy.answerType === "overview";
 
   const catalogPayload = fp?.catalogPayload;
@@ -916,9 +911,31 @@ export async function renderFastpathDmReply(
       }
     : replyPolicy;
 
+  const hasStructuredResolvedCatalogEntity =
+    Boolean(structuredService?.serviceId) &&
+    !isCatalogChoiceReply &&
+    replyPolicy.hasResolvedEntity === true;
+
+  const shouldTreatAsResolvedCatalogAnswer =
+    hasStructuredResolvedCatalogEntity &&
+    (
+      fpSource === "service_list_db" ||
+      fpSource === "catalog_list_db" ||
+      fpSource === "catalog_overview_db"
+    );
+
+  const isCatalogListReply =
+    !shouldTreatAsResolvedCatalogAnswer &&
+    (
+      fpSource === "service_list_db" ||
+      fpSource === "catalog_list_db" ||
+      fpSource === "catalog_overview_db"
+    );
+
   const isResolvedCatalogAnswer =
     catalogPayload?.kind === "resolved_catalog_answer" ||
-    fpSource === "catalog_db";
+    fpSource === "catalog_db" ||
+    shouldTreatAsResolvedCatalogAnswer;
 
   const isOverviewCatalogDbReply =
     fpSource === "catalog_db" &&
@@ -980,6 +997,10 @@ export async function renderFastpathDmReply(
     canonicalReplyText.toLowerCase().includes("not currently available in the catalog") ||
     canonicalReplyText.toLowerCase().includes("free/trial option:");
 
+  const isInvalidCatalogFallback =
+    looksLikeCatalogFallbackNotice &&
+    hasStructuredResolvedCatalogEntity;
+    
   const shouldReturnCanonicalDirectly =
     isCatalogListReply &&
     Boolean(canonicalReplyText) &&
@@ -1309,14 +1330,19 @@ export async function renderFastpathDmReply(
       };
     }
 
+    const safeCanonicalBody =
+      isInvalidCatalogFallback
+        ? "" // o mejor: fuerza a reconstruir
+        : canonicalReply;
+
     const renderedCanonicalBody =
       isResolvedCatalogAnswer
         ? stripFirstResolvedHeadingFromCanonicalBody({
-            canonicalBody: canonicalReply,
+            canonicalBody: safeCanonicalBody,
             resolvedEntityLabel,
             resolvedServiceName: structuredService?.serviceName ?? null,
           })
-        : canonicalReply;
+        : safeCanonicalBody;
 
     const dedupedCanonicalBody =
       isInfoGeneralOverviewTurn || isResolvedCatalogAnswer

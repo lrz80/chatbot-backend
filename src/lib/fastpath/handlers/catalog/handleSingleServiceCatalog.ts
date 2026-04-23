@@ -542,16 +542,30 @@ export async function handleSingleServiceCatalog(
     }
 
     if (pricedVariants.length === 0 && !hasServicePriceRow && !isScheduleOnlyTurn) {
-      const canonicalReply =
-        input.idiomaDestino === "en"
-          ? `• ${targetServiceName}\n• Price: not available in the catalog`
-          : `• ${targetServiceName}\n• Precio: no disponible en el catálogo`;
-
       return {
         handled: true,
-        reply: canonicalReply,
+        reply: "", // importante: NO inventar texto
         source: "price_fastpath_db_no_price",
         intent: "precio",
+        catalogPayload: {
+          kind: "resolved_catalog_answer",
+          scope: "service",
+          presentationMode: "full_detail",
+          closingMode: "default",
+          serviceId: targetServiceId,
+          serviceName: targetServiceName || null,
+          variantId: null,
+          variantName: null,
+          canonicalBlocks: {
+            servicesBlock: targetServiceName || null,
+            priceBlock: null,
+            includesBlock: null,
+            scheduleBlock: null,
+            locationBlock: null,
+            availabilityBlock: null,
+            linkBlock: null,
+          },
+        },
         ctxPatch: {
           last_service_id: targetServiceId,
           last_service_name: targetServiceName || null,
@@ -571,16 +585,30 @@ export async function handleSingleServiceCatalog(
         min !== null && max !== null;
 
       if (!hasExplicitServicePrice) {
-        const canonicalReply =
-          input.idiomaDestino === "en"
-            ? `• ${targetServiceName}\n• Price: not explicitly configured`
-            : `• ${targetServiceName}\n• Precio: no configurado explícitamente`;
-
         return {
           handled: true,
-          reply: canonicalReply,
+          reply: "", // NO inventar texto
           source: "price_fastpath_db_no_price",
           intent: "precio",
+          catalogPayload: {
+            kind: "resolved_catalog_answer",
+            scope: "service",
+            presentationMode: "full_detail",
+            closingMode: "default",
+            serviceId: targetServiceId,
+            serviceName: targetServiceName || null,
+            variantId: null,
+            variantName: null,
+            canonicalBlocks: {
+              servicesBlock: targetServiceName || null,
+              priceBlock: null, // clave
+              includesBlock: null,
+              scheduleBlock: null,
+              locationBlock: null,
+              availabilityBlock: null,
+              linkBlock: null,
+            },
+          },
           ctxPatch: {
             last_service_id: targetServiceId,
             last_service_name: targetServiceName || null,
