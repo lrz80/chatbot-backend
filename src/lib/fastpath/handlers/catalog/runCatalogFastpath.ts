@@ -2304,6 +2304,37 @@ export async function runCatalogFastpath(
         };
       }
 
+      const resolvedServiceDetailResult = await handleResolvedServiceDetail({
+        pool: input.pool,
+        userInput: input.userInput,
+        idiomaDestino: input.idiomaDestino,
+        intentOut: input.intentOut || "precio",
+        hit: {
+          serviceId:
+            pendingSelectedVariant?.serviceId ||
+            canonicalCatalogResolution.serviceId,
+          id:
+            pendingSelectedVariant?.serviceId ||
+            canonicalCatalogResolution.serviceId,
+        },
+        traducirMensaje: async (texto: string) => texto,
+        convoCtx: input.convoCtx,
+        asksPrices,
+        asksSchedules,
+        asksLocation: Boolean(input.facets?.asksLocation),
+        asksAvailability: Boolean(input.facets?.asksAvailability),
+      });
+
+      if (resolvedServiceDetailResult.handled) {
+        return {
+          ...resolvedServiceDetailResult,
+          ctxPatch: {
+            ...(resolvedServiceDetailResult.ctxPatch || {}),
+            ...clearPendingCatalogChoiceCtxPatch(),
+          },
+        };
+      }
+
       return {
         handled: false,
       };
