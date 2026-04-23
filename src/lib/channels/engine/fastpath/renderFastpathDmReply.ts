@@ -1064,9 +1064,17 @@ export async function renderFastpathDmReply(
     !isCatalogChoiceReply &&
     effectiveReplyPolicy.shouldAskQuestion;
 
+  const shouldAllowGroundedBodyTranslation =
+    replyPolicy.replySourceKind === "business_info" &&
+    fpIntent === "horario" &&
+    Boolean(canonicalReply) &&
+    idiomaDestino === "en";
+
   const responsePolicy = {
     mode: isCatalogChoiceReply
       ? "clarify_only"
+      : shouldAllowGroundedBodyTranslation
+      ? "grounded_only"
       : isResolvedCatalogAnswer || isCatalogListReply || isInfoGeneralOverviewTurn
       ? "grounded_frame_only"
       : replyPolicy.responsePolicyMode,
@@ -1101,7 +1109,7 @@ export async function renderFastpathDmReply(
     preserveExactLinks: true,
     allowIntro: isCatalogChoiceReply ? true : shouldAllowIntro,
     allowOutro: isCatalogChoiceReply ? true : shouldAllowOutro,
-    allowBodyRewrite: false,
+    allowBodyRewrite: shouldAllowGroundedBodyTranslation,
     mustEndWithSalesQuestion: isCatalogChoiceReply
       ? false
       : shouldEndWithSalesQuestion,
