@@ -740,7 +740,7 @@ export async function handleVariantSecondTurn(
       kind: "resolved_catalog_answer",
       scope: "variant",
       presentationMode: "full_detail",
-      closingMode: "none",
+      closingMode: "availability_statement",
       serviceId,
       serviceName: baseName || null,
       variantId: String(chosen.id || ""),

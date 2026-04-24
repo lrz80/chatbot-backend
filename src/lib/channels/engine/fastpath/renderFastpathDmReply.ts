@@ -520,7 +520,7 @@ async function buildGroundedFrameOnly(input: {
             input.replyPolicy.shouldForceNullClosing
               ? "Closing must be null."
               : input.resolvedCatalogClosingMode === "availability_statement"
-              ? "Return one short declarative availability-style closing. It must not be a question."
+              ? "Return one short declarative continuation-style closing. It must not be a question. It should let the user know they can ask for more help if needed."
               : "Return exactly one short closing after the canonical body.",
             "You are only framing the canonical body.",
             "Do not rewrite, summarize, paraphrase, compress, expand, or replace the canonical body.",
@@ -540,7 +540,7 @@ async function buildGroundedFrameOnly(input: {
             "Do not use filler, gratitude, or exaggerated politeness.",
             "If PROMPT_BASE contains an explicit tenant CTA, prefer that CTA in the closing when closing is allowed.",
             input.resolvedCatalogClosingMode === "availability_statement"
-              ? "The closing must be declarative, low-pressure, and non-interrogative."
+              ? "The closing must be declarative, low-pressure, non-interrogative, and leave the conversation open for continuation."
               : "The closing must be brief, consultative, and natural.",
           ]
         : [
@@ -1000,7 +1000,7 @@ export async function renderFastpathDmReply(
   const isInvalidCatalogFallback =
     looksLikeCatalogFallbackNotice &&
     hasStructuredResolvedCatalogEntity;
-    
+
   const shouldReturnCanonicalDirectly =
     isCatalogListReply &&
     Boolean(canonicalReplyText) &&
