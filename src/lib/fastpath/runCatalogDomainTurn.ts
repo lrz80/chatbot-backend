@@ -484,17 +484,25 @@ export async function runCatalogDomainTurn(
   }
 
   {
-    const freeOfferResult = await handleFreeOffer({
-      pool,
-      tenantId,
-      idiomaDestino,
-      detectedIntent,
-      catalogReferenceClassification: effectiveCatalogReferenceClassification,
-      convoCtx,
-    });
+    const shouldAllowGenericFreeOfferHandler =
+      !hasConcreteTargetThisTurn &&
+      !canonicalCatalogResolution?.resolvedServiceId &&
+      effectiveCatalogReferenceClassification?.kind !== "entity_specific" &&
+      effectiveCatalogReferenceClassification?.kind !== "variant_specific";
 
-    if (freeOfferResult.handled) {
-      return freeOfferResult;
+    if (shouldAllowGenericFreeOfferHandler) {
+      const freeOfferResult = await handleFreeOffer({
+        pool,
+        tenantId,
+        idiomaDestino,
+        detectedIntent,
+        catalogReferenceClassification: effectiveCatalogReferenceClassification,
+        convoCtx,
+      });
+
+      if (freeOfferResult.handled) {
+        return freeOfferResult;
+      }
     }
   }
 
