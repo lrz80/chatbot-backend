@@ -820,6 +820,98 @@ function buildLastAssistantTurnSnapshot(input: {
   };
 }
 
+function syncCatalogChoiceCtxFromPayload(input: {
+  ctxPatch: any;
+  catalogPayload?: CatalogPayload;
+}): any {
+  const { ctxPatch, catalogPayload } = input;
+
+  if (!ctxPatch || !catalogPayload) {
+    return ctxPatch;
+  }
+
+  if (catalogPayload.kind !== "variant_choice") {
+    return ctxPatch;
+  }
+
+  const options = Array.isArray(catalogPayload.options)
+    ? catalogPayload.options
+        .filter(
+          (
+            option
+          ): option is Extract<CatalogChoiceOption, { kind: "variant" }> =>
+            option.kind === "variant"
+        )
+        .map((option, idx) => ({
+          kind: "variant" as const,
+          serviceId: option.serviceId,
+          variantId: option.variantId,
+          label: option.label,
+          serviceName: option.serviceName || catalogPayload.serviceName || null,
+          variantName: option.variantName || option.label,
+          index: idx + 1,
+        }))
+    : [];
+
+  if (options.length < 2) {
+    return ctxPatch;
+  }
+
+  const now = Date.now();
+
+  const syncedOptions = options.map((option) => ({
+    kind: "variant" as const,
+    serviceId: option.serviceId,
+    variantId: option.variantId,
+    label: option.label,
+    serviceName: option.serviceName,
+    variantName: option.variantName,
+  }));
+
+  return {
+    ...ctxPatch,
+
+    pendingCatalogChoice: {
+      kind: "variant_choice",
+      originalIntent:
+        typeof catalogPayload.originalIntent === "string"
+          ? catalogPayload.originalIntent
+          : "info_servicio",
+      serviceId: catalogPayload.serviceId,
+      serviceName: catalogPayload.serviceName || null,
+      options: syncedOptions,
+      createdAt:
+        typeof ctxPatch?.pendingCatalogChoice?.createdAt === "number"
+          ? ctxPatch.pendingCatalogChoice.createdAt
+          : now,
+    },
+
+    pendingCatalogChoiceAt:
+      typeof ctxPatch?.pendingCatalogChoiceAt === "number"
+        ? ctxPatch.pendingCatalogChoiceAt
+        : now,
+
+    presentedVariantOptions: options.map((option) => ({
+      variantId: option.variantId,
+      label: option.label,
+      index: option.index,
+    })),
+
+    last_variant_options: options.map((option) => ({
+      index: option.index,
+      id: option.variantId,
+      variantId: option.variantId,
+      variant_name: option.variantName,
+      label: option.label,
+    })),
+
+    last_variant_options_at:
+      typeof ctxPatch?.last_variant_options_at === "number"
+        ? ctxPatch.last_variant_options_at
+        : now,
+  };
+}
+
 export async function renderFastpathDmReply(
   input: RenderFastpathDmReplyInput
 ): Promise<RenderFastpathDmReplyResult> {
@@ -987,6 +1079,11 @@ export async function renderFastpathDmReply(
     return normalizeText(fastpathText);
   })();
 
+  const syncedChoiceCtxPatch = syncCatalogChoiceCtxFromPayload({
+    ctxPatch,
+    catalogPayload,
+  });
+
   const shouldRewriteGroundedInfoClaveBody =
     fpSource === "info_clave_db" &&
     Boolean(canonicalReply);
@@ -1044,7 +1141,7 @@ export async function renderFastpathDmReply(
       }
 
       const nextCtxPatch = {
-        ...(ctxPatch || {}),
+        ...(syncedChoiceCtxPatch || {}),
         last_assistant_turn: buildLastAssistantTurnSnapshot({
           replyPolicy,
           closingText: null,
@@ -1244,7 +1341,7 @@ export async function renderFastpathDmReply(
       });
 
       const nextCtxPatch = {
-        ...(ctxPatch || {}),
+        ...(syncedChoiceCtxPatch || {}),
         last_assistant_turn: buildLastAssistantTurnSnapshot({
           replyPolicy,
           closingText: null,
@@ -1370,7 +1467,7 @@ export async function renderFastpathDmReply(
       .trim();
 
     const nextCtxPatch = {
-      ...(ctxPatch || {}),
+      ...(syncedChoiceCtxPatch || {}),
       last_assistant_turn: buildLastAssistantTurnSnapshot({
         replyPolicy,
         closingText: safeClosing,
@@ -1421,7 +1518,7 @@ export async function renderFastpathDmReply(
   }
 
   const nextCtxPatch = {
-    ...(ctxPatch || {}),
+    ...(syncedChoiceCtxPatch || {}),
     last_assistant_turn: buildLastAssistantTurnSnapshot({
       replyPolicy,
       closingText: null,
