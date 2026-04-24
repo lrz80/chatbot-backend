@@ -437,29 +437,77 @@ export async function handleSingleServiceCatalog(
         })),
       });
 
-      const lines = pricedVariants.map((v: any, idx: number) => {
-        const rawPrice = toNullableMoneyNumber(v.price);
-        const currency = toTrimmedString(v.currency || "USD");
-        const variantName = toTrimmedString(v.variant_name);
+      const variantOptions = pricedVariants
+        .map((v: any, idx: number) => {
+          const variantId = toTrimmedString(v.id);
+          const variantName = toTrimmedString(v.variant_name);
+          const rawPrice = toNullableMoneyNumber(v.price);
+          const currency = toTrimmedString(v.currency || "USD") || "USD";
 
-        const priceText = formatMoneyAmount({
-          amount: rawPrice,
-          currency,
-          locale: input.idiomaDestino,
-        });
+          if (!variantId || !variantName) {
+            return null;
+          }
 
-        return `• ${idx + 1}) ${variantName}${priceText ? ` — ${priceText}` : ""}`;
-      });
+          const priceText = formatMoneyAmount({
+            amount: rawPrice,
+            currency,
+            locale: input.idiomaDestino,
+          });
+
+          const label = priceText
+            ? `${variantName} — ${priceText}`
+            : variantName;
+
+          return {
+            kind: "variant" as const,
+            serviceId: targetServiceId,
+            variantId,
+            label,
+            serviceName: targetServiceName || null,
+            variantName,
+            index: idx + 1,
+            url: v.variant_url ? toTrimmedString(v.variant_url) : null,
+            price: rawPrice,
+            currency,
+          };
+        })
+        .filter((option): option is {
+          kind: "variant";
+          serviceId: string;
+          variantId: string;
+          label: string;
+          serviceName: string | null;
+          variantName: string;
+          index: number;
+          url: string | null;
+          price: number | null;
+          currency: string;
+        } => option !== null);
 
       return {
         handled: true,
-        reply: lines.join("\n"),
-        source: "price_disambiguation_db",
-        intent: "precio",
+        reply: "",
+        source: "catalog_disambiguation_db",
+        intent: "variant_choice",
+        catalogPayload: {
+          kind: "variant_choice",
+          originalIntent: "precio",
+          serviceId: targetServiceId,
+          serviceName: targetServiceName || null,
+          options: variantOptions.map((option) => ({
+            kind: "variant" as const,
+            serviceId: option.serviceId,
+            variantId: option.variantId,
+            label: option.label,
+            serviceName: option.serviceName,
+            variantName: option.variantName,
+          })),
+        },
         ctxPatch: {
           selectedServiceId: targetServiceId,
           expectingVariant: true,
-          expectedVariantIntent: "price_or_plan",
+          expectedVariantIntent: "precio",
+          expectingVariantForEntityId: targetServiceId,
 
           last_service_id: targetServiceId,
           last_service_name: targetServiceName || null,
@@ -470,21 +518,47 @@ export async function handleSingleServiceCatalog(
           last_variant_url: null,
           last_variant_at: null,
 
-          last_variant_options: pricedVariants.map((v: any, idx: number) => ({
-            index: idx + 1,
-            id: toTrimmedString(v.id),
-            name: toTrimmedString(v.variant_name),
-            url: v.variant_url ? toTrimmedString(v.variant_url) : null,
-            price: toNullableMoneyNumber(v.price),
-            currency: toTrimmedString(v.currency || "USD"),
+          pendingCatalogChoice: {
+            kind: "variant_choice",
+            originalIntent: "precio",
+            serviceId: targetServiceId,
+            serviceName: targetServiceName || null,
+            options: variantOptions.map((option) => ({
+              kind: "variant" as const,
+              serviceId: option.serviceId,
+              variantId: option.variantId,
+              label: option.label,
+              serviceName: option.serviceName,
+              variantName: option.variantName,
+            })),
+            createdAt: Date.now(),
+          },
+          pendingCatalogChoiceAt: Date.now(),
+
+          presentedVariantOptions: variantOptions.map((option) => ({
+            variantId: option.variantId,
+            label: option.label,
+            index: option.index,
+          })),
+
+          last_variant_options: variantOptions.map((option) => ({
+            index: option.index,
+            id: option.variantId,
+            variantId: option.variantId,
+            variant_name: option.variantName,
+            label: option.label,
+            url: option.url,
+            price: option.price,
+            currency: option.currency,
           })),
           last_variant_options_at: Date.now(),
 
           last_price_option_label: null,
           last_price_option_at: null,
 
-          last_bot_action: "asked_price_variant",
+          last_bot_action: "catalog_variant_choice_pending",
           last_bot_action_at: Date.now(),
+          lastResolvedIntent: "variant_choice",
         } as any,
       };
     }
