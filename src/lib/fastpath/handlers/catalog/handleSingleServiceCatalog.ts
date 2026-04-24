@@ -4,7 +4,6 @@ import { getCatalogStructuredSignals } from "./getCatalogStructuredSignals";
 import {
   formatMoneyAmount,
   formatMoneyRange,
-  normalizeCurrency,
   toNullableMoneyNumber,
 } from "./helpers/catalogMoneyFormat";
 
@@ -424,6 +423,8 @@ export async function handleSingleServiceCatalog(
     }
 
     if (pricedVariants.length > 1 && !chosenVariant && !asksSchedules) {
+      const now = Date.now();
+
       console.log("[PRICE][single] multiple priced variants -> list for selection", {
         targetServiceId,
         targetServiceName,
@@ -437,19 +438,35 @@ export async function handleSingleServiceCatalog(
         })),
       });
 
-      const variantOptions = pricedVariants
-        .map((v: any, idx: number) => {
+      const variantChoiceOptions = pricedVariants.reduce(
+        (
+          acc: Array<{
+            kind: "variant";
+            serviceId: string;
+            variantId: string;
+            label: string;
+            serviceName: string | null;
+            variantName: string;
+            index: number;
+            url: string | null;
+            price: number | null;
+            currency: string;
+          }>,
+          v: any,
+          idx: number
+        ) => {
           const variantId = toTrimmedString(v.id);
           const variantName = toTrimmedString(v.variant_name);
-          const rawPrice = toNullableMoneyNumber(v.price);
           const currency = toTrimmedString(v.currency || "USD") || "USD";
+          const price = toNullableMoneyNumber(v.price);
+          const url = v.variant_url ? toTrimmedString(v.variant_url) : null;
 
           if (!variantId || !variantName) {
-            return null;
+            return acc;
           }
 
           const priceText = formatMoneyAmount({
-            amount: rawPrice,
+            amount: price,
             currency,
             locale: input.idiomaDestino,
           });
@@ -458,31 +475,38 @@ export async function handleSingleServiceCatalog(
             ? `${variantName} — ${priceText}`
             : variantName;
 
-          return {
-            kind: "variant" as const,
+          acc.push({
+            kind: "variant",
             serviceId: targetServiceId,
             variantId,
             label,
             serviceName: targetServiceName || null,
             variantName,
             index: idx + 1,
-            url: v.variant_url ? toTrimmedString(v.variant_url) : null,
-            price: rawPrice,
+            url,
+            price,
             currency,
-          };
-        })
-        .filter((option): option is {
-          kind: "variant";
-          serviceId: string;
-          variantId: string;
-          label: string;
-          serviceName: string | null;
-          variantName: string;
-          index: number;
-          url: string | null;
-          price: number | null;
-          currency: string;
-        } => option !== null);
+          });
+
+          return acc;
+        },
+        []
+      );
+
+      if (variantChoiceOptions.length < 2) {
+        return {
+          handled: false,
+        };
+      }
+
+      const publicOptions = variantChoiceOptions.map((option) => ({
+        kind: "variant" as const,
+        serviceId: option.serviceId,
+        variantId: option.variantId,
+        label: option.label,
+        serviceName: option.serviceName,
+        variantName: option.variantName,
+      }));
 
       return {
         handled: true,
@@ -494,14 +518,7 @@ export async function handleSingleServiceCatalog(
           originalIntent: "precio",
           serviceId: targetServiceId,
           serviceName: targetServiceName || null,
-          options: variantOptions.map((option) => ({
-            kind: "variant" as const,
-            serviceId: option.serviceId,
-            variantId: option.variantId,
-            label: option.label,
-            serviceName: option.serviceName,
-            variantName: option.variantName,
-          })),
+          options: publicOptions,
         },
         ctxPatch: {
           selectedServiceId: targetServiceId,
@@ -511,7 +528,7 @@ export async function handleSingleServiceCatalog(
 
           last_service_id: targetServiceId,
           last_service_name: targetServiceName || null,
-          last_service_at: Date.now(),
+          last_service_at: now,
 
           last_variant_id: null,
           last_variant_name: null,
@@ -523,25 +540,18 @@ export async function handleSingleServiceCatalog(
             originalIntent: "precio",
             serviceId: targetServiceId,
             serviceName: targetServiceName || null,
-            options: variantOptions.map((option) => ({
-              kind: "variant" as const,
-              serviceId: option.serviceId,
-              variantId: option.variantId,
-              label: option.label,
-              serviceName: option.serviceName,
-              variantName: option.variantName,
-            })),
-            createdAt: Date.now(),
+            options: publicOptions,
+            createdAt: now,
           },
-          pendingCatalogChoiceAt: Date.now(),
+          pendingCatalogChoiceAt: now,
 
-          presentedVariantOptions: variantOptions.map((option) => ({
+          presentedVariantOptions: variantChoiceOptions.map((option) => ({
             variantId: option.variantId,
             label: option.label,
             index: option.index,
           })),
 
-          last_variant_options: variantOptions.map((option) => ({
+          last_variant_options: variantChoiceOptions.map((option) => ({
             index: option.index,
             id: option.variantId,
             variantId: option.variantId,
@@ -551,13 +561,13 @@ export async function handleSingleServiceCatalog(
             price: option.price,
             currency: option.currency,
           })),
-          last_variant_options_at: Date.now(),
+          last_variant_options_at: now,
 
           last_price_option_label: null,
           last_price_option_at: null,
 
           last_bot_action: "catalog_variant_choice_pending",
-          last_bot_action_at: Date.now(),
+          last_bot_action_at: now,
           lastResolvedIntent: "variant_choice",
         } as any,
       };
