@@ -1,4 +1,5 @@
 //src/lib/fastpath/handlers/catalog/runCatalogFastpath.ts
+
 import type { Pool } from "pg";
 import type { FastpathResult } from "../../runFastpath";
 import { getCatalogIntentFlags } from "./getCatalogIntentFlags";
