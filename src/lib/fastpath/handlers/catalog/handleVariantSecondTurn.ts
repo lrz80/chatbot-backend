@@ -2,6 +2,10 @@
 import type { Pool } from "pg";
 import type { FastpathResult } from "../../runFastpath";
 import { getCatalogStructuredSignals } from "./getCatalogStructuredSignals";
+import {
+  formatMoneyAmount,
+  toNullableMoneyNumber,
+} from "./helpers/catalogMoneyFormat";
 
 export type HandleVariantSecondTurnInput = {
   pool: Pool;
@@ -47,6 +51,18 @@ type PresentedVariantOption = {
   variantId: string;
   label: string;
   index: number;
+};
+
+type VariantChoiceOption = {
+  kind: "variant";
+  serviceId: string;
+  variantId: string;
+  label: string;
+  serviceName: string | null;
+  variantName: string;
+  price: number | null;
+  currency: string;
+  displayPrice: string;
 };
 
 function parseSingleDigitSelection(input: string): number | null {
@@ -489,64 +505,45 @@ export async function handleVariantSecondTurn(
       originalIntent === "price_or_plan" ||
       originalIntent === "combination_and_price";
 
-    const variantOptions = variants
-      .map((variant: any) => {
+    const variantOptions: VariantChoiceOption[] = variants.reduce(
+      (acc: VariantChoiceOption[], variant: any) => {
         const variantId = String(variant.id || "").trim();
         const variantName = String(variant.variant_name || "").trim();
 
         if (!variantId || !variantName) {
-          return null;
+          return acc;
         }
 
-        const priceNum =
-          variant.price === null ||
-          variant.price === undefined ||
-          variant.price === ""
-            ? null
-            : Number(variant.price);
+        const priceNum = toNullableMoneyNumber(variant.price);
+        const currency = String(variant.currency || "USD").trim() || "USD";
 
-        const currency = String(variant.currency || "USD").trim();
-
-        const hasValidPrice = typeof priceNum === "number" && Number.isFinite(priceNum);
-
-        const displayPrice = hasValidPrice
-          ? currency === "USD"
-            ? `$${priceNum.toFixed(2)}`
-            : `${priceNum.toFixed(2)} ${currency}`
-          : null;
+        const displayPrice = formatMoneyAmount({
+          amount: priceNum,
+          currency,
+          locale: input.idiomaDestino,
+        });
 
         const label =
           shouldIncludePricesInVariantChoice && displayPrice
-            ? `${variantName} ${displayPrice}`
+            ? `${variantName} — ${displayPrice}`
             : variantName;
 
-        return {
-          kind: "variant" as const,
+        acc.push({
+          kind: "variant",
           serviceId,
           variantId,
           label,
           serviceName: selectedServiceName || null,
           variantName,
-          price: hasValidPrice ? priceNum : null,
+          price: priceNum,
           currency,
           displayPrice,
-        };
-      })
-      .filter(
-        (
-          option
-        ): option is {
-          kind: "variant";
-          serviceId: string;
-          variantId: string;
-          label: string;
-          serviceName: string | null;
-          variantName: string;
-          price: number | null;
-          currency: string;
-          displayPrice: string | null;
-        } => option !== null
-      );
+        });
+
+        return acc;
+      },
+      []
+    );
 
     if (variantOptions.length > 1) {
       return {
@@ -686,63 +683,11 @@ export async function handleVariantSecondTurn(
 
   const variantName = String(chosen.variant_name || "").trim();
 
-  if (askedPriceVariant) {
-    const priceNum =
-      chosen.price === null || chosen.price === undefined || chosen.price === ""
-        ? null
-        : Number(chosen.price);
-
-    const currency = String(chosen.currency || "USD").trim();
-
-    let priceText =
-      input.idiomaDestino === "en"
-        ? "price available"
-        : "precio disponible";
-
-    if (Number.isFinite(priceNum)) {
-      priceText =
-        currency === "USD"
-          ? `$${priceNum!.toFixed(2)}`
-          : `${priceNum!.toFixed(2)} ${currency}`;
-    }
-
-    const reply =
-      `${baseName} — ${variantName}\n• ${priceText}${link ? `\n${link}` : ""}`.trim();
-
-    return {
-      handled: true,
-      reply,
-      source: "price_fastpath_db",
-      intent: resolvedVariantTurnIntent,
-      ctxPatch: {
-        expectingVariant: false,
-        expectedVariantIntent: null,
-        expectingVariantForEntityId: null,
-        presentedVariantOptions: null,
-        pendingCatalogChoice: null,
-        pendingCatalogChoiceAt: null,
-
-        lastResolvedIntent: resolvedVariantTurnIntent,
-
-        selectedServiceId: serviceId,
-
-        last_service_id: serviceId,
-        last_service_name: baseName || null,
-        last_service_at: Date.now(),
-
-        last_variant_id: String(chosen.id || ""),
-        last_variant_name: variantName || null,
-        last_variant_url: link || null,
-        last_variant_at: Date.now(),
-
-        last_price_option_label: variantName || null,
-        last_price_option_at: Date.now(),
-
-        last_bot_action: "answered_price_variant",
-        last_bot_action_at: Date.now(),
-      } as any,
-    };
-  }
+  const priceText = formatMoneyAmount({
+    amount: toNullableMoneyNumber(chosen.price),
+    currency: String(chosen.currency || "USD").trim() || "USD",
+    locale: input.idiomaDestino,
+  });
 
   const title =
     baseName && variantName
@@ -762,6 +707,10 @@ export async function handleVariantSecondTurn(
 
   if (title) {
     canonicalParts.push(title);
+  }
+
+  if (priceText) {
+    canonicalParts.push(priceText);
   }
 
   if (bullets) {
@@ -787,6 +736,25 @@ export async function handleVariantSecondTurn(
     reply: finalReply,
     source: "catalog_db",
     intent: resolvedVariantTurnIntent,
+    catalogPayload: {
+      kind: "resolved_catalog_answer",
+      scope: "variant",
+      presentationMode: "full_detail",
+      closingMode: "none",
+      serviceId,
+      serviceName: baseName || null,
+      variantId: String(chosen.id || ""),
+      variantName: variantName || null,
+      canonicalBlocks: {
+        servicesBlock: title || null,
+        priceBlock: priceText || null,
+        includesBlock: bullets || null,
+        scheduleBlock: null,
+        locationBlock: null,
+        availabilityBlock: null,
+        linkBlock: link || null,
+      },
+    },
     ctxPatch: {
       expectingVariant: false,
       expectedVariantIntent: null,
