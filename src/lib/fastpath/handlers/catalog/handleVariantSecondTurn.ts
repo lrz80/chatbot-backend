@@ -101,6 +101,67 @@ function normalizeChoiceText(value: unknown): string {
     .replace(/\s+/g, " ");
 }
 
+function tokenizeChoiceText(value: unknown): string[] {
+  return normalizeChoiceText(value)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+}
+
+function getChoiceTokenOverlapScore(inputText: string, candidateText: string): number {
+  const inputTokens = tokenizeChoiceText(inputText);
+  const candidateTokens = new Set(tokenizeChoiceText(candidateText));
+
+  if (!inputTokens.length || !candidateTokens.size) {
+    return 0;
+  }
+
+  const overlap = inputTokens.filter((token) => candidateTokens.has(token)).length;
+
+  return overlap / inputTokens.length;
+}
+
+function looksLikeTextualVariantSelection(input: {
+  userInput: string;
+  pendingVariantChoice: PendingVariantChoice | null;
+  presentedVariantOptions: PresentedVariantOption[];
+}): boolean {
+  const userTokens = tokenizeChoiceText(input.userInput);
+
+  if (userTokens.length < 2) {
+    return false;
+  }
+
+  const candidateLabels = [
+    ...(input.pendingVariantChoice?.options || []).map((option) => option.label),
+    ...input.presentedVariantOptions.map((option) => option.label),
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  if (!candidateLabels.length) {
+    return false;
+  }
+
+  const scored = candidateLabels
+    .map((label) => ({
+      label,
+      score: getChoiceTokenOverlapScore(input.userInput, label),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (!scored.length) {
+    return false;
+  }
+
+  const best = scored[0];
+  const second = scored[1] || null;
+
+  return best.score >= 0.67 && (!second || best.score - second.score >= 0.25);
+}
+
 function resolveVariantTurnIntent(params: {
   detectedIntent?: string | null;
   intentOut?: string | null;
@@ -353,20 +414,67 @@ function resolveVariantIdFromUserInput(params: {
     return null;
   }
 
-  const fromPresentedByLabel = params.presentedVariantOptions.find(
+  const exactPresentedByLabel = params.presentedVariantOptions.find(
     (item) => normalizeChoiceText(item.label) === userNorm
   );
 
-  if (fromPresentedByLabel?.variantId) {
-    return fromPresentedByLabel.variantId;
+  if (exactPresentedByLabel?.variantId) {
+    return exactPresentedByLabel.variantId;
   }
 
-  const fromDbByLabel = params.dbVariants.find(
+  const exactPendingByLabel = params.pendingVariantChoice?.options?.find(
+    (item) => normalizeChoiceText(item.label) === userNorm
+  );
+
+  if (exactPendingByLabel?.variantId) {
+    return String(exactPendingByLabel.variantId).trim();
+  }
+
+  const exactDbByLabel = params.dbVariants.find(
     (item) => normalizeChoiceText(item.variant_name) === userNorm
   );
 
-  if (fromDbByLabel?.id) {
-    return String(fromDbByLabel.id).trim();
+  if (exactDbByLabel?.id) {
+    return String(exactDbByLabel.id).trim();
+  }
+
+  const scoredCandidates = [
+    ...params.presentedVariantOptions.map((item) => {
+  const label = String(item.label || "").trim();
+
+  return {
+    variantId: String(item.variantId || "").trim(),
+    label,
+    score: getChoiceTokenOverlapScore(params.userInput, label),
+  };
+}),
+    ...(params.pendingVariantChoice?.options || []).map((item) => {
+      const label = String(item.label || "").trim();
+
+      return {
+        variantId: String(item.variantId || "").trim(),
+        label,
+        score: getChoiceTokenOverlapScore(params.userInput, label),
+      };
+    }),
+    ...params.dbVariants.map((item) => {
+      const label = String(item.variant_name || "").trim();
+
+      return {
+        variantId: String(item.id || "").trim(),
+        label,
+        score: getChoiceTokenOverlapScore(params.userInput, label),
+      };
+    }),
+  ]
+    .filter((item) => item.variantId && item.label && item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  const best = scoredCandidates[0] || null;
+  const second = scoredCandidates[1] || null;
+
+  if (best && best.score >= 0.67 && (!second || best.score - second.score >= 0.25)) {
+    return best.variantId;
   }
 
   return null;
@@ -385,8 +493,16 @@ export async function handleVariantSecondTurn(
 
   const pendingServiceChoice = getPendingServiceChoice(input.convoCtx);
   const pendingVariantChoice = getPendingVariantChoice(input.convoCtx);
+  const presentedVariantOptions = getPresentedVariantOptions(input.convoCtx);
   const numericSelectionIndex = parseSingleDigitSelection(input.userInput);
-  const isSelectionTurn = isExplicitVariantSelectionTurn(input.userInput);
+
+  const isSelectionTurn =
+    isExplicitVariantSelectionTurn(input.userInput) ||
+    looksLikeTextualVariantSelection({
+      userInput: input.userInput,
+      pendingVariantChoice,
+      presentedVariantOptions,
+    });
 
   const selectedServiceOptionFromChoice =
     pendingServiceChoice && numericSelectionIndex !== null
@@ -411,8 +527,6 @@ export async function handleVariantSecondTurn(
         input.convoCtx?.last_service_name ||
         ""
     ).trim() || null;
-
-  const presentedVariantOptions = getPresentedVariantOptions(input.convoCtx);
 
   const hasVariantSelectionContext =
     Boolean(input.convoCtx?.expectingVariant) ||
