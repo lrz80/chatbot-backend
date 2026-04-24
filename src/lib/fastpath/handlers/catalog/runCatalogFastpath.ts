@@ -324,16 +324,26 @@ function normalizeCatalogDisambiguationOptions(
     if (kind === "variant") {
       const serviceId = String(item?.serviceId || item?.id || "").trim();
       const variantId = String(item?.variantId || "").trim();
-      const variantName = String(
-        item?.variantName ||
-        item?.variant_name ||
-        item?.label ||
-        item?.name ||
-        ""
-      ).trim();
+
       const serviceName = String(
         item?.serviceName ||
         item?.service_name ||
+        ""
+      ).trim();
+
+      const rawLabel = String(
+        item?.label ||
+        item?.variantName ||
+        item?.variant_name ||
+        item?.name ||
+        ""
+      ).trim();
+
+      const variantName = String(
+        item?.variantName ||
+        item?.variant_name ||
+        item?.name ||
+        rawLabel ||
         ""
       ).trim();
 
@@ -349,7 +359,7 @@ function normalizeCatalogDisambiguationOptions(
         kind: "variant",
         serviceId,
         variantId,
-        label: variantName,
+        label: rawLabel || variantName,
         serviceName: serviceName || null,
         variantName,
       });
@@ -1073,60 +1083,6 @@ function normalizeIncomingCanonicalResolution(input: {
     resolvedServiceName,
     variantOptions,
   };
-}
-
-function buildCanonicalVariantChoiceOptions(input: {
-  canonicalCatalogResolution?: {
-    resolutionKind?: string | null;
-    resolvedServiceId?: string | null;
-    resolvedServiceName?: string | null;
-    variantOptions?: Array<{
-      variantId: string;
-      variantName: string;
-    }> | null;
-  } | null;
-}): CatalogVariantDisambiguationOption[] {
-  const serviceId = String(
-    input.canonicalCatalogResolution?.resolvedServiceId || ""
-  ).trim();
-
-  const serviceNameRaw = input.canonicalCatalogResolution?.resolvedServiceName;
-  const serviceName =
-    typeof serviceNameRaw === "string" && serviceNameRaw.trim()
-      ? serviceNameRaw.trim()
-      : null;
-
-  if (!serviceId) {
-    return [];
-  }
-
-  const rawOptions = Array.isArray(input.canonicalCatalogResolution?.variantOptions)
-    ? input.canonicalCatalogResolution.variantOptions
-    : [];
-
-  const result: CatalogVariantDisambiguationOption[] = [];
-
-  for (const item of rawOptions) {
-    const variantId = String(item?.variantId || "").trim();
-    const variantName = String(item?.variantName || "").trim();
-
-    if (!variantId || !variantName) {
-      continue;
-    }
-
-    result.push({
-      kind: "variant",
-      serviceId,
-      variantId,
-      label: variantName,
-      serviceName,
-      variantName,
-      price: null,
-      currency: null,
-    });
-  }
-
-  return result;
 }
 
 export async function runCatalogFastpath(
@@ -2217,8 +2173,11 @@ export async function runCatalogFastpath(
     }
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
-      const canonicalVariantOptions = buildCanonicalVariantChoiceOptions({
-        canonicalCatalogResolution: input.canonicalCatalogResolution || null,
+      const canonicalVariantOptions = await getActiveVariantOptionsForService({
+        pool: input.pool,
+        serviceId: canonicalCatalogResolution.serviceId,
+        includePriceInLabel: disambiguationOriginalIntent === "precio",
+        idiomaDestino: input.idiomaDestino,
       });
 
       const shouldForceCanonicalVariantChoice =
@@ -2402,8 +2361,11 @@ export async function runCatalogFastpath(
     });
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
-      const canonicalVariantOptions = buildCanonicalVariantChoiceOptions({
-        canonicalCatalogResolution: input.canonicalCatalogResolution || null,
+      const canonicalVariantOptions = await getActiveVariantOptionsForService({
+        pool: input.pool,
+        serviceId: canonicalCatalogResolution.serviceId,
+        includePriceInLabel: disambiguationOriginalIntent === "precio",
+        idiomaDestino: input.idiomaDestino,
       });
 
       const shouldForceCanonicalVariantChoice =

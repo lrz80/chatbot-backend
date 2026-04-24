@@ -485,17 +485,24 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ✅ FREE OFFER
   // ===============================
   {
-    const freeOfferResult = await handleFreeOffer({
-      pool,
-      tenantId,
-      idiomaDestino,
-      detectedIntent,
-      catalogReferenceClassification,
-      convoCtx,
-    });
+    const shouldAllowGenericFreeOfferHandler =
+      !hasConcreteTargetThisTurn &&
+      catalogReferenceClassification?.kind !== "entity_specific" &&
+      catalogReferenceClassification?.kind !== "variant_specific";
 
-    if (freeOfferResult.handled) {
-      return freeOfferResult;
+    if (shouldAllowGenericFreeOfferHandler) {
+      const freeOfferResult = await handleFreeOffer({
+        pool,
+        tenantId,
+        idiomaDestino,
+        detectedIntent,
+        catalogReferenceClassification,
+        convoCtx,
+      });
+
+      if (freeOfferResult.handled) {
+        return freeOfferResult;
+      }
     }
   }
 
