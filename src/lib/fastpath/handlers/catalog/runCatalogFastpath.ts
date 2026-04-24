@@ -8,6 +8,10 @@ import { handleCatalogComparison } from "./handleCatalogComparison";
 import { resolveServiceCandidatesFromText } from "../../../services/pricing/resolveServiceIdFromText";
 import { handleResolvedServiceDetail } from "./handleResolvedServiceDetail";
 import { buildCatalogOverviewPriceBlock } from "./helpers/buildCatalogOverviewPriceBlock";
+import {
+  formatMoneyAmount,
+  toNullableMoneyNumber,
+} from "./helpers/catalogMoneyFormat";
 
 type CatalogFacets = {
   asksPrices?: boolean;
@@ -734,7 +738,7 @@ async function getActiveVariantOptionsForService(input: {
     const variantId = String(row.id || "").trim();
     const variantName = String(row.variant_name || "").trim();
     const serviceName = String(row.service_name || "").trim();
-    const rawPrice = row.price === null ? null : Number(row.price);
+    const rawPrice = toNullableMoneyNumber(row.price);
     const currency = String(row.currency || "USD").trim() || "USD";
 
     if (!variantId || !variantName) {
@@ -744,17 +748,13 @@ async function getActiveVariantOptionsForService(input: {
     let label = variantName;
 
     if (input.includePriceInLabel) {
-      let priceText =
-        input.idiomaDestino === "en" ? "price available" : "precio disponible";
+      const priceText = formatMoneyAmount({
+        amount: rawPrice,
+        currency,
+        locale: input.idiomaDestino,
+      });
 
-      if (Number.isFinite(rawPrice)) {
-        priceText =
-          currency === "USD"
-            ? `$${rawPrice!.toFixed(2)}`
-            : `${rawPrice!.toFixed(2)} ${currency}`;
-      }
-
-      label = `${variantName} — ${priceText}`;
+      label = priceText ? `${variantName} — ${priceText}` : variantName;
     }
 
     options.push({
@@ -764,7 +764,7 @@ async function getActiveVariantOptionsForService(input: {
       label,
       serviceName: serviceName || null,
       variantName: variantName || null,
-      price: Number.isFinite(rawPrice) ? Number(rawPrice) : null,
+      price: rawPrice,
       currency: currency || null,
     });
   }

@@ -1,6 +1,12 @@
 import type { Pool } from "pg";
 import type { FastpathResult } from "../../runFastpath";
 import { getCatalogStructuredSignals } from "./getCatalogStructuredSignals";
+import {
+  formatMoneyAmount,
+  formatMoneyRange,
+  normalizeCurrency,
+  toNullableMoneyNumber,
+} from "./helpers/catalogMoneyFormat";
 
 export type HandleSingleServiceCatalogInput = {
   pool: Pool;
@@ -26,11 +32,6 @@ function toTrimmedString(value: any): string {
   return String(value ?? "").trim();
 }
 
-function toNullableNumber(value: any): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
 function normalizeDetailLine(value: string): string {
   return String(value || "").trim().replace(/^[-•*]\s*/, "");
 }
@@ -39,40 +40,18 @@ function buildCanonicalDetailBlock(params: {
   idiomaDestino: string;
   serviceDescription: string;
 }): string {
+  void params.idiomaDestino;
+
   const rawLines = String(params.serviceDescription || "")
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => normalizeDetailLine(line))
     .filter(Boolean);
 
   if (!rawLines.length) {
     return "";
   }
 
-  const normalizedLines = rawLines.map(normalizeDetailLine);
-
-  const headingIndex = normalizedLines.findIndex((line) => {
-    const lowered = line.toLowerCase();
-    return lowered === "incluye:" || lowered === "includes:";
-  });
-
-  if (headingIndex >= 0) {
-    const heading = params.idiomaDestino === "en" ? "Includes:" : "Incluye:";
-    const detailItems = normalizedLines
-      .slice(headingIndex + 1)
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    if (!detailItems.length) {
-      return heading;
-    }
-
-    return [
-      heading,
-      ...detailItems.map((line) => `• ${line}`),
-    ].join("\n");
-  }
-
-  return normalizedLines.map((line) => `• ${line}`).join("\n");
+  return rawLines.map((line) => `• ${line}`).join("\n");
 }
 
 export async function handleSingleServiceCatalog(
@@ -238,7 +217,7 @@ export async function handleSingleServiceCatalog(
 
     const pricedVariants = variants.filter((v: any) => {
       const n = Number(v.price);
-      return Number.isFinite(n) && n > 0;
+      return Number.isFinite(n) && n >= 0;
     });
 
     let chosenVariant: any = null;
@@ -333,7 +312,7 @@ export async function handleSingleServiceCatalog(
         })),
       });
 
-      const priceNum = toNullableNumber(chosenVariant.price);
+      const priceNum = toNullableMoneyNumber(chosenVariant.price);
       const baseName = targetServiceName || "";
       const variantName = toTrimmedString(chosenVariant.variant_name);
       const resolvedCurrency = toTrimmedString(chosenVariant.currency || "USD");
@@ -354,15 +333,11 @@ export async function handleSingleServiceCatalog(
         chosenVariant.description || serviceBase?.description || ""
       );
 
-      let priceText =
-        input.idiomaDestino === "es" ? "precio disponible" : "price available";
-
-      if (priceNum !== null) {
-        priceText =
-          resolvedCurrency === "USD"
-            ? `$${priceNum.toFixed(2)}`
-            : `${priceNum.toFixed(2)} ${resolvedCurrency}`;
-      }
+      const priceText = formatMoneyAmount({
+        amount: priceNum,
+        currency: resolvedCurrency,
+        locale: input.idiomaDestino,
+      });
 
       const variantUrl = toTrimmedString(chosenVariant.variant_url);
 
@@ -394,9 +369,7 @@ export async function handleSingleServiceCatalog(
           ? variantUrl
           : [
               `${baseName} — ${variantName}`,
-              input.idiomaDestino === "es"
-                ? `Precio: ${priceText}`
-                : `Price: ${priceText}`,
+              priceText || "",
               detailBlock || "",
               variantUrl || "",
             ]
@@ -422,10 +395,7 @@ export async function handleSingleServiceCatalog(
           variantName: variantName || null,
           canonicalBlocks: {
             servicesBlock: `${baseName} — ${variantName}`,
-            priceBlock:
-              input.idiomaDestino === "es"
-                ? `Precio: ${priceText}`
-                : `Price: ${priceText}`,
+            priceBlock: priceText || null,
             includesBlock: detailBlock || null,
             scheduleBlock: null,
             locationBlock: null,
@@ -468,21 +438,17 @@ export async function handleSingleServiceCatalog(
       });
 
       const lines = pricedVariants.map((v: any, idx: number) => {
-        const rawPrice = toNullableNumber(v.price);
+        const rawPrice = toNullableMoneyNumber(v.price);
         const currency = toTrimmedString(v.currency || "USD");
         const variantName = toTrimmedString(v.variant_name);
 
-        let priceText =
-          input.idiomaDestino === "en" ? "price available" : "precio disponible";
+        const priceText = formatMoneyAmount({
+          amount: rawPrice,
+          currency,
+          locale: input.idiomaDestino,
+        });
 
-        if (rawPrice !== null) {
-          priceText =
-            currency === "USD"
-              ? `$${rawPrice.toFixed(2)}`
-              : `${rawPrice.toFixed(2)} ${currency}`;
-        }
-
-        return `• ${idx + 1}) ${variantName}: ${priceText}`;
+        return `• ${idx + 1}) ${variantName}${priceText ? ` — ${priceText}` : ""}`;
       });
 
       return {
@@ -509,7 +475,7 @@ export async function handleSingleServiceCatalog(
             id: toTrimmedString(v.id),
             name: toTrimmedString(v.variant_name),
             url: v.variant_url ? toTrimmedString(v.variant_url) : null,
-            price: toNullableNumber(v.price),
+            price: toNullableMoneyNumber(v.price),
             currency: toTrimmedString(v.currency || "USD"),
           })),
           last_variant_options_at: Date.now(),
@@ -578,8 +544,8 @@ export async function handleSingleServiceCatalog(
     }
 
     if (matchedRow && !isScheduleOnlyTurn && asksPrices) {
-      const min = toNullableNumber(matchedRow.min_price);
-      const max = toNullableNumber(matchedRow.max_price);
+      const min = toNullableMoneyNumber(matchedRow.min_price);
+      const max = toNullableMoneyNumber(matchedRow.max_price);
 
       const hasExplicitServicePrice =
         min !== null && max !== null;
@@ -620,10 +586,12 @@ export async function handleSingleServiceCatalog(
         };
       }
 
-      const priceText =
-        min === max
-          ? `$${min.toFixed(2)}`
-          : `${input.idiomaDestino === "en" ? "from" : "desde"} $${min.toFixed(2)}`;
+      const priceText = formatMoneyRange({
+        min,
+        max,
+        currency: matchedRow.currency || "USD",
+        locale: input.idiomaDestino,
+      });
 
       console.log("[PRICE][single][SERVICE_PRICE_RENDER]", {
         targetServiceId,
@@ -722,30 +690,14 @@ export async function handleSingleServiceCatalog(
           const min = row?.min_price === null ? null : Number(row?.min_price);
           const max = row?.max_price === null ? null : Number(row?.max_price);
 
-          let priceText =
-            input.idiomaDestino === "en"
-              ? "price not available"
-              : "precio no disponible";
+          const priceText = formatMoneyRange({
+            min: Number.isFinite(min) ? Number(min) : null,
+            max: Number.isFinite(max) ? Number(max) : null,
+            currency: row?.currency || "USD",
+            locale: input.idiomaDestino,
+          });
 
-          if (Number.isFinite(min) && Number.isFinite(max)) {
-            if (min === max) {
-              priceText = `$${min!.toFixed(2)}`;
-            } else {
-              priceText =
-                input.idiomaDestino === "en"
-                  ? `from $${min!.toFixed(2)}`
-                  : `desde $${min!.toFixed(2)}`;
-            }
-          } else if (Number.isFinite(min)) {
-            priceText =
-              input.idiomaDestino === "en"
-                ? `from $${min!.toFixed(2)}`
-                : `desde $${min!.toFixed(2)}`;
-          } else if (Number.isFinite(max)) {
-            priceText = `$${max!.toFixed(2)}`;
-          }
-
-          return `• ${serviceName}: ${priceText}`;
+          return `• ${serviceName}${priceText ? ` — ${priceText}` : ""}`;
         })
         .join("\n");
 
