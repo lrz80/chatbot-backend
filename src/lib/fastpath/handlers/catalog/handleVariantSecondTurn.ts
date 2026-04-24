@@ -537,13 +537,23 @@ export async function handleVariantSecondTurn(
   const canAttemptVariantResolution =
     Boolean(selectedServiceId) &&
     hasVariantSelectionContext &&
-    isSelectionTurn;
+    (
+      isSelectionTurn ||
+      Boolean(pendingVariantChoice) ||
+      presentedVariantOptions.length > 0
+    );
 
-  if (!isSelectionTurn) {
-    return {
-      handled: false,
-    };
-  }
+  console.log("[VARIANT_SECOND_TURN][GATE]", {
+    userInput: input.userInput,
+    numericSelectionIndex,
+    isSelectionTurn,
+    hasVariantSelectionContext,
+    hasPendingServiceChoice: Boolean(pendingServiceChoice),
+    hasPendingVariantChoice: Boolean(pendingVariantChoice),
+    presentedVariantOptionsCount: presentedVariantOptions.length,
+    selectedServiceId,
+    canAttemptVariantResolution,
+  });
 
   if (!canAttemptVariantResolution) {
     return {
@@ -607,7 +617,7 @@ export async function handleVariantSecondTurn(
     };
   }
 
-  if (pendingServiceChoice) {
+  if (pendingServiceChoice && !pendingVariantChoice && numericSelectionIndex !== null) {
     const originalIntent = String(
       pendingServiceChoice.originalIntent || "info_servicio"
     )
