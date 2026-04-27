@@ -1567,6 +1567,8 @@ export async function runCatalogFastpath(
     (
       executionRouteIntent === "catalog_includes" ||
       executionRouteIntent === "catalog_price" ||
+      executionRouteIntent === "entity_detail" ||
+      intentOutNorm === "info_general" ||
       intentOutNorm === "info_servicio" ||
       intentOutNorm === "precio"
     );
