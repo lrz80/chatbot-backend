@@ -228,6 +228,41 @@ function shouldPrioritizeBusinessInfoDomain(input: {
   return true;
 }
 
+function shouldPrioritizeCatalogFromCanonicalResolution(input: {
+  canonicalCatalogRouteDecision: {
+    shouldRouteCatalog?: boolean;
+    resolutionKind?: string | null;
+  };
+  asksSchedules: boolean;
+  asksLocation: boolean;
+  asksAvailability: boolean;
+  inBooking: boolean;
+}): boolean {
+  if (input.inBooking) {
+    return false;
+  }
+
+  if (input.asksSchedules || input.asksLocation || input.asksAvailability) {
+    return false;
+  }
+
+  const resolutionKind = String(
+    input.canonicalCatalogRouteDecision?.resolutionKind || "none"
+  ).trim();
+
+  const shouldRouteCatalog =
+    input.canonicalCatalogRouteDecision?.shouldRouteCatalog === true;
+
+  return (
+    shouldRouteCatalog &&
+    (
+      resolutionKind === "resolved_single" ||
+      resolutionKind === "resolved_service_variant_ambiguous" ||
+      resolutionKind === "ambiguous"
+    )
+  );
+}
+
 function decideHybridDomain(input: {
   hasPendingCatalogChoice: boolean;
   hasConversationAnchor: boolean;
@@ -291,6 +326,22 @@ function decideHybridDomain(input: {
 
   const canonicalShouldRouteCatalog =
     input.canonicalCatalogRouteDecision?.shouldRouteCatalog === true;
+
+  const mustPrioritizeCatalogFromCanonicalResolution =
+    shouldPrioritizeCatalogFromCanonicalResolution({
+      canonicalCatalogRouteDecision: input.canonicalCatalogRouteDecision,
+      asksSchedules: input.asksSchedules,
+      asksLocation: input.asksLocation,
+      asksAvailability: input.asksAvailability,
+      inBooking: input.inBooking,
+    });
+
+  if (mustPrioritizeCatalogFromCanonicalResolution) {
+    return {
+      routeTarget: "catalog",
+      reason: "canonical_catalog_resolution",
+    };
+  }
 
   const mustPrioritizeBusinessInfo = shouldPrioritizeBusinessInfoDomain({
     asksPrices: input.asksPrices,
