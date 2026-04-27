@@ -1638,8 +1638,24 @@ export async function procesarMensajeWhatsApp(
         ...externalLinkGuardCtxPatch,
       };
 
+      convoCtx = {
+        ...(convoCtx || {}),
+        ...externalLinkGuardCtxPatch,
+      };
+
       INTENCION_FINAL_CANONICA = externalLinkGuard.intent;
       lastIntent = externalLinkGuard.intent;
+
+      console.log("[WHATSAPP][EXTERNAL_LINK_CTX_BEFORE_FINALIZE]", {
+        finalCtxPatchContinuation:
+          finalCtxPatch?.continuationContext?.lastTurn || null,
+        convoCtxContinuation:
+          convoCtx?.continuationContext?.lastTurn || null,
+        finalCtxPatchLastAssistantTurn:
+          finalCtxPatch?.last_assistant_turn || null,
+        convoCtxLastAssistantTurn:
+          convoCtx?.last_assistant_turn || null,
+      });
 
       return await replyAndExit(
         externalLinkGuard.reply,
