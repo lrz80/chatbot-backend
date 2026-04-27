@@ -842,6 +842,58 @@ async function maybeBuildVariantDisambiguationResult(input: {
   });
 }
 
+function buildCatalogFamilyGuidedResult(input: {
+  routeIntent: string;
+  options: CatalogServiceDisambiguationOption[];
+  originalIntent?: "precio" | "info_servicio" | null;
+}): FastpathResult {
+  const originalIntent =
+    input.originalIntent ||
+    (
+      input.routeIntent === "catalog_price" ||
+      input.routeIntent === "catalog_alternatives"
+        ? "precio"
+        : "info_servicio"
+    );
+
+  const now = Date.now();
+
+  return {
+    handled: true,
+    reply: "",
+    source: "catalog_disambiguation_db",
+    intent: "catalog_family_guided",
+    catalogPayload: {
+      kind: "catalog_family_guided",
+      originalIntent,
+      options: input.options.map((option) => ({
+        kind: "service" as const,
+        serviceId: option.serviceId,
+        label: option.label,
+        serviceName: option.serviceName || option.label || null,
+      })),
+    },
+    ctxPatch: {
+      last_catalog_at: now,
+      lastResolvedIntent: "catalog_family_guided",
+      pendingCatalogChoiceAt: now,
+      pendingCatalogChoice: {
+        kind: "service_choice",
+        originalIntent,
+        options: input.options,
+        createdAt: now,
+      },
+      lastPresentedEntityIds: input.options.map((option) => option.serviceId),
+      catalogFamilyGuided: {
+        kind: "catalog_family_guided",
+        originalIntent,
+        options: input.options,
+        createdAt: now,
+      },
+    } as any,
+  };
+}
+
 function buildCatalogDisambiguationResult(input: {
   routeIntent: string;
   kind: "service_choice" | "variant_choice";
@@ -1544,6 +1596,20 @@ export async function runCatalogFastpath(
       );
 
       if (serviceOptions.length > 1) {
+        const shouldUseGuidedFamilyMode =
+          intentOutNorm === "info_general" ||
+          intentOutNorm === "info_servicio" ||
+          executionRouteIntent === "catalog_includes" ||
+          executionRouteIntent === "entity_detail";
+
+        if (shouldUseGuidedFamilyMode) {
+          return buildCatalogFamilyGuidedResult({
+            routeIntent: executionRouteIntent || routeIntent,
+            options: serviceOptions,
+            originalIntent: disambiguationOriginalIntent,
+          });
+        }
+
         return buildCatalogDisambiguationResult({
           routeIntent: executionRouteIntent || routeIntent,
           kind: "service_choice",

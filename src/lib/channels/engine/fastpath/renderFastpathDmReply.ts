@@ -317,6 +317,11 @@ type CatalogPayload =
       options: CatalogChoiceOption[];
     }
   | {
+      kind: "catalog_family_guided";
+      originalIntent: string | null;
+      options: CatalogChoiceOption[];
+    }
+  | {
       kind: "resolved_catalog_answer";
       scope: "service" | "variant" | "family" | "overview";
       presentationMode?: "full_detail" | "action_link";
@@ -391,6 +396,32 @@ function renderCatalogChoiceBody(input: {
   return options.join("\n").trim();
 }
 
+function getCatalogPayloadChoiceOptions(
+  catalogPayload?: CatalogPayload
+): Array<{ label: string }> {
+  if (!catalogPayload) {
+    return [];
+  }
+
+  if (
+    catalogPayload.kind !== "service_choice" &&
+    catalogPayload.kind !== "variant_choice" &&
+    catalogPayload.kind !== "catalog_family_guided"
+  ) {
+    return [];
+  }
+
+  if (!Array.isArray(catalogPayload.options)) {
+    return [];
+  }
+
+  return catalogPayload.options
+    .map((option) => ({
+      label: String(option.label || option.serviceName || "").trim(),
+    }))
+    .filter((option) => option.label);
+}
+
 function buildTenantClosingPolicyInstruction(promptBaseMem: string): string | null {
   const text = String(promptBaseMem || "").trim();
 
@@ -457,6 +488,7 @@ async function buildGroundedFrameOnly(input: {
   fpIntent: string;
   resolvedCatalogClosingMode: "default" | "availability_statement" | "none";
   replyPolicy: RenderFastpathDmReplyInput["replyPolicy"];
+  catalogPayload?: CatalogPayload;
     conversationFrame?: {
     isOpeningTurn: boolean;
     shouldUseContextualIntro: boolean;
@@ -475,18 +507,37 @@ async function buildGroundedFrameOnly(input: {
   const isActionLinkResolvedCatalogReply =
     input.replyPolicy.answerType === "action_link";
     const frameTaskRules =
-      input.replyPolicy.answerType === "disambiguation"
+      input.catalogPayload?.kind === "catalog_family_guided"
+        ? [
+            "This is a guided catalog family turn.",
+            "The user asked generally about a catalog family, not one exact item.",
+            "Do not output a numbered menu.",
+            "Use the available catalog option labels only as grounding context.",
+            "Ask one short consultative preference question that helps choose among the available options.",
+            "The question must stay on the same topic requested by the user.",
+            "The question must not introduce a different topic, service category, booking step, schedule, or unrelated discovery path.",
+            "Do not mention prices, benefits, policies, or links unless they are present in the canonical body.",
+            "Do not invent a recommendation yet.",
+            "intro must be short, warm, and direct.",
+            "closing must be the guided preference question.",
+            "closingType must be question.",
+          ]
+        : input.replyPolicy.answerType === "disambiguation"
         ? [
             "This is a catalog choice turn.",
             "Return exactly one short intro line before the canonical options body.",
             "Intro is required and must never be null.",
-            "The intro must state that these are the available options.",
+            "The intro must state that the canonical body contains the available matching options.",
+            "The intro must stay on the same topic requested by the user.",
             "The intro must feel natural for a DM conversation, not robotic or system-like.",
             "The intro must be simple, neutral, direct, and warm.",
-            "The intro must not mention prices, includes, benefits, schedules, policies, or links.",
+            "The intro must not mention prices, includes, benefits, schedules, policies, or links unless already present in the canonical options body.",
             "The intro must not repeat the numbered options.",
             "Return exactly one short closing line after the canonical options body.",
-            "The closing must be a direct selection CTA.",
+            "The closing must be a direct selection CTA over the numbered canonical options.",
+            "The closing must ask the user to choose one of the listed options, not a different category or topic.",
+            "The closing must not introduce a new service category, class type, plan type, schedule, booking step, or unrelated discovery path.",
+            "The closing must not use a broader topic than the canonical options body.",
             "Do not rewrite or summarize the options body.",
           ]
         : input.replyPolicy.answerType === "overview"
@@ -656,6 +707,8 @@ async function buildGroundedFrameOnly(input: {
       shouldUseContextualIntro:
         input.conversationFrame?.shouldUseContextualIntro ?? false,
       dayPart: input.conversationFrame?.dayPart ?? null,
+      catalogPayloadKind: input.catalogPayload?.kind || null,
+      catalogChoiceOptions: getCatalogPayloadChoiceOptions(input.catalogPayload),
     }),
     "",
     "PROMPT_BASE:",
@@ -1052,7 +1105,11 @@ export async function renderFastpathDmReply(
 
   const isServiceChoiceReply = catalogPayload?.kind === "service_choice";
   const isVariantChoiceReply = catalogPayload?.kind === "variant_choice";
-  const isCatalogChoiceReply = isServiceChoiceReply || isVariantChoiceReply;
+  const isCatalogFamilyGuidedReply =
+    catalogPayload?.kind === "catalog_family_guided";
+
+  const isCatalogChoiceReply =
+    isServiceChoiceReply || isVariantChoiceReply || isCatalogFamilyGuidedReply;
 
   const effectiveReplyPolicy = isCatalogChoiceReply
     ? {
@@ -1108,6 +1165,10 @@ export async function renderFastpathDmReply(
   const canonicalReply = await (async () => {
     if (isExternalActionLinkReply) {
       return normalizeText(externalAction?.targetUrl);
+    }
+
+    if (catalogPayload?.kind === "catalog_family_guided") {
+      return "";
     }
 
     if (catalogPayload?.kind === "service_choice") {
@@ -1424,6 +1485,7 @@ export async function renderFastpathDmReply(
       history,
       canonicalReply,
       fpIntent,
+      catalogPayload,
       resolvedCatalogClosingMode:
         resolvedCatalogClosingMode === "availability_statement"
           ? "availability_statement"
@@ -1446,6 +1508,7 @@ export async function renderFastpathDmReply(
         history,
         canonicalReply,
         fpIntent,
+        catalogPayload,
         resolvedCatalogClosingMode:
           resolvedCatalogClosingMode === "availability_statement"
             ? "availability_statement"
@@ -1487,6 +1550,7 @@ export async function renderFastpathDmReply(
         history,
         canonicalReply,
         fpIntent,
+        catalogPayload,
         resolvedCatalogClosingMode: "availability_statement",
         replyPolicy: effectiveReplyPolicy,
         conversationFrame: input.conversationFrame,
@@ -1575,14 +1639,23 @@ export async function renderFastpathDmReply(
           })
         : String(frame.closing || "").trim() || null;
 
-    const finalGroundedReply = [
-      String(frame.intro || "").trim(),
-      dedupedCanonicalBody,
-      String(safeClosing || "").trim(),
-    ]
-      .filter(Boolean)
-      .join("\n\n")
-      .trim();
+    const finalGroundedReply =
+      catalogPayload?.kind === "catalog_family_guided"
+        ? [
+            String(frame.intro || "").trim(),
+            String(safeClosing || "").trim(),
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .trim()
+        : [
+            String(frame.intro || "").trim(),
+            dedupedCanonicalBody,
+            String(safeClosing || "").trim(),
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+            .trim();
 
     const nextCtxPatch = {
       ...(syncedChoiceCtxPatch || {}),

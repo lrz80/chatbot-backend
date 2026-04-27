@@ -180,6 +180,16 @@ type CatalogPayload =
       options: CatalogChoiceOption[];
     }
   | {
+      kind: "catalog_family_guided";
+      originalIntent: string | null;
+      options: Array<{
+        kind: "service";
+        serviceId: string;
+        label: string;
+        serviceName?: string | null;
+      }>;
+    }
+  | {
       kind: "variant_choice";
       originalIntent: string | null;
       serviceId: string;
