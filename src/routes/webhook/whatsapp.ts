@@ -170,6 +170,7 @@ export async function procesarMensajeWhatsApp(
   let lastIntent: string | null = null;
   let INTENCION_FINAL_CANONICA: string | null = null;
   let finalCtxPatch: any = {};
+  let skipPostReplyActions = false;
 
   // 🎯 Intent detection (evento)
   let detectedIntent: string | null = null;
@@ -740,7 +741,18 @@ export async function procesarMensajeWhatsApp(
     );
 
     try {
-      if (!handled || !reply) return;
+  if (!handled || !reply) return;
+
+      if (skipPostReplyActions) {
+        console.log("[WHATSAPP][POST_REPLY_ACTIONS_SKIPPED]", {
+          tenantId: tenant.id,
+          canal,
+          contactoNorm,
+          replySource,
+          lastIntent,
+        });
+        return;
+      }
 
       await runPostReplyActions({
         pool,
@@ -1565,30 +1577,23 @@ export async function procesarMensajeWhatsApp(
         urlsCount: externalLinkGuard.detection.urls.length,
       });
 
-      transition({
-        flow: activeFlow,
-        step: "close",
-        patchCtx: {
-          guard: "user_external_link_unsupported",
-          last_bot_action: "blocked_user_external_link",
-          last_reply_source: externalLinkGuard.source,
+      skipPostReplyActions = true;
 
-          pendingCatalogChoice: null,
-          pendingCatalogChoiceAt: null,
-          expectingVariant: false,
-          expectingVariantForEntityId: null,
-          expectedVariantIntent: null,
-          presentedVariantOptions: null,
-          last_variant_options: null,
-          last_variant_options_at: null,
-          continuationContext: null,
-          last_assistant_turn: null,
-          actionContext: null,
+      const externalLinkGuardLastTurn = {
+        domain: "other" as const,
+        references: {
+          serviceId: null,
+          familyId: null,
+          variantId: null,
         },
-      });
+        intent: externalLinkGuard.intent,
+        userText: userInput,
+        assistantText: externalLinkGuard.reply,
+        canonicalSource: "guard" as const,
+        createdAt: new Date().toISOString(),
+      };
 
-      finalCtxPatch = {
-        ...finalCtxPatch,
+      const externalLinkGuardCtxPatch = {
         guard: "user_external_link_unsupported",
         last_bot_action: "blocked_user_external_link",
         last_reply_source: externalLinkGuard.source,
@@ -1601,9 +1606,36 @@ export async function procesarMensajeWhatsApp(
         presentedVariantOptions: null,
         last_variant_options: null,
         last_variant_options_at: null,
-        continuationContext: null,
-        last_assistant_turn: null,
+
+        selectedServiceId: null,
+        structuredService: null,
+        last_service_id: null,
+        last_service_name: null,
+        last_service_label: null,
+        last_variant_id: null,
+        last_variant_name: null,
+        last_variant_url: null,
+
+        pending_link_lookup: null,
+        pending_link_at: null,
+        pending_link_options: null,
         actionContext: null,
+
+        continuationContext: {
+          lastTurn: externalLinkGuardLastTurn,
+        },
+        last_assistant_turn: externalLinkGuardLastTurn,
+      };
+
+      transition({
+        flow: activeFlow,
+        step: "close",
+        patchCtx: externalLinkGuardCtxPatch,
+      });
+
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        ...externalLinkGuardCtxPatch,
       };
 
       INTENCION_FINAL_CANONICA = externalLinkGuard.intent;
