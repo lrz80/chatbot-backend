@@ -705,7 +705,7 @@ async function buildGroundedFrameOnly(input: {
       allowBodyRewrite: false,
       mustEndWithSalesQuestion: false,
       reasoningNotes:
-        "Return strict JSON only with intro and closing. Do not write the body.",
+        'Return strict JSON only with intro, closing, and closingType. Do not write the body. closingType is required and must be one of: availability_statement, question, action_cta, none.',
     },
   });
 
@@ -1434,6 +1434,8 @@ export async function renderFastpathDmReply(
       conversationFrame: input.conversationFrame,
     });
 
+    let frameWasRetried = false;
+
     if (isCatalogChoiceReply && !String(frame.intro || "").trim()) {
       frame = await buildGroundedFrameOnly({
         tenantId,
@@ -1460,6 +1462,8 @@ export async function renderFastpathDmReply(
       String(frame.closing || "").trim() &&
       frame.closingType !== "availability_statement"
     ) {
+      frameWasRetried = true;
+
       frame = await buildGroundedFrameOnly({
         tenantId,
         canal,
@@ -1473,6 +1477,7 @@ export async function renderFastpathDmReply(
           "Return STRICT JSON only.",
           'Use exactly this shape: {"intro":string|null,"closing":string|null,"closingType":"availability_statement"|"question"|"action_cta"|"none"}.',
           "closingType is required and must never be omitted.",
+          "If closing is not null, closingType must not be none.",
           "For this retry, return a closing only if it is a pure availability_statement.",
           "A pure availability_statement only communicates general continued availability to help if the user needs anything else.",
           "Do not return a question as the closing.",
@@ -1501,16 +1506,27 @@ export async function renderFastpathDmReply(
         closingType: "none",
       };
     } else if (resolvedCatalogClosingMode === "availability_statement") {
-      const shouldAcceptAvailabilityClosing =
+      const canAcceptTypedAvailabilityClosing =
         Boolean(normalizedClosing) &&
         frame.closingType === "availability_statement" &&
         isNonQuestionText(normalizedClosing);
+
+      const canAcceptRetriedUntypedAvailabilityClosing =
+        Boolean(normalizedClosing) &&
+        frameWasRetried &&
+        frame.closingType === "none" &&
+        isNonQuestionText(normalizedClosing);
+
+      const shouldAcceptAvailabilityClosing =
+        canAcceptTypedAvailabilityClosing ||
+        canAcceptRetriedUntypedAvailabilityClosing;
 
       console.log("[DM_RENDER][AVAILABILITY_CLOSING_POLICY]", {
         userInput,
         resolvedCatalogClosingMode,
         incomingClosing: normalizedClosing || null,
         incomingClosingType: frame.closingType,
+        frameWasRetried,
         accepted: shouldAcceptAvailabilityClosing,
       });
 
