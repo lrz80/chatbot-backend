@@ -32,7 +32,11 @@ function getOpenAIClient(): OpenAI | null {
     return null;
   }
 
-  return new OpenAI({ apiKey });
+  return new OpenAI({
+    apiKey,
+    timeout: 8000,
+    maxRetries: 1,
+  });
 }
 
 function safeParseDetection(content: string): DetectIdiomaResult {
