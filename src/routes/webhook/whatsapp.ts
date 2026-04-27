@@ -759,7 +759,7 @@ export async function procesarMensajeWhatsApp(
         intentFallback: INTENCION_FINAL_CANONICA || null,
 
         detectedInterest,
-        detectedCommercial: (signals as any)?.detectedCommercial ?? null,
+        detectedCommercial,
 
         convoCtx,
       });
@@ -1582,6 +1582,7 @@ export async function procesarMensajeWhatsApp(
           last_variant_options: null,
           last_variant_options_at: null,
           continuationContext: null,
+          last_assistant_turn: null,
           actionContext: null,
         },
       });
@@ -1601,6 +1602,7 @@ export async function procesarMensajeWhatsApp(
         last_variant_options: null,
         last_variant_options_at: null,
         continuationContext: null,
+        last_assistant_turn: null,
         actionContext: null,
       };
 
