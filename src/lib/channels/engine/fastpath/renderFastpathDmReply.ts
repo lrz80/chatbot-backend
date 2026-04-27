@@ -220,6 +220,20 @@ function stripJsonCodeFences(value: string): string {
 
 type FrameClosingType = "availability_statement" | "question" | "none";
 
+function isDeclarativeClosing(value: string): boolean {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return false;
+  }
+
+  if (text.includes("?") || text.includes("¿")) {
+    return false;
+  }
+
+  return true;
+}
+
 function parseFrameJson(value: string): {
   intro: string | null;
   closing: string | null;
@@ -540,8 +554,17 @@ async function buildGroundedFrameOnly(input: {
             "Do not use filler, gratitude, or exaggerated politeness.",
             "If PROMPT_BASE contains an explicit tenant CTA, prefer that CTA in the closing when closing is allowed.",
             input.resolvedCatalogClosingMode === "availability_statement"
-              ? "The closing must be declarative, low-pressure, non-interrogative, and leave the conversation open for continuation."
-              : "The closing must be brief, consultative, and natural.",
+            ? "The closing must be declarative, low-pressure, non-interrogative, and leave the conversation open for continuation."
+            : "The closing must be brief, consultative, and natural.",
+          input.resolvedCatalogClosingMode === "availability_statement"
+            ? "When returning a closing for this turn, closingType must be exactly availability_statement."
+            : null,
+          input.resolvedCatalogClosingMode === "availability_statement"
+            ? "The closing must communicate continued availability to help if the user needs anything else, without using a fixed hardcoded phrase."
+            : null,
+          input.resolvedCatalogClosingMode === "availability_statement"
+            ? "The closing must not invite booking, buying, reserving, clicking, confirming, or proceeding now."
+            : null,
           ]
         : [
             "Return optional framing only when it improves the DM reply.",
@@ -1408,17 +1431,21 @@ export async function renderFastpathDmReply(
         closingType: "none",
       };
     } else if (resolvedCatalogClosingMode === "availability_statement") {
-        frame = {
-          intro: safeIntro || null,
-          closing:
-            frame.closingType === "availability_statement" && normalizedClosing
-              ? normalizedClosing
-              : null,
-          closingType:
-            frame.closingType === "availability_statement" && normalizedClosing
-              ? "availability_statement"
-              : "none",
-        };
+      const shouldAcceptAvailabilityClosing =
+        Boolean(normalizedClosing) &&
+        (
+          frame.closingType === "availability_statement" ||
+          frame.closingType === "none"
+        ) &&
+        isDeclarativeClosing(normalizedClosing);
+
+      frame = {
+        intro: safeIntro || null,
+        closing: shouldAcceptAvailabilityClosing ? normalizedClosing : null,
+        closingType: shouldAcceptAvailabilityClosing
+          ? "availability_statement"
+          : "none",
+      };
     } else {
       frame = {
         intro: safeIntro || null,

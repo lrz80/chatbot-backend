@@ -43,6 +43,9 @@ type PendingVariantChoice = {
     label?: string | null;
     serviceName?: string | null;
     variantName?: string | null;
+    price?: number | null;
+    currency?: string | null;
+    displayPrice?: string | null;
   }>;
   createdAt?: number | null;
 };
@@ -449,14 +452,24 @@ function getPendingVariantChoice(convoCtx: any): PendingVariantChoice | null {
     label?: string | null;
     serviceName?: string | null;
     variantName?: string | null;
+    price?: number | null;
+    currency?: string | null;
+    displayPrice?: string | null;
   }> = Array.isArray(pending.options) ? pending.options : [];
 
   const options = rawOptions
     .map((item) => {
       const variantId = String(item?.variantId || "").trim() || null;
       const label = String(item?.label || "").trim() || null;
-      const variantName = String(item?.variantName || "").trim() || null;
       const serviceName = String(item?.serviceName || "").trim() || null;
+      const variantName = String(item?.variantName || "").trim() || null;
+      const displayPrice = String(item?.displayPrice || "").trim() || null;
+      const currency = String(item?.currency || "").trim() || null;
+
+      const price =
+        typeof item?.price === "number" && Number.isFinite(item.price)
+          ? item.price
+          : null;
 
       if (!variantId || !label) {
         return null;
@@ -469,6 +482,9 @@ function getPendingVariantChoice(convoCtx: any): PendingVariantChoice | null {
         label,
         serviceName,
         variantName,
+        price,
+        currency,
+        displayPrice,
       };
     })
     .filter(
@@ -481,6 +497,9 @@ function getPendingVariantChoice(convoCtx: any): PendingVariantChoice | null {
         label: string;
         serviceName: string | null;
         variantName: string | null;
+        price: number | null;
+        currency: string | null;
+        displayPrice: string | null;
       } => item !== null
     );
 
@@ -967,6 +986,16 @@ export async function handleVariantSecondTurn(
     };
   }
 
+  const chosenPendingOption =
+    pendingVariantChoice?.options.find(
+      (option) =>
+        String(option.variantId || "").trim() === String(resolvedVariantId).trim()
+    ) || null;
+
+  const priceAlreadyShownInChoice =
+    Boolean(chosenPendingOption?.displayPrice) &&
+    Boolean(chosenPendingOption?.label);
+
   const {
     rows: [service],
   } = await input.pool.query<any>(
@@ -1003,6 +1032,8 @@ export async function handleVariantSecondTurn(
     locale: input.idiomaDestino,
   });
 
+  const canonicalPriceText = priceAlreadyShownInChoice ? "" : priceText;
+
   const title =
     baseName && variantName
       ? `${baseName} — ${variantName}`
@@ -1023,8 +1054,8 @@ export async function handleVariantSecondTurn(
     canonicalParts.push(title);
   }
 
-  if (priceText) {
-    canonicalParts.push(priceText);
+  if (canonicalPriceText) {
+    canonicalParts.push(canonicalPriceText);
   }
 
   if (bullets) {
@@ -1061,7 +1092,7 @@ export async function handleVariantSecondTurn(
       variantName: variantName || null,
       canonicalBlocks: {
         servicesBlock: title || null,
-        priceBlock: priceText || null,
+        priceBlock: canonicalPriceText || null,
         includesBlock: bullets || null,
         scheduleBlock: null,
         locationBlock: null,
