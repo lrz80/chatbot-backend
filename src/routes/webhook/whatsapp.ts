@@ -80,6 +80,8 @@ import {
 import { buildCatalogTurnAugmentation } from '../../lib/channels/engine/turn/buildCatalogTurnAugmentation';
 import type { VisualTurnEvidence } from '../../lib/channels/engine/turn/types';
 
+import { userExternalLinkGuard } from "../../lib/guards/userExternalLinkGuard";
+
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
   tenant?: any;
@@ -1540,6 +1542,91 @@ export async function procesarMensajeWhatsApp(
   });
 
   if (!guard.ok) return;
+
+  // ===============================
+  // 🛡️ USER EXTERNAL LINK GUARD
+  // Corta links externos enviados por el cliente antes de intent/routing.
+  // ===============================
+  {
+    const externalLinkGuard = await userExternalLinkGuard({
+      tenantId: tenant.id,
+      canal,
+      idiomaDestino,
+      userInput,
+      promptBaseMem,
+    });
+
+    if (externalLinkGuard.handled) {
+      console.log("[WHATSAPP][USER_EXTERNAL_LINK_UNSUPPORTED]", {
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        hosts: externalLinkGuard.detection.hosts,
+        urlsCount: externalLinkGuard.detection.urls.length,
+      });
+
+      transition({
+        flow: activeFlow,
+        step: "close",
+        patchCtx: {
+          guard: "user_external_link_unsupported",
+          last_bot_action: "blocked_user_external_link",
+          last_reply_source: externalLinkGuard.source,
+
+          pendingCatalogChoice: null,
+          pendingCatalogChoiceAt: null,
+          expectingVariant: false,
+          expectingVariantForEntityId: null,
+          expectedVariantIntent: null,
+          presentedVariantOptions: null,
+          last_variant_options: null,
+          last_variant_options_at: null,
+          continuationContext: null,
+          actionContext: null,
+        },
+      });
+
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        guard: "user_external_link_unsupported",
+        last_bot_action: "blocked_user_external_link",
+        last_reply_source: externalLinkGuard.source,
+
+        pendingCatalogChoice: null,
+        pendingCatalogChoiceAt: null,
+        expectingVariant: false,
+        expectingVariantForEntityId: null,
+        expectedVariantIntent: null,
+        presentedVariantOptions: null,
+        last_variant_options: null,
+        last_variant_options_at: null,
+        continuationContext: null,
+        actionContext: null,
+      };
+
+      INTENCION_FINAL_CANONICA = externalLinkGuard.intent;
+      lastIntent = externalLinkGuard.intent;
+
+      return await replyAndExit(
+        externalLinkGuard.reply,
+        externalLinkGuard.source,
+        externalLinkGuard.intent
+      );
+    }
+
+    if (externalLinkGuard.detection.hasExternalLink) {
+      console.warn("[WHATSAPP][USER_EXTERNAL_LINK_DETECTED_WITHOUT_REPLY]", {
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        reason: externalLinkGuard.reason || null,
+        hosts: externalLinkGuard.detection.hosts,
+        urlsCount: externalLinkGuard.detection.urls.length,
+      });
+
+      return;
+    }
+  }
 
   // ===============================
   // 🔔 USER SIGNALS (intención, emoción, memoria, override)
