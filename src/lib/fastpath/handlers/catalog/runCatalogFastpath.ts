@@ -1220,6 +1220,80 @@ export async function runCatalogFastpath(
     }
   }
 
+  if (
+    pendingCatalogSelection.status === "resolved" &&
+    pendingSelectedService &&
+    !pendingSelectedVariant
+  ) {
+    const now = Date.now();
+
+    console.log("[CATALOG][PENDING_SERVICE_CHOICE_RESOLVED]", {
+      userInput: input.userInput,
+      serviceId: pendingSelectedService.serviceId,
+      serviceName: pendingSelectedService.serviceName,
+      originalIntent: pendingOriginalIntent || null,
+    });
+
+    const resolvedServiceResult = await handleResolvedServiceDetail({
+      pool: input.pool,
+      userInput: input.userInput,
+      idiomaDestino: input.idiomaDestino as any,
+      intentOut:
+        pendingOriginalIntent === "precio"
+          ? "precio"
+          : "info_servicio",
+      hit: {
+        id: pendingSelectedService.serviceId,
+        name: pendingSelectedService.serviceName || "",
+      },
+      traducirMensaje: input.traducirTexto as any,
+      convoCtx: {
+        ...(input.convoCtx || {}),
+        selectedServiceId: pendingSelectedService.serviceId,
+        last_service_id: pendingSelectedService.serviceId,
+        last_service_name: pendingSelectedService.serviceName || null,
+      },
+    });
+
+    if (resolvedServiceResult.handled) {
+      return {
+        ...resolvedServiceResult,
+        ctxPatch: {
+          ...((resolvedServiceResult as any).ctxPatch || {}),
+          ...clearPendingCatalogChoiceCtxPatch(),
+
+          selectedServiceId: pendingSelectedService.serviceId,
+          last_service_id: pendingSelectedService.serviceId,
+          last_service_name: pendingSelectedService.serviceName || null,
+          last_service_at: now,
+
+          expectingVariant: false,
+          expectingVariantForEntityId: null,
+          expectedVariantIntent: null,
+          presentedVariantOptions: null,
+          last_variant_options: null,
+          last_variant_options_at: null,
+
+          lastResolvedIntent:
+            pendingOriginalIntent === "precio"
+              ? "price_or_plan"
+              : "includes",
+        },
+      };
+    }
+
+    return {
+      handled: false,
+      ctxPatch: {
+        ...clearPendingCatalogChoiceCtxPatch(),
+        selectedServiceId: pendingSelectedService.serviceId,
+        last_service_id: pendingSelectedService.serviceId,
+        last_service_name: pendingSelectedService.serviceName || null,
+        last_service_at: now,
+      },
+    };
+  }
+
   const shouldForceResolvedVariant =
     shouldSkipVariantDisambiguation({
       catalogRoutingSignal,
