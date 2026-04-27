@@ -931,6 +931,75 @@ function syncCatalogChoiceCtxFromPayload(input: {
     return ctxPatch;
   }
 
+  const now = Date.now();
+
+  if (
+    catalogPayload.kind === "service_choice" ||
+    catalogPayload.kind === "catalog_family_guided"
+  ) {
+    const options = Array.isArray(catalogPayload.options)
+      ? catalogPayload.options
+          .filter(
+            (
+              option
+            ): option is Extract<CatalogChoiceOption, { kind: "service" }> =>
+              option.kind === "service"
+          )
+          .map((option, idx) => ({
+            kind: "service" as const,
+            serviceId: option.serviceId,
+            label: option.label,
+            serviceName: option.serviceName || option.label || null,
+            index: idx + 1,
+          }))
+      : [];
+
+    if (options.length < 2) {
+      return ctxPatch;
+    }
+
+    const syncedOptions = options.map((option) => ({
+      kind: "service" as const,
+      serviceId: option.serviceId,
+      label: option.label,
+      serviceName: option.serviceName,
+    }));
+
+    return {
+      ...ctxPatch,
+
+      pendingCatalogChoice: {
+        kind: "service_choice",
+        originalIntent:
+          typeof catalogPayload.originalIntent === "string"
+            ? catalogPayload.originalIntent
+            : "info_servicio",
+        options: syncedOptions,
+        createdAt:
+          typeof ctxPatch?.pendingCatalogChoice?.createdAt === "number"
+            ? ctxPatch.pendingCatalogChoice.createdAt
+            : now,
+      },
+
+      pendingCatalogChoiceAt:
+        typeof ctxPatch?.pendingCatalogChoiceAt === "number"
+          ? ctxPatch.pendingCatalogChoiceAt
+          : now,
+
+      lastPresentedEntityIds: options.map((option) => option.serviceId),
+
+      last_catalog_at:
+        typeof ctxPatch?.last_catalog_at === "number"
+          ? ctxPatch.last_catalog_at
+          : now,
+
+      lastResolvedIntent:
+        catalogPayload.kind === "catalog_family_guided"
+          ? "catalog_family_guided"
+          : "service_choice",
+    };
+  }
+
   if (catalogPayload.kind !== "variant_choice") {
     return ctxPatch;
   }
@@ -963,8 +1032,6 @@ function syncCatalogChoiceCtxFromPayload(input: {
   if (options.length < 2) {
     return ctxPatch;
   }
-
-  const now = Date.now();
 
   const syncedOptions = options.map((option) => ({
     kind: "variant" as const,

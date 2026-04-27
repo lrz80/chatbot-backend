@@ -125,6 +125,9 @@ export type FastpathCtx = {
     | "info_general_overview"
     | "compare"
     | "catalog_disambiguation"
+    | "service_choice"
+    | "variant_choice"
+    | "catalog_family_guided"
     | "unknown"
     | null;
 
