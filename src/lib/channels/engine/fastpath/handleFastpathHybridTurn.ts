@@ -233,6 +233,7 @@ function shouldPrioritizeCatalogFromCanonicalResolution(input: {
     shouldRouteCatalog?: boolean;
     resolutionKind?: string | null;
   };
+  previewShouldRouteCatalog: boolean;
   asksSchedules: boolean;
   asksLocation: boolean;
   asksAvailability: boolean;
@@ -251,7 +252,8 @@ function shouldPrioritizeCatalogFromCanonicalResolution(input: {
   ).trim();
 
   const shouldRouteCatalog =
-    input.canonicalCatalogRouteDecision?.shouldRouteCatalog === true;
+    input.canonicalCatalogRouteDecision?.shouldRouteCatalog === true ||
+    input.previewShouldRouteCatalog === true;
 
   return (
     shouldRouteCatalog &&
@@ -330,6 +332,7 @@ function decideHybridDomain(input: {
   const mustPrioritizeCatalogFromCanonicalResolution =
     shouldPrioritizeCatalogFromCanonicalResolution({
       canonicalCatalogRouteDecision: input.canonicalCatalogRouteDecision,
+      previewShouldRouteCatalog: input.previewShouldRouteCatalog,
       asksSchedules: input.asksSchedules,
       asksLocation: input.asksLocation,
       asksAvailability: input.asksAvailability,
@@ -955,6 +958,8 @@ export async function handleFastpathHybridTurn(
     hasConversationAnchor,
     hasVariantSelectionContinuation,
     previewShouldRouteCatalog: previewPolicy.shouldRouteCatalog === true,
+    canonicalShouldRouteCatalog:
+      rawCanonicalCatalogRouteDecision?.shouldRouteCatalog === true,
     canonicalCatalogResolutionKind:
       rawCanonicalCatalogRouteDecision?.resolutionKind || "none",
     detectedRoutingHints: detectedRoutingHints || null,
