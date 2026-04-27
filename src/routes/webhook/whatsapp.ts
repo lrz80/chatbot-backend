@@ -1629,6 +1629,51 @@ export async function procesarMensajeWhatsApp(
   }
 
   // ===============================
+  // 🛡️ ANTI-PHISHING GUARD
+  // Segunda capa defensiva. No genera respuesta al cliente.
+  // ===============================
+  {
+    const handledPhishing = await antiPhishingGuard({
+      pool,
+      tenantId: tenant.id,
+      channel: "whatsapp",
+      senderId: contactoNorm,
+      messageId,
+      userInput,
+      idiomaDestino,
+      send: async () => {},
+    });
+
+    if (handledPhishing) {
+      transition({
+        flow: "generic_sales",
+        step: "close",
+        patchCtx: {
+          guard: "phishing",
+          last_bot_action: "blocked_phishing",
+          last_reply_source: "phishing",
+        },
+      });
+
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        guard: "phishing",
+        last_bot_action: "blocked_phishing",
+        last_reply_source: "phishing",
+      };
+
+      console.warn("[WHATSAPP][PHISHING_BLOCKED_WITHOUT_PUBLIC_REPLY]", {
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        userInput,
+      });
+
+      return;
+    }
+  }
+
+  // ===============================
   // 🔔 USER SIGNALS (intención, emoción, memoria, override)
   // ===============================
   const signals = await handleUserSignalsTurn({
@@ -1916,6 +1961,7 @@ export async function procesarMensajeWhatsApp(
       };
     }
   }
+
   // ===============================
   // 🎯 Booking vs Info General de Horarios
   // ===============================
@@ -2282,51 +2328,6 @@ export async function procesarMensajeWhatsApp(
     }
   } else {
     console.log("🔒 SM SKIPPED: booking activo", { bookingStep0 });
-  }
-
-  // 🛡️ Anti-phishing (Single Exit): NO enviar aquí; capturar y salir por finalize
-  {
-    let phishingReply: string | null = null;
-
-    const handledPhishing = await antiPhishingGuard({
-      pool,
-      tenantId: tenant.id,
-      channel: "whatsapp",
-      senderId: contactoNorm,
-      messageId,
-      userInput,
-      idiomaDestino,
-      send: async (text: string) => {
-        phishingReply = text; // ✅ solo capturo
-      },
-    });
-
-    if (handledPhishing) {
-      transition({
-        flow: "generic_sales",
-        step: "close",
-        patchCtx: {
-          guard: "phishing",
-          last_bot_action: "blocked_phishing",
-        },
-      });
-
-      if (!phishingReply) {
-        console.warn("[WHATSAPP][PHISHING_WITHOUT_REPLY]", {
-          tenantId: tenant.id,
-          canal,
-          contactoNorm,
-          userInput,
-        });
-        return;
-      }
-
-      return await replyAndExit(
-        phishingReply,
-        "phishing",
-        "seguridad"
-      );
-    }
   }
 
   // ===============================
