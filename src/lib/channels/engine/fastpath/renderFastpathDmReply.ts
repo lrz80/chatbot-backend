@@ -1733,6 +1733,24 @@ export async function renderFastpathDmReply(
       }),
     };
 
+    console.log("[DM_RENDER][RETURN_CTX_PATCH_DEBUG]", {
+      userInput,
+      catalogPayloadKind: catalogPayload?.kind || null,
+      catalogPayloadOptionsCount:
+        catalogPayload &&
+        (
+          catalogPayload.kind === "service_choice" ||
+          catalogPayload.kind === "variant_choice" ||
+          catalogPayload.kind === "catalog_family_guided"
+        ) &&
+        Array.isArray(catalogPayload.options)
+          ? catalogPayload.options.length
+          : 0,
+      pendingCatalogChoice: nextCtxPatch?.pendingCatalogChoice || null,
+      pendingCatalogChoiceAt: nextCtxPatch?.pendingCatalogChoiceAt || null,
+      lastResolvedIntent: nextCtxPatch?.lastResolvedIntent || null,
+    });
+
     return {
       reply: stripMarkdownLinksForDm(finalGroundedReply),
       ctxPatch: nextCtxPatch,
