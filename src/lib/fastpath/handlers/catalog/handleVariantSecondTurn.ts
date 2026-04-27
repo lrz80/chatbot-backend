@@ -986,24 +986,6 @@ export async function handleVariantSecondTurn(
     };
   }
 
-  const chosenPendingOption =
-    pendingVariantChoice?.options.find(
-      (option) =>
-        String(option.variantId || "").trim() === String(resolvedVariantId).trim()
-    ) || null;
-
-  const priceAlreadyShownInChoice =
-    Boolean(chosenPendingOption?.displayPrice) &&
-    Boolean(chosenPendingOption?.label);
-
-  console.log("[VARIANT_SECOND_TURN][PRICE_VISIBILITY]", {
-    userInput: input.userInput,
-    resolvedVariantId,
-    chosenPendingOptionLabel: chosenPendingOption?.label || null,
-    chosenPendingOptionDisplayPrice: chosenPendingOption?.displayPrice || null,
-    priceAlreadyShownInChoice,
-  });
-
   const {
     rows: [service],
   } = await input.pool.query<any>(
@@ -1038,6 +1020,36 @@ export async function handleVariantSecondTurn(
     amount: toNullableMoneyNumber(chosen.price),
     currency: String(chosen.currency || "USD").trim() || "USD",
     locale: input.idiomaDestino,
+  });
+
+  const chosenPendingOption =
+    pendingVariantChoice?.options.find(
+      (option) =>
+        String(option.variantId || "").trim() === String(resolvedVariantId).trim()
+    ) || null;
+
+  const chosenPendingOptionLabel = String(chosenPendingOption?.label || "").trim();
+  const chosenPendingOptionDisplayPrice = String(
+    chosenPendingOption?.displayPrice || ""
+  ).trim();
+
+  const priceAlreadyShownInChoice =
+    Boolean(chosenPendingOptionLabel) &&
+    (
+      Boolean(chosenPendingOptionDisplayPrice) ||
+      (
+        Boolean(priceText) &&
+        chosenPendingOptionLabel.includes(priceText)
+      )
+    );
+
+  console.log("[VARIANT_SECOND_TURN][PRICE_VISIBILITY]", {
+    userInput: input.userInput,
+    resolvedVariantId,
+    chosenPendingOptionLabel: chosenPendingOptionLabel || null,
+    chosenPendingOptionDisplayPrice: chosenPendingOptionDisplayPrice || null,
+    priceText: priceText || null,
+    priceAlreadyShownInChoice,
   });
 
   const canonicalPriceText = priceAlreadyShownInChoice ? "" : priceText;
