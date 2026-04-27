@@ -996,6 +996,14 @@ export async function handleVariantSecondTurn(
     Boolean(chosenPendingOption?.displayPrice) &&
     Boolean(chosenPendingOption?.label);
 
+  console.log("[VARIANT_SECOND_TURN][PRICE_VISIBILITY]", {
+    userInput: input.userInput,
+    resolvedVariantId,
+    chosenPendingOptionLabel: chosenPendingOption?.label || null,
+    chosenPendingOptionDisplayPrice: chosenPendingOption?.displayPrice || null,
+    priceAlreadyShownInChoice,
+  });
+
   const {
     rows: [service],
   } = await input.pool.query<any>(

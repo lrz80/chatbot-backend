@@ -293,6 +293,9 @@ type CatalogChoiceOption =
       label: string;
       serviceName?: string | null;
       variantName?: string | null;
+      price?: number | null;
+      currency?: string | null;
+      displayPrice?: string | null;
     };
 
 type CatalogPayload =
@@ -872,6 +875,12 @@ function syncCatalogChoiceCtxFromPayload(input: {
           label: option.label,
           serviceName: option.serviceName || catalogPayload.serviceName || null,
           variantName: option.variantName || option.label,
+          price:
+            typeof option.price === "number" && Number.isFinite(option.price)
+              ? option.price
+              : null,
+          currency: String(option.currency || "").trim() || null,
+          displayPrice: String(option.displayPrice || "").trim() || null,
           index: idx + 1,
         }))
     : [];
@@ -889,6 +898,9 @@ function syncCatalogChoiceCtxFromPayload(input: {
     label: option.label,
     serviceName: option.serviceName,
     variantName: option.variantName,
+    price: option.price,
+    currency: option.currency,
+    displayPrice: option.displayPrice,
   }));
 
   return {
@@ -926,6 +938,9 @@ function syncCatalogChoiceCtxFromPayload(input: {
       variantId: option.variantId,
       variant_name: option.variantName,
       label: option.label,
+      price: option.price,
+      currency: option.currency,
+      displayPrice: option.displayPrice,
     })),
 
     last_variant_options_at:
