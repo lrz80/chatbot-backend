@@ -110,7 +110,7 @@ function tokenizeChoiceText(value: unknown): string[] {
 }
 
 function getChoiceTokenOverlapScore(inputText: string, candidateText: string): number {
-  const inputTokens = tokenizeChoiceText(inputText);
+  const inputTokens = Array.from(new Set(tokenizeChoiceText(inputText)));
   const candidateTokens = new Set(tokenizeChoiceText(candidateText));
 
   if (!inputTokens.length || !candidateTokens.size) {
@@ -120,6 +120,237 @@ function getChoiceTokenOverlapScore(inputText: string, candidateText: string): n
   const overlap = inputTokens.filter((token) => candidateTokens.has(token)).length;
 
   return overlap / inputTokens.length;
+}
+
+function getChoiceTokenSet(value: unknown): Set<string> {
+  return new Set(tokenizeChoiceText(value));
+}
+
+type VariantSelectionTextCandidate = {
+  variantId: string;
+  label: string;
+  source: "presented" | "pending" | "db";
+};
+
+type VariantSelectionResolution = {
+  variantId: string;
+  reason:
+    | "exact_presented"
+    | "exact_pending"
+    | "exact_db"
+    | "high_text_overlap"
+    | "bounded_unique_token";
+  score: number;
+  evidenceTokens: string[];
+};
+
+function buildVariantSelectionTextCandidates(params: {
+  pendingVariantChoice: PendingVariantChoice | null;
+  presentedVariantOptions: PresentedVariantOption[];
+  dbVariants: Array<{ id: string; variant_name: string | null }>;
+}): VariantSelectionTextCandidate[] {
+  const candidates: VariantSelectionTextCandidate[] = [];
+
+  for (const item of params.presentedVariantOptions) {
+    const variantId = String(item.variantId || "").trim();
+    const label = String(item.label || "").trim();
+
+    if (variantId && label) {
+      candidates.push({
+        variantId,
+        label,
+        source: "presented",
+      });
+    }
+  }
+
+  for (const item of params.pendingVariantChoice?.options || []) {
+    const variantId = String(item.variantId || "").trim();
+    const label = String(item.label || "").trim();
+
+    if (variantId && label) {
+      candidates.push({
+        variantId,
+        label,
+        source: "pending",
+      });
+    }
+
+    const variantName = String(item.variantName || "").trim();
+
+    if (variantId && variantName && normalizeChoiceText(variantName) !== normalizeChoiceText(label)) {
+      candidates.push({
+        variantId,
+        label: variantName,
+        source: "pending",
+      });
+    }
+  }
+
+  for (const item of params.dbVariants) {
+    const variantId = String(item.id || "").trim();
+    const label = String(item.variant_name || "").trim();
+
+    if (variantId && label) {
+      candidates.push({
+        variantId,
+        label,
+        source: "db",
+      });
+    }
+  }
+
+  const seen = new Set<string>();
+
+  return candidates.filter((candidate) => {
+    const key = `${candidate.variantId}::${normalizeChoiceText(candidate.label)}::${candidate.source}`;
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function resolveTextualVariantSelection(params: {
+  userInput: string;
+  pendingVariantChoice: PendingVariantChoice | null;
+  presentedVariantOptions: PresentedVariantOption[];
+  dbVariants: Array<{ id: string; variant_name: string | null }>;
+}): VariantSelectionResolution | null {
+  const userNorm = normalizeChoiceText(params.userInput);
+  const userTokens = Array.from(getChoiceTokenSet(params.userInput));
+
+  if (!userNorm || userTokens.length < 2) {
+    return null;
+  }
+
+  const candidates = buildVariantSelectionTextCandidates({
+    pendingVariantChoice: params.pendingVariantChoice,
+    presentedVariantOptions: params.presentedVariantOptions,
+    dbVariants: params.dbVariants,
+  });
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  for (const candidate of candidates) {
+    if (normalizeChoiceText(candidate.label) !== userNorm) {
+      continue;
+    }
+
+    const reason =
+      candidate.source === "presented"
+        ? "exact_presented"
+        : candidate.source === "pending"
+        ? "exact_pending"
+        : "exact_db";
+
+    return {
+      variantId: candidate.variantId,
+      reason,
+      score: 1,
+      evidenceTokens: userTokens,
+    };
+  }
+
+  const variantIds = Array.from(
+    new Set(candidates.map((candidate) => candidate.variantId).filter(Boolean))
+  );
+
+  if (variantIds.length < 2) {
+    return null;
+  }
+
+  const tokensByVariant = new Map<string, Set<string>>();
+
+  for (const candidate of candidates) {
+    const current = tokensByVariant.get(candidate.variantId) || new Set<string>();
+
+    for (const token of tokenizeChoiceText(candidate.label)) {
+      current.add(token);
+    }
+
+    tokensByVariant.set(candidate.variantId, current);
+  }
+
+  const tokenVariantCount = new Map<string, number>();
+
+  for (const tokenSet of tokensByVariant.values()) {
+    for (const token of tokenSet) {
+      tokenVariantCount.set(token, (tokenVariantCount.get(token) || 0) + 1);
+    }
+  }
+
+  const groupedScores = variantIds
+    .map((variantId) => {
+      const tokenSet = tokensByVariant.get(variantId) || new Set<string>();
+      const evidenceTokens = userTokens.filter((token) => tokenSet.has(token));
+      const uniqueEvidenceTokens = evidenceTokens.filter(
+        (token) => tokenVariantCount.get(token) === 1
+      );
+
+      const bestLabelScore = candidates
+        .filter((candidate) => candidate.variantId === variantId)
+        .reduce((best, candidate) => {
+          const score = getChoiceTokenOverlapScore(params.userInput, candidate.label);
+          return score > best ? score : best;
+        }, 0);
+
+      return {
+        variantId,
+        score: bestLabelScore,
+        evidenceTokens,
+        uniqueEvidenceTokens,
+      };
+    })
+    .filter((item) => item.evidenceTokens.length > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.uniqueEvidenceTokens.length - a.uniqueEvidenceTokens.length;
+    });
+
+  const best = groupedScores[0] || null;
+  const second = groupedScores[1] || null;
+
+  if (!best) {
+    return null;
+  }
+
+  const minHighOverlapScore = 2 / 3;
+
+  if (
+    best.score >= minHighOverlapScore &&
+    (!second || best.score - second.score >= 0.2)
+  ) {
+    return {
+      variantId: best.variantId,
+      reason: "high_text_overlap",
+      score: best.score,
+      evidenceTokens: best.evidenceTokens,
+    };
+  }
+
+  const variantsWithUniqueEvidence = groupedScores.filter(
+    (item) => item.uniqueEvidenceTokens.length > 0
+  );
+
+  if (
+    variantsWithUniqueEvidence.length === 1 &&
+    variantsWithUniqueEvidence[0].variantId === best.variantId
+  ) {
+    return {
+      variantId: best.variantId,
+      reason: "bounded_unique_token",
+      score: best.score,
+      evidenceTokens: variantsWithUniqueEvidence[0].uniqueEvidenceTokens,
+    };
+  }
+
+  return null;
 }
 
 function looksLikeTextualVariantSelection(input: {
@@ -216,12 +447,16 @@ function getPendingVariantChoice(convoCtx: any): PendingVariantChoice | null {
     serviceId?: string;
     variantId?: string | null;
     label?: string | null;
+    serviceName?: string | null;
+    variantName?: string | null;
   }> = Array.isArray(pending.options) ? pending.options : [];
 
   const options = rawOptions
     .map((item) => {
       const variantId = String(item?.variantId || "").trim() || null;
       const label = String(item?.label || "").trim() || null;
+      const variantName = String(item?.variantName || "").trim() || null;
+      const serviceName = String(item?.serviceName || "").trim() || null;
 
       if (!variantId || !label) {
         return null;
@@ -232,6 +467,8 @@ function getPendingVariantChoice(convoCtx: any): PendingVariantChoice | null {
         serviceId,
         variantId,
         label,
+        serviceName,
+        variantName,
       };
     })
     .filter(
@@ -242,6 +479,8 @@ function getPendingVariantChoice(convoCtx: any): PendingVariantChoice | null {
         serviceId: string;
         variantId: string;
         label: string;
+        serviceName: string | null;
+        variantName: string | null;
       } => item !== null
     );
 
@@ -409,72 +648,23 @@ function resolveVariantIdFromUserInput(params: {
     }
   }
 
-  const userNorm = normalizeChoiceText(params.userInput);
-  if (!userNorm) {
-    return null;
-  }
+  const textualResolution = resolveTextualVariantSelection({
+    userInput: params.userInput,
+    pendingVariantChoice: params.pendingVariantChoice,
+    presentedVariantOptions: params.presentedVariantOptions,
+    dbVariants: params.dbVariants,
+  });
 
-  const exactPresentedByLabel = params.presentedVariantOptions.find(
-    (item) => normalizeChoiceText(item.label) === userNorm
-  );
+  if (textualResolution?.variantId) {
+    console.log("[VARIANT_SECOND_TURN][TEXT_SELECTION_RESOLVED]", {
+      userInput: params.userInput,
+      variantId: textualResolution.variantId,
+      reason: textualResolution.reason,
+      score: textualResolution.score,
+      evidenceTokens: textualResolution.evidenceTokens,
+    });
 
-  if (exactPresentedByLabel?.variantId) {
-    return exactPresentedByLabel.variantId;
-  }
-
-  const exactPendingByLabel = params.pendingVariantChoice?.options?.find(
-    (item) => normalizeChoiceText(item.label) === userNorm
-  );
-
-  if (exactPendingByLabel?.variantId) {
-    return String(exactPendingByLabel.variantId).trim();
-  }
-
-  const exactDbByLabel = params.dbVariants.find(
-    (item) => normalizeChoiceText(item.variant_name) === userNorm
-  );
-
-  if (exactDbByLabel?.id) {
-    return String(exactDbByLabel.id).trim();
-  }
-
-  const scoredCandidates = [
-    ...params.presentedVariantOptions.map((item) => {
-  const label = String(item.label || "").trim();
-
-  return {
-    variantId: String(item.variantId || "").trim(),
-    label,
-    score: getChoiceTokenOverlapScore(params.userInput, label),
-  };
-}),
-    ...(params.pendingVariantChoice?.options || []).map((item) => {
-      const label = String(item.label || "").trim();
-
-      return {
-        variantId: String(item.variantId || "").trim(),
-        label,
-        score: getChoiceTokenOverlapScore(params.userInput, label),
-      };
-    }),
-    ...params.dbVariants.map((item) => {
-      const label = String(item.variant_name || "").trim();
-
-      return {
-        variantId: String(item.id || "").trim(),
-        label,
-        score: getChoiceTokenOverlapScore(params.userInput, label),
-      };
-    }),
-  ]
-    .filter((item) => item.variantId && item.label && item.score > 0)
-    .sort((a, b) => b.score - a.score);
-
-  const best = scoredCandidates[0] || null;
-  const second = scoredCandidates[1] || null;
-
-  if (best && best.score >= 0.67 && (!second || best.score - second.score >= 0.25)) {
-    return best.variantId;
+    return textualResolution.variantId;
   }
 
   return null;
