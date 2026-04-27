@@ -1891,10 +1891,16 @@ export async function procesarMensajeWhatsApp(
       .toLowerCase()
       .trim();
 
+    const hasPendingCatalogChoiceForSelection =
+      Boolean((convoCtx as any)?.pendingCatalogChoice) &&
+      Array.isArray((convoCtx as any)?.pendingCatalogChoice?.options) &&
+      (convoCtx as any).pendingCatalogChoice.options.length > 0;
+
     const hasActiveSelectionContext =
       Boolean((convoCtx as any)?.pending_link_lookup) ||
       Boolean((convoCtx as any)?.pending_price_lookup) ||
       Boolean((convoCtx as any)?.expectingVariant) ||
+      hasPendingCatalogChoiceForSelection ||
       (Array.isArray((convoCtx as any)?.pending_link_options) &&
         (convoCtx as any).pending_link_options.length > 0) ||
       (Array.isArray((convoCtx as any)?.last_plan_list) &&
@@ -1911,7 +1917,7 @@ export async function procesarMensajeWhatsApp(
       userInput.trim().split(/\s+/).length >= 5;
 
     const looksLikeSelectionReply =
-      /^[1-9]$/.test(normalizedInput) ||
+      hasPendingCatalogChoiceForSelection ||
       (
         hasActiveSelectionContext &&
         isShortFreeText &&
