@@ -78,6 +78,27 @@ type FinalizeInput = {
   onAfterOk?: (nextCtx: any) => void;
 };
 
+function getExplicitContinuationLastTurn(ctxPatch: any): any | null {
+  const candidate = ctxPatch?.continuationContext?.lastTurn;
+
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+
+  const domain = String(candidate.domain || "").trim();
+
+  if (
+    domain !== "catalog" &&
+    domain !== "business_info" &&
+    domain !== "booking" &&
+    domain !== "other"
+  ) {
+    return null;
+  }
+
+  return candidate;
+}
+
 function resolveContinuationDomain(args: {
   canonicalLastEntityId: string | null;
   canonicalLastResolvedIntent: string | null;
@@ -188,6 +209,8 @@ export async function finalizeReply(
 
   const rawBaseCtx = convoCtx && typeof convoCtx === "object" ? convoCtx : {};
   const patchCtx = ctxPatch && typeof ctxPatch === "object" ? ctxPatch : {};
+
+  const explicitContinuationLastTurn = getExplicitContinuationLastTurn(patchCtx);
 
   const baseCtx = {
     ...rawBaseCtx,
@@ -311,15 +334,19 @@ export async function finalizeReply(
     rawBaseCtx.lastVariantName ??
     null;
 
-  const continuationDomain = resolveContinuationDomain({
-    canonicalLastEntityId,
-    canonicalLastResolvedIntent,
-    baseCtx,
-    replySource,
-  });
+  const continuationDomain =
+    explicitContinuationLastTurn?.domain ||
+    resolveContinuationDomain({
+      canonicalLastEntityId,
+      canonicalLastResolvedIntent,
+      baseCtx,
+      replySource,
+    });
 
   const conversationAnchor =
-    continuationDomain === "catalog" || continuationDomain === "business_info"
+    explicitContinuationLastTurn?.domain === "other"
+      ? null
+      : continuationDomain === "catalog" || continuationDomain === "business_info"
       ? {
           domain: continuationDomain,
           entityId: canonicalLastEntityId,
@@ -331,18 +358,20 @@ export async function finalizeReply(
         }
       : null;
 
-  const continuationLastTurn = buildCanonicalTurnSnapshot({
-    domain: continuationDomain,
-    intent: canonicalLastResolvedIntent,
-    userText: userInput,
-    assistantText: reply,
-    canonicalSource: continuationDomain,
-    references: {
-      serviceId: canonicalLastEntityId,
-      familyId: canonicalLastFamilyKey,
-      variantId: canonicalLastVariantId,
-    },
-  });
+  const continuationLastTurn =
+    explicitContinuationLastTurn ||
+    buildCanonicalTurnSnapshot({
+      domain: continuationDomain,
+      intent: canonicalLastResolvedIntent,
+      userText: userInput,
+      assistantText: reply,
+      canonicalSource: continuationDomain,
+      references: {
+        serviceId: canonicalLastEntityId,
+        familyId: canonicalLastFamilyKey,
+        variantId: canonicalLastVariantId,
+      },
+    });
 
   const nextActionContext = hasOwn(patchCtx, "actionContext")
     ? patchCtx.actionContext ?? null
@@ -360,16 +389,25 @@ export async function finalizeReply(
 
     actionContext: nextActionContext,
 
-    lastEntityId: canonicalLastEntityId,
-    lastEntityName: canonicalLastEntityName,
-    lastFamilyKey: canonicalLastFamilyKey,
-    lastFamilyName: canonicalLastFamilyName,
-    lastPresentedEntityIds: canonicalLastPresentedEntityIds,
-    lastPresentedFamilyKeys: canonicalLastPresentedFamilyKeys,
-    expectingVariantForEntityId: canonicalExpectingVariantForEntityId,
-    expectedVariantIntent: canonicalExpectedVariantIntent,
+    lastEntityId:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalLastEntityId,
+    lastEntityName:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalLastEntityName,
+    lastFamilyKey:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalLastFamilyKey,
+    lastFamilyName:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalLastFamilyName,
+    lastPresentedEntityIds:
+      explicitContinuationLastTurn?.domain === "other" ? [] : canonicalLastPresentedEntityIds,
+    lastPresentedFamilyKeys:
+      explicitContinuationLastTurn?.domain === "other" ? [] : canonicalLastPresentedFamilyKeys,
+    expectingVariantForEntityId:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalExpectingVariantForEntityId,
+    expectedVariantIntent:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalExpectedVariantIntent,
     lastResolvedIntent: canonicalLastResolvedIntent,
-    presentedVariantOptions: canonicalPresentedVariantOptions,
+    presentedVariantOptions:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalPresentedVariantOptions,
 
     last_intent: canonicalLastResolvedIntent,
     last_reply_source: replySource || null,
@@ -377,15 +415,24 @@ export async function finalizeReply(
     last_user_text: userInput,
     last_turn_at: new Date().toISOString(),
 
-    last_entity_id: canonicalLastEntityId,
-    last_entity_name: canonicalLastEntityName,
-    last_family_key: canonicalLastFamilyKey,
-    last_family_name: canonicalLastFamilyName,
-    last_presented_entity_ids: canonicalLastPresentedEntityIds,
-    last_presented_family_keys: canonicalLastPresentedFamilyKeys,
-    expecting_variant_for_entity_id: canonicalExpectingVariantForEntityId,
-    expected_variant_intent: canonicalExpectedVariantIntent,
-    presented_variant_options: canonicalPresentedVariantOptions,
+    last_entity_id:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalLastEntityId,
+    last_entity_name:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalLastEntityName,
+    last_family_key:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalLastFamilyKey,
+    last_family_name:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalLastFamilyName,
+    last_presented_entity_ids:
+      explicitContinuationLastTurn?.domain === "other" ? [] : canonicalLastPresentedEntityIds,
+    last_presented_family_keys:
+      explicitContinuationLastTurn?.domain === "other" ? [] : canonicalLastPresentedFamilyKeys,
+    expecting_variant_for_entity_id:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalExpectingVariantForEntityId,
+    expected_variant_intent:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalExpectedVariantIntent,
+    presented_variant_options:
+      explicitContinuationLastTurn?.domain === "other" ? null : canonicalPresentedVariantOptions,
     last_resolved_intent: canonicalLastResolvedIntent,
   };
 
