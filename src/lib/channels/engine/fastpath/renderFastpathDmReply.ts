@@ -218,9 +218,13 @@ function stripJsonCodeFences(value: string): string {
     .trim();
 }
 
-type FrameClosingType = "availability_statement" | "question" | "none";
+type FrameClosingType =
+  | "availability_statement"
+  | "question"
+  | "action_cta"
+  | "none";
 
-function isDeclarativeClosing(value: string): boolean {
+function isNonQuestionText(value: string): boolean {
   const text = String(value || "").trim();
 
   if (!text) {
@@ -269,7 +273,8 @@ function parseFrameJson(value: string): {
 
     const closingType: FrameClosingType =
       closingTypeRaw === "availability_statement" ||
-      closingTypeRaw === "question"
+      closingTypeRaw === "question" ||
+      closingTypeRaw === "action_cta"
         ? closingTypeRaw
         : "none";
 
@@ -557,17 +562,20 @@ async function buildGroundedFrameOnly(input: {
             "Do not use filler, gratitude, or exaggerated politeness.",
             "If PROMPT_BASE contains an explicit tenant CTA, prefer that CTA in the closing when closing is allowed.",
             input.resolvedCatalogClosingMode === "availability_statement"
-            ? "The closing must be declarative, low-pressure, non-interrogative, and leave the conversation open for continuation."
-            : "The closing must be brief, consultative, and natural.",
-          input.resolvedCatalogClosingMode === "availability_statement"
-            ? "When returning a closing for this turn, closingType must be exactly availability_statement."
-            : null,
-          input.resolvedCatalogClosingMode === "availability_statement"
-            ? "The closing must communicate continued availability to help if the user needs anything else, without using a fixed hardcoded phrase."
-            : null,
-          input.resolvedCatalogClosingMode === "availability_statement"
-            ? "The closing must not invite booking, buying, reserving, clicking, confirming, or proceeding now."
-            : null,
+              ? "The closing must only communicate general continued availability to help if the user needs anything else."
+              : "The closing must be brief, consultative, and natural.",
+            input.resolvedCatalogClosingMode === "availability_statement"
+              ? "The closing must not be a question."
+              : null,
+            input.resolvedCatalogClosingMode === "availability_statement"
+              ? "The closing must not contain any concrete next-step CTA."
+              : null,
+            input.resolvedCatalogClosingMode === "availability_statement"
+              ? "If the closing contains any concrete next-step CTA, return closingType action_cta instead of availability_statement."
+              : null,
+            input.resolvedCatalogClosingMode === "availability_statement"
+              ? "When returning a valid closing for this turn, closingType must be exactly availability_statement."
+              : null,
           ]
         : [
             "Return optional framing only when it improves the DM reply.",
@@ -580,12 +588,18 @@ async function buildGroundedFrameOnly(input: {
     "",
     "TASK:",
     "- Return STRICT JSON only.",
-    '- Use exactly this shape: {"intro":string|null,"closing":string|null,"closingType":"availability_statement"|"question"|"none"}.',
+    '- Use exactly this shape: {"intro":string|null,"closing":string|null,"closingType":"availability_statement"|"question"|"action_cta"|"none"}.',
     "- You may generate only intro and closing.",
     "- Do not generate, rewrite, summarize, compress, paraphrase, reorder, or replace the canonical body.",
     "- The canonical body will be inserted by the system exactly as-is after your output.",
     "- intro must be short: one natural DM line.",
     "- closing must be short.",
+    "- closingType must describe the semantic function of the closing.",
+    '- Use closingType "availability_statement" only when the closing only communicates general continued availability to help if the user needs anything else.',
+    '- Use closingType "question" when the closing asks the user anything.',
+    '- Use closingType "action_cta" when the closing invites the user to book, reserve, buy, click, confirm, proceed, schedule, sign up, claim something, or take any concrete next step.',
+    '- Use closingType "none" when there is no valid closing.',
+    "- Do not label a booking, reservation, purchase, scheduling, or concrete next-step CTA as availability_statement.",
     "- intro may be null only when the turn does not require an intro by policy.",
     "- for grounded catalog overview turns, intro is mandatory and must make clear the body is a partial sample of available prices, not an exhaustive catalog.",
     "- for catalog choice turns, intro is mandatory and must not be null.",
@@ -1433,6 +1447,34 @@ export async function renderFastpathDmReply(
       });
     }
 
+    if (
+      resolvedCatalogClosingMode === "availability_statement" &&
+      String(frame.closing || "").trim() &&
+      frame.closingType !== "availability_statement"
+    ) {
+      frame = await buildGroundedFrameOnly({
+        tenantId,
+        canal,
+        idiomaDestino,
+        userInput,
+        promptBaseMem: [
+          promptBaseMem || "",
+          "",
+          "STRICT_FRAME_RETRY_POLICY:",
+          "The previous closing did not satisfy the required closing policy.",
+          "For this retry, return a closing only if it is a pure availability_statement.",
+          "Do not return any concrete next-step CTA.",
+          "If you cannot produce a valid availability_statement, return closing null and closingType none.",
+        ].join("\n"),
+        history,
+        canonicalReply,
+        fpIntent,
+        resolvedCatalogClosingMode: "availability_statement",
+        replyPolicy: effectiveReplyPolicy,
+        conversationFrame: input.conversationFrame,
+      });
+    }
+    
     const normalizedIntro = String(frame.intro || "").trim();
     const normalizedClosing = String(frame.closing || "").trim();
 
@@ -1448,11 +1490,8 @@ export async function renderFastpathDmReply(
     } else if (resolvedCatalogClosingMode === "availability_statement") {
       const shouldAcceptAvailabilityClosing =
         Boolean(normalizedClosing) &&
-        (
-          frame.closingType === "availability_statement" ||
-          frame.closingType === "none"
-        ) &&
-        isDeclarativeClosing(normalizedClosing);
+        frame.closingType === "availability_statement" &&
+        isNonQuestionText(normalizedClosing);
 
       frame = {
         intro: safeIntro || null,
