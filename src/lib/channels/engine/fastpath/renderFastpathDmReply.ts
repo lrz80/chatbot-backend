@@ -557,6 +557,12 @@ async function buildGroundedFrameOnly(input: {
             isCatalogOverviewTurn
               ? "Prefer natural intros such as a brief lead-in equivalent to 'here are some of our prices' in the target language, but do not hardcode a fixed phrase."
               : "If intro is allowed, prefer a light conversational bridge rather than a cold presentation line.",
+            !isCatalogOverviewTurn && input.replyPolicy.answerType === "direct_answer"
+              ? "If this is a resolved catalog answer, the intro must not say that options are being shown or ask the user to choose an option."
+              : null,
+            !isCatalogOverviewTurn && input.replyPolicy.answerType === "direct_answer"
+              ? "For resolved catalog answers, the intro should briefly acknowledge that the selected item has been resolved and that the canonical body contains the details."
+              : null,
             "Avoid robotic openers such as generic presentation-style intros with no conversational warmth.",
             "Do not make the intro long.",
             "Do not use filler, gratitude, or exaggerated politeness.",
@@ -595,6 +601,8 @@ async function buildGroundedFrameOnly(input: {
     "- intro must be short: one natural DM line.",
     "- closing must be short.",
     "- closingType must describe the semantic function of the closing.",
+    "- closingType is required and must never be omitted.",
+    "- If closing is not null, closingType must not be none.",
     '- Use closingType "availability_statement" only when the closing only communicates general continued availability to help if the user needs anything else.',
     '- Use closingType "question" when the closing asks the user anything.',
     '- Use closingType "action_cta" when the closing invites the user to book, reserve, buy, click, confirm, proceed, schedule, sign up, claim something, or take any concrete next step.',
@@ -1461,9 +1469,14 @@ export async function renderFastpathDmReply(
           promptBaseMem || "",
           "",
           "STRICT_FRAME_RETRY_POLICY:",
-          "The previous closing did not satisfy the required closing policy.",
+          "The previous frame did not satisfy the required closing policy.",
+          "Return STRICT JSON only.",
+          'Use exactly this shape: {"intro":string|null,"closing":string|null,"closingType":"availability_statement"|"question"|"action_cta"|"none"}.',
+          "closingType is required and must never be omitted.",
           "For this retry, return a closing only if it is a pure availability_statement.",
-          "Do not return any concrete next-step CTA.",
+          "A pure availability_statement only communicates general continued availability to help if the user needs anything else.",
+          "Do not return a question as the closing.",
+          "Do not return a concrete next-step CTA as the closing.",
           "If you cannot produce a valid availability_statement, return closing null and closingType none.",
         ].join("\n"),
         history,
@@ -1474,7 +1487,7 @@ export async function renderFastpathDmReply(
         conversationFrame: input.conversationFrame,
       });
     }
-    
+
     const normalizedIntro = String(frame.intro || "").trim();
     const normalizedClosing = String(frame.closing || "").trim();
 
@@ -1492,6 +1505,14 @@ export async function renderFastpathDmReply(
         Boolean(normalizedClosing) &&
         frame.closingType === "availability_statement" &&
         isNonQuestionText(normalizedClosing);
+
+      console.log("[DM_RENDER][AVAILABILITY_CLOSING_POLICY]", {
+        userInput,
+        resolvedCatalogClosingMode,
+        incomingClosing: normalizedClosing || null,
+        incomingClosingType: frame.closingType,
+        accepted: shouldAcceptAvailabilityClosing,
+      });
 
       frame = {
         intro: safeIntro || null,
