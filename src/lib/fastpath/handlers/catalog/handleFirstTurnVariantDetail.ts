@@ -1,3 +1,4 @@
+//src/lib/fastpath/handlers/catalog/handleFirstTurnVariantDetail.ts
 import type { Pool } from "pg";
 import type { Lang } from "../../../channels/engine/clients/clientDb";
 import type { FastpathResult, FastpathCtx } from "../../runFastpath";

@@ -35,6 +35,41 @@ function normalizeDetailLine(value: string): string {
   return String(value || "").trim().replace(/^[-•*]\s*/, "");
 }
 
+function parseSingleDigitSelection(input: string): number | null {
+  const value = String(input || "").trim();
+  if (!value) return null;
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return null;
+  if (parsed < 1 || parsed > 9) return null;
+  if (String(parsed) !== value) return null;
+
+  return parsed;
+}
+
+function hasPendingVariantSelectionContext(convoCtx: any): boolean {
+  const pending = convoCtx?.pendingCatalogChoice;
+
+  return (
+    Boolean(convoCtx?.expectingVariant) ||
+    Boolean(convoCtx?.hasVariantSelectionContinuation) ||
+    Boolean(
+      pending &&
+        pending.kind === "variant_choice" &&
+        Array.isArray(pending.options) &&
+        pending.options.length > 1
+    ) ||
+    Boolean(
+      Array.isArray(convoCtx?.presentedVariantOptions) &&
+        convoCtx.presentedVariantOptions.length > 1
+    ) ||
+    Boolean(
+      Array.isArray(convoCtx?.last_variant_options) &&
+        convoCtx.last_variant_options.length > 1
+    )
+  );
+}
+
 function buildCanonicalDetailBlock(params: {
   idiomaDestino: string;
   serviceDescription: string;
@@ -226,12 +261,34 @@ export async function handleSingleServiceCatalog(
         ? input.convoCtx.last_variant_options
         : [];
 
+      const numericSelectionIndex = parseSingleDigitSelection(input.userInput);
+
       const isAwaitingPriceVariantSelection =
         input.convoCtx?.expectedVariantIntent === "price_or_plan" &&
         Boolean(input.convoCtx?.expectingVariant) &&
         storedVariantOptions.length > 0;
 
-      if (targetVariantId) {
+      const hasActiveVariantChoiceContext =
+        isAwaitingPriceVariantSelection ||
+        hasPendingVariantSelectionContext(input.convoCtx);
+
+      const isCatalogOverviewPriceTurn =
+        input.catalogRoutingSignal?.routingHints?.catalogScope === "overview" ||
+        input.catalogReferenceClassification?.kind === "catalog_overview" ||
+        input.catalogReferenceClassification?.isCatalogOverviewIntent === true ||
+        input.catalogRoutingSignal?.isCatalogOverviewIntent === true ||
+        input.catalogRouteIntent === "catalog_price";
+
+      const canUseStructuredTargetVariant =
+        Boolean(targetVariantId) &&
+        !isCatalogOverviewPriceTurn &&
+        (
+          referenceKind === "variant_specific" ||
+          hasActiveVariantChoiceContext ||
+          numericSelectionIndex !== null
+        );
+
+      if (canUseStructuredTargetVariant) {
         chosenVariant =
           pricedVariants.find(
             (v: any) => String(v.id) === String(targetVariantId)
@@ -240,6 +297,11 @@ export async function handleSingleServiceCatalog(
         console.log("[PRICE][single][STRUCTURED_VARIANT_SELECTION]", {
           userInput: input.userInput,
           targetVariantId,
+          referenceKind,
+          isCatalogOverviewPriceTurn,
+          hasActiveVariantChoiceContext,
+          numericSelectionIndex,
+          canUseStructuredTargetVariant,
           chosenVariant: chosenVariant
             ? {
                 id: chosenVariant.id,
@@ -247,6 +309,18 @@ export async function handleSingleServiceCatalog(
                 price: chosenVariant.price,
               }
             : null,
+        });
+      }
+
+      if (targetVariantId && !canUseStructuredTargetVariant) {
+        console.log("[PRICE][single][STRUCTURED_VARIANT_SELECTION_BLOCKED]", {
+          userInput: input.userInput,
+          targetVariantId,
+          referenceKind,
+          isCatalogOverviewPriceTurn,
+          hasActiveVariantChoiceContext,
+          numericSelectionIndex,
+          reason: "target_variant_without_selection_evidence",
         });
       }
 
@@ -451,6 +525,7 @@ export async function handleSingleServiceCatalog(
             url: string | null;
             price: number | null;
             currency: string;
+            displayPrice: string;
           }>,
           v: any,
           idx: number
@@ -486,6 +561,7 @@ export async function handleSingleServiceCatalog(
             url,
             price,
             currency,
+            displayPrice: priceText,
           });
 
           return acc;
@@ -506,6 +582,9 @@ export async function handleSingleServiceCatalog(
         label: option.label,
         serviceName: option.serviceName,
         variantName: option.variantName,
+        price: option.price,
+        currency: option.currency,
+        displayPrice: option.displayPrice,
       }));
 
       return {
