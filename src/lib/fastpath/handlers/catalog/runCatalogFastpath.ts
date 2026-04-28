@@ -38,6 +38,10 @@ import {
   resolveServiceIdFromText,
 } from "../../../services/pricing/resolveServiceIdFromText";
 
+import { handleMultiQuestionSplitAnswer } from "./handleMultiQuestionSplitAnswer";
+import { extractQueryFrames } from "../../extractQueryFrames";
+import { resolveServiceMatchesFromText } from "../../../services/pricing/resolveServiceMatchesFromText";
+
 type CatalogFacets = {
   asksPrices?: boolean;
   asksSchedules?: boolean;
@@ -2259,6 +2263,31 @@ export async function runCatalogFastpath(
     now - prevAt <= 30 * 60 * 1000;
 
   if (questionType === "multi_catalog_question") {
+    // ===============================
+    // ✅ MULTI-QUESTION SPLIT ANSWER
+    // ===============================
+    // Este handler vive aquí, no como ruta paralela.
+    // Solo corre después de que el plan de catálogo decidió
+    // que realmente es una pregunta múltiple de catálogo.
+    {
+      const multiQuestionResult = await handleMultiQuestionSplitAnswer({
+        userInput: input.userInput,
+        idiomaDestino: input.idiomaDestino as any,
+        tenantId: input.tenantId,
+        pool: input.pool,
+        intentOut: input.intentOut || null,
+        extractQueryFrames,
+        normalizeText,
+        resolveServiceMatchesFromText,
+        resolveServiceIdFromText,
+        bestNameMatch,
+      });
+
+      if (multiQuestionResult.handled) {
+        return multiQuestionResult as any;
+      }
+    }
+
     if (canonicalCatalogResolution?.status === "ambiguous") {
       const normalizedOptions = normalizeCatalogDisambiguationOptions(
         canonicalCatalogResolution.options
@@ -2336,6 +2365,73 @@ export async function runCatalogFastpath(
       canonicalStatus: canonicalCatalogResolution?.status || null,
       routeIntent: executionRouteIntent || routeIntent,
     });
+
+    const fallbackResolution = await resolveServiceCandidatesFromText(
+      input.pool,
+      input.tenantId,
+      input.userInput,
+      { mode: "loose" }
+    );
+
+    if (fallbackResolution.kind === "ambiguous") {
+      const normalizedOptions = normalizeCatalogDisambiguationOptions(
+        fallbackResolution.candidates
+      );
+
+      const serviceOptions = normalizedOptions.filter(
+        (option): option is CatalogServiceDisambiguationOption =>
+          option.kind === "service"
+      );
+
+      if (serviceOptions.length > 1) {
+        return buildCatalogFamilyGuidedResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          options: serviceOptions,
+          originalIntent: disambiguationOriginalIntent,
+        });
+      }
+
+      if (normalizedOptions.length > 1) {
+        return buildCatalogDisambiguationResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          kind: "service_choice",
+          options: normalizedOptions,
+          originalIntent: disambiguationOriginalIntent,
+        });
+      }
+    }
+
+    if (canonicalCatalogResolution?.status === "ambiguous") {
+      const normalizedOptions = normalizeCatalogDisambiguationOptions(
+        canonicalCatalogResolution.options
+      );
+
+      const serviceOptions = normalizedOptions.filter(
+        (option): option is CatalogServiceDisambiguationOption =>
+          option.kind === "service"
+      );
+
+      if (serviceOptions.length > 1) {
+        return buildCatalogFamilyGuidedResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          options: serviceOptions,
+          originalIntent: disambiguationOriginalIntent,
+        });
+      }
+
+      if (normalizedOptions.length > 1) {
+        return buildCatalogDisambiguationResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          kind: "service_choice",
+          options: normalizedOptions,
+          originalIntent: disambiguationOriginalIntent,
+        });
+      }
+    }
+
+    return {
+      handled: false,
+    };
   }
 
   if (executionRouteIntent === "catalog_includes" || executionRouteIntent === "entity_detail") {
