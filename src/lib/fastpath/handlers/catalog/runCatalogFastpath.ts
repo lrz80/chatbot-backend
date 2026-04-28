@@ -1577,7 +1577,7 @@ export async function runCatalogFastpath(
       return firstTurnVariantDetailResult;
     }
   }
-  
+
   const shouldForceResolvedVariant =
     shouldSkipVariantDisambiguation({
       catalogRoutingSignal,
@@ -2086,37 +2086,6 @@ export async function runCatalogFastpath(
     }
   }
 
-  // ===============================
-  // ✅ INTEREST → LINK — dentro del dominio catálogo
-  // ===============================
-  // Solo corre si no es pregunta múltiple ni ambigüedad de catálogo.
-  {
-    const shouldAllowInterestToLink =
-      canonicalCatalogResolution?.status !== "ambiguous" &&
-      referenceKind !== "catalog_family";
-
-    if (shouldAllowInterestToLink) {
-      const interestToLinkResult = await handleInterestToLink({
-        pool: input.pool,
-        tenantId: input.tenantId,
-        userInput: input.userInput,
-        idiomaDestino: input.idiomaDestino as any,
-        detectedIntent: input.detectedIntent,
-        intentOut: input.intentOut || null,
-        catalogReferenceClassification: input.catalogReferenceClassification,
-        convoCtx: input.convoCtx,
-        buildCatalogRoutingSignal: input.buildCatalogRoutingSignal,
-        resolveBestLinkForService,
-        getServiceDetailsText,
-        getServiceAndVariantUrl,
-      });
-
-      if (interestToLinkResult.handled) {
-        return interestToLinkResult;
-      }
-    }
-  }
-
   let questionType: QuestionType;
 
   const canonicalOptionCount =
@@ -2150,6 +2119,39 @@ export async function runCatalogFastpath(
     questionType = "schedule_and_price";
   } else {
     questionType = "price_or_plan";
+  }
+
+  // ===============================
+  // ✅ INTEREST → LINK — dentro del dominio catálogo
+  // ===============================
+  // No puede correr antes de decidir questionType.
+  // No debe responder si hay pregunta múltiple o ambigüedad de catálogo.
+  {
+    const shouldAllowInterestToLink =
+      questionType !== "multi_catalog_question" &&
+      canonicalCatalogResolution?.status !== "ambiguous" &&
+      referenceKind !== "catalog_family";
+
+    if (shouldAllowInterestToLink) {
+      const interestToLinkResult = await handleInterestToLink({
+        pool: input.pool,
+        tenantId: input.tenantId,
+        userInput: input.userInput,
+        idiomaDestino: input.idiomaDestino as any,
+        detectedIntent: input.detectedIntent,
+        intentOut: input.intentOut || null,
+        catalogReferenceClassification: input.catalogReferenceClassification,
+        convoCtx: input.convoCtx,
+        buildCatalogRoutingSignal: input.buildCatalogRoutingSignal,
+        resolveBestLinkForService,
+        getServiceDetailsText,
+        getServiceAndVariantUrl,
+      });
+
+      if (interestToLinkResult.handled) {
+        return interestToLinkResult;
+      }
+    }
   }
 
   if (isCatalogPriceLikeTurn) {

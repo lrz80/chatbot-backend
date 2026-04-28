@@ -184,10 +184,15 @@ function buildEffectiveCatalogReferenceClassificationFromCanonical(input: {
     };
   }
 
-if (canonical.resolutionKind === "ambiguous") {
+  if (
+    canonical.resolutionKind === "resolved_family" ||
+    canonical.resolutionKind === "ambiguous_family" ||
+    canonical.resolutionKind === "ambiguous_entities" ||
+    canonical.resolutionKind === "ambiguous"
+  ) {
     return {
       ...seed,
-      kind: "referential_followup",
+      kind: "catalog_family",
       targetLevel: "multi_service",
       shouldResolveEntity: false,
       shouldAskDisambiguation: true,
@@ -195,7 +200,7 @@ if (canonical.resolutionKind === "ambiguous") {
       targetServiceName: null,
       targetVariantId: null,
       targetVariantName: null,
-      targetFamilyKey: null,
+      targetFamilyKey: "canonical_ambiguous_family",
       targetFamilyName: null,
       disambiguationType: "service_choice",
       anchorShift: "none",
@@ -225,7 +230,7 @@ export async function runCatalogDomainTurn(
   void canal;
   void infoClave;
 
-  let convoCtx = initialConvoCtx;
+  const convoCtx = initialConvoCtx;
 
   const canonicalCatalogResolution = normalizeCanonicalCatalogResolution(
     args.catalogRouteContext?.canonicalCatalogResolution || null
