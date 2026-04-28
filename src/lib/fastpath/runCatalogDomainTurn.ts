@@ -3,13 +3,8 @@ import type { Pool } from "pg";
 
 import type { Canal } from "../detectarIntencion";
 import type { Lang } from "../channels/engine/clients/clientDb";
-import { traducirMensaje } from "../traducirMensaje";
+
 import { traducirTexto } from "../traducirTexto";
-import { normalizeText } from "../infoclave/resolveIncludes";
-import {
-  resolveServiceCandidatesFromText,
-  resolveServiceIdFromText,
-} from "../services/pricing/resolveServiceIdFromText";
 
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 
@@ -17,20 +12,7 @@ import type { CatalogReferenceClassification } from "../catalog/types";
 import { buildCatalogRoutingSignal } from "../catalog/buildCatalogRoutingSignal";
 import { runCatalogFastpath } from "./handlers/catalog/runCatalogFastpath";
 
-import { getCatalogStructuredSignals } from "./handlers/catalog/getCatalogStructuredSignals";
-import { getCatalogDetailSignals } from "./handlers/catalog/getCatalogDetailSignals";
-import { getCatalogRoutingState } from "./handlers/catalog/getCatalogRoutingState";
-import { handleVariantSecondTurn } from "./handlers/catalog/handleVariantSecondTurn";
-import { handleLastVariantIncludes } from "./handlers/catalog/handleLastVariantIncludes";
-import { handleResolvedServiceDetail } from "./handlers/catalog/handleResolvedServiceDetail";
-import { handleVariantFollowupSameService } from "./handlers/catalog/handleVariantFollowupSameService";
-
-import { handleFastpathDismiss } from "./handlers/catalog/handleFastpathDismiss";
-import { handlePendingLinkGuardrail } from "./handlers/catalog/handlePendingLinkGuardrail";
-import { resolveFirstTurnServiceDetailTarget } from "./handlers/catalog/resolveFirstTurnServiceDetailTarget";
-import { handleFirstTurnVariantDetail } from "./handlers/catalog/handleFirstTurnVariantDetail";
 import {
-  bestNameMatch,
   extractPlanNamesFromReply,
 } from "./helpers/catalogTextMatching";
 import { normalizeCatalogRole } from "../catalog/normalizeCatalogRole";
@@ -223,36 +205,6 @@ if (canonical.resolutionKind === "ambiguous") {
   return base;
 }
 
-function shouldUseCatalogAnchorResolution(input: {
-  convoCtx: any;
-  intentOut: string | null;
-  hasPendingCatalogChoice: boolean;
-  hasConcreteTargetThisTurn: boolean;
-  isStructuredCatalogTurn: boolean;
-}): boolean {
-  const anchor = input.convoCtx?.conversationAnchor ?? null;
-
-  if (!anchor || anchor.domain !== "catalog") {
-    return false;
-  }
-
-  if (input.hasPendingCatalogChoice) {
-    return false;
-  }
-
-  if (input.hasConcreteTargetThisTurn) {
-    return false;
-  }
-
-  const normalizedIntent = String(input.intentOut || "").trim().toLowerCase();
-
-  return (
-    !normalizedIntent ||
-    normalizedIntent === "duda" ||
-    input.isStructuredCatalogTurn
-  );
-}
-
 export async function runCatalogDomainTurn(
   args: RunCatalogDomainTurnArgs
 ): Promise<FastpathResult> {
@@ -268,7 +220,6 @@ export async function runCatalogDomainTurn(
     detectedIntent,
     detectedFacets,
     catalogReferenceClassification,
-    maxDisambiguationOptions = 5,
   } = args;
 
   void canal;
@@ -299,8 +250,6 @@ export async function runCatalogDomainTurn(
       ? undefined
       : baseEffectiveCatalogReferenceClassification;
 
-  const q = userInput.toLowerCase().trim();
-
   if (inBooking) {
     return { handled: false };
   }
@@ -314,23 +263,6 @@ export async function runCatalogDomainTurn(
     Boolean(effectiveCatalogReferenceClassification?.targetServiceId) ||
     Boolean(effectiveCatalogReferenceClassification?.targetVariantId) ||
     Boolean(effectiveCatalogReferenceClassification?.targetFamilyKey);
-
-  const conversationAnchor = convoCtx?.conversationAnchor ?? null;
-
-  const anchorServiceId =
-    String(
-      conversationAnchor?.entityId ||
-      convoCtx?.last_service_id ||
-      convoCtx?.selectedServiceId ||
-      ""
-    ).trim() || null;
-
-  const anchorVariantId =
-    String(
-      conversationAnchor?.variantId ||
-      convoCtx?.last_variant_id ||
-      ""
-    ).trim() || null;
 
   const hasAnyCatalogFacet =
     detectedFacets?.asksPrices === true ||
@@ -346,13 +278,6 @@ export async function runCatalogDomainTurn(
   const shouldBypassCatalogFollowupReuse =
     isGenericDiscoveryIntent && !hasPendingCatalogChoice;
 
-  const isCatalogOverviewTurn = catalogReferenceKind === "catalog_overview";
-  const isCatalogFamilyTurn = catalogReferenceKind === "catalog_family";
-  const isEntitySpecificTurn = catalogReferenceKind === "entity_specific";
-  const isVariantSpecificTurn = catalogReferenceKind === "variant_specific";
-  const isReferentialFollowupTurn =
-    catalogReferenceKind === "referential_followup";
-
   const isStructuredCatalogTurn =
     catalogReferenceKind === "catalog_overview" ||
     catalogReferenceKind === "catalog_family" ||
@@ -361,260 +286,11 @@ export async function runCatalogDomainTurn(
     catalogReferenceKind === "referential_followup" ||
     catalogReferenceKind === "comparison";
 
-  void isCatalogOverviewTurn;
-  void isCatalogFamilyTurn;
-  void isEntitySpecificTurn;
-  void isVariantSpecificTurn;
-  void isReferentialFollowupTurn;
-
-  const { isFreshCatalogPriceTurn } = getCatalogRoutingState({
-    detectedIntent,
-    isStructuredCatalogTurn,
-    catalogReferenceClassification: effectiveCatalogReferenceClassification,
-    convoCtx,
-    buildCatalogRoutingSignal,
-  });
-
-  {
-    const fastpathDismissResult = handleFastpathDismiss({
-      q,
-      idiomaDestino,
-      convoCtx,
-      intentOut,
-    });
-
-    if (fastpathDismissResult.handled) {
-      return fastpathDismissResult;
-    }
-  }
-
-  {
-    const pendingLinkGuardrailResult = handlePendingLinkGuardrail({
-      userInput,
-      convoCtx,
-      isFreshCatalogPriceTurn,
-    });
-
-    if (pendingLinkGuardrailResult.handled) {
-      convoCtx = {
-        ...(convoCtx || {}),
-        ...(pendingLinkGuardrailResult.ctxPatch || {}),
-      };
-    }
-  }
-
-  if (
-    shouldUseCatalogAnchorResolution({
-      convoCtx,
-      intentOut,
-      hasPendingCatalogChoice,
-      hasConcreteTargetThisTurn,
-      isStructuredCatalogTurn,
-    }) &&
-    anchorServiceId
-  ) {
-    const anchorClassification: CatalogReferenceClassification = {
-      kind: "entity_specific",
-      targetLevel: "service",
-      shouldResolveEntity: true,
-      shouldAskDisambiguation: false,
-      targetServiceId: anchorServiceId,
-      targetServiceName:
-        String(conversationAnchor?.entityName || convoCtx?.last_service_name || "").trim() || null,
-      targetVariantId: anchorVariantId,
-      targetVariantName:
-        String(conversationAnchor?.variantName || convoCtx?.last_variant_name || "").trim() || null,
-      targetFamilyKey: null,
-      targetFamilyName: null,
-      disambiguationType: "none",
-      anchorShift: "none",
-    } as CatalogReferenceClassification;
-
-    const anchorRoutingSignal = buildCatalogRoutingSignal({
-      intentOut:
-        String(intentOut || "").trim().toLowerCase() === "duda"
-          ? String(conversationAnchor?.intent || "info_servicio").trim().toLowerCase()
-          : intentOut,
-      catalogReferenceClassification: anchorClassification,
-      convoCtx: {
-        ...(convoCtx || {}),
-        selectedServiceId: anchorServiceId,
-        last_service_id: anchorServiceId,
-        ...(anchorVariantId ? { last_variant_id: anchorVariantId } : {}),
-      },
-      candidateOptionsFromTurn: [],
-    });
-
-    const anchorCatalogResult = await runCatalogFastpath({
-      pool,
-      tenantId,
-      userInput,
-      idiomaDestino,
-      convoCtx: {
-        ...(convoCtx || {}),
-        selectedServiceId: anchorServiceId,
-        last_service_id: anchorServiceId,
-        ...(anchorVariantId ? { last_variant_id: anchorVariantId } : {}),
-      },
-      intentOut:
-        String(intentOut || "").trim().toLowerCase() === "duda"
-          ? String(conversationAnchor?.intent || "info_servicio").trim().toLowerCase()
-          : intentOut,
-      detectedIntent,
-      infoClave,
-      hasStructuredTarget: true,
-      catalogRoutingSignal: anchorRoutingSignal,
-      catalogReferenceClassification: anchorClassification,
-      facets: detectedFacets || {},
-      buildCatalogRoutingSignal,
-      normalizeCatalogRole,
-      traducirTexto,
-      renderGenericPriceSummaryReply,
-      extractPlanNamesFromReply,
-      canonicalCatalogResolution:
-        args.catalogRouteContext?.canonicalCatalogResolution || null,
-    });
-
-    if (anchorCatalogResult.handled) {
-      return anchorCatalogResult;
-    }
-  }
-
-  if (!hasPendingCatalogChoice && !shouldBypassCatalogFollowupReuse) {
-    const variantFollowupSameServiceResult =
-      await handleVariantFollowupSameService({
-        pool,
-        userInput,
-        idiomaDestino,
-        intentOut,
-        convoCtx,
-        catalogReferenceClassification: effectiveCatalogReferenceClassification,
-        isFreshCatalogPriceTurn,
-      });
-
-    if (variantFollowupSameServiceResult.handled) {
-      return variantFollowupSameServiceResult;
-    }
-  }
-
-  const variantSecondTurnResult = await handleVariantSecondTurn({
-    pool,
-    tenantId,
-    userInput,
-    idiomaDestino,
-    convoCtx,
-    detectedIntent,
-    intentOut,
-    catalogReferenceClassification: effectiveCatalogReferenceClassification,
-  });
-
-  if (variantSecondTurnResult.handled) {
-    return variantSecondTurnResult;
-  }
-
-  const catalogRouteIntent =
-    String(intentOut || "").trim().toLowerCase() || null;
-
-  const { hasStructuredTarget } = getCatalogStructuredSignals({
-    catalogReferenceClassification: effectiveCatalogReferenceClassification,
-    convoCtx,
-    catalogRouteIntent,
-  });
-
-  {
-    const firstTurnVariantDetailResult = await handleFirstTurnVariantDetail({
-      pool,
-      tenantId,
-      userInput,
-      idiomaDestino,
-      convoCtx,
-      detectedIntent,
-      intentOut,
-      isCatalogOverviewTurn,
-      catalogReferenceClassification: effectiveCatalogReferenceClassification,
-      traducirMensaje,
-      getCatalogStructuredSignals,
-      getCatalogDetailSignals,
-      handleLastVariantIncludes,
-      resolveFirstTurnServiceDetailTarget,
-      handleResolvedServiceDetail,
-      normalizeText,
-      resolveServiceIdFromText,
-    });
-
-    if (firstTurnVariantDetailResult.handled) {
-      return firstTurnVariantDetailResult;
-    }
-  }
-
-  const shouldResolveAmbiguousCandidatesThisTurn =
-    !hasConcreteTargetThisTurn && isStructuredCatalogTurn;
-
-  const candidateOptionsFromTurn = shouldResolveAmbiguousCandidatesThisTurn
-    ? await (async () => {
-        const resolution = await resolveServiceCandidatesFromText(
-          pool,
-          tenantId,
-          userInput,
-          { mode: "loose" }
-        );
-
-        if (
-          resolution.kind !== "ambiguous" ||
-          !Array.isArray(resolution.candidates)
-        ) {
-          return [];
-        }
-
-        return resolution.candidates
-          .map((item) => ({
-            serviceId: String(item.id || "").trim(),
-            label: String(item.name || "").trim(),
-          }))
-          .filter((item) => item.serviceId && item.label)
-          .slice(0, maxDisambiguationOptions);
-      })()
-    : [];
-
-  if (
-    canonicalCatalogResolution?.resolutionKind === "ambiguous" &&
-    candidateOptionsFromTurn.length > 0
-  ) {
-    return {
-      handled: true,
-      source: "catalog_disambiguation_db",
-      intent: "service_choice",
-      reply: "",
-      catalogPayload: {
-        kind: "service_choice",
-        options: candidateOptionsFromTurn.map((item, index) => ({
-          index: index + 1,
-          serviceId: item.serviceId,
-          label: item.label,
-        })),
-      },
-      ctxPatch: {
-        pendingCatalogChoice: {
-          kind: "service_choice",
-          options: candidateOptionsFromTurn.map((item, index) => ({
-            index: index + 1,
-            serviceId: item.serviceId,
-            variantId: null,
-            label: item.label,
-            serviceName: item.label,
-          })),
-        },
-        pendingCatalogChoiceAt: Date.now(),
-        last_bot_action: "catalog_service_choice",
-      },
-    } as any;
-  }
-
   const baseCatalogRoutingSignal = buildCatalogRoutingSignal({
     intentOut,
     catalogReferenceClassification: effectiveCatalogReferenceClassification,
     convoCtx,
-    candidateOptionsFromTurn,
+    candidateOptionsFromTurn: [],
   });
 
   const catalogRoutingSignal =
@@ -667,6 +343,13 @@ export async function runCatalogDomainTurn(
   if (!canEnterCatalogFastpath) {
     return { handled: false };
   }
+
+  const hasStructuredTarget =
+    Boolean(effectiveCatalogReferenceClassification?.targetServiceId) ||
+    Boolean(effectiveCatalogReferenceClassification?.targetVariantId) ||
+    Boolean(effectiveCatalogReferenceClassification?.targetFamilyKey) ||
+    isStructuredCatalogTurn ||
+    hasPendingCatalogChoice;
 
   const catalogFastpathResult = await runCatalogFastpath({
     pool,

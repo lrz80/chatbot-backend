@@ -23,6 +23,21 @@ import { normalizeText } from "../../../infoclave/resolveIncludes";
 import { bestNameMatch } from "../../helpers/catalogTextMatching";
 import { handlePickFromLastList } from "./handlePickFromLastList";
 
+import { handlePendingLinkGuardrail } from "./handlePendingLinkGuardrail";
+import { handleVariantSecondTurn } from "./handleVariantSecondTurn";
+import { handleVariantFollowupSameService } from "./handleVariantFollowupSameService";
+import { handleFirstTurnVariantDetail } from "./handleFirstTurnVariantDetail";
+import { handleLastVariantIncludes } from "./handleLastVariantIncludes";
+import { resolveFirstTurnServiceDetailTarget } from "./resolveFirstTurnServiceDetailTarget";
+import { getCatalogStructuredSignals } from "./getCatalogStructuredSignals";
+import { getCatalogDetailSignals } from "./getCatalogDetailSignals";
+import { getCatalogRoutingState } from "./getCatalogRoutingState";
+
+import { traducirMensaje } from "../../../traducirMensaje";
+import {
+  resolveServiceIdFromText,
+} from "../../../services/pricing/resolveServiceIdFromText";
+
 type CatalogFacets = {
   asksPrices?: boolean;
   asksSchedules?: boolean;
@@ -1450,6 +1465,119 @@ export async function runCatalogFastpath(
     }
   }
 
+    const currentCatalogReferenceKind = String(
+    input.catalogReferenceClassification?.kind || "none"
+  )
+    .trim()
+    .toLowerCase();
+
+  const currentIsStructuredCatalogTurn =
+    currentCatalogReferenceKind === "catalog_overview" ||
+    currentCatalogReferenceKind === "catalog_family" ||
+    currentCatalogReferenceKind === "entity_specific" ||
+    currentCatalogReferenceKind === "variant_specific" ||
+    currentCatalogReferenceKind === "referential_followup" ||
+    currentCatalogReferenceKind === "comparison";
+
+  const { isFreshCatalogPriceTurn } = getCatalogRoutingState({
+    detectedIntent: input.detectedIntent,
+    isStructuredCatalogTurn: currentIsStructuredCatalogTurn,
+    catalogReferenceClassification: input.catalogReferenceClassification,
+    convoCtx: input.convoCtx,
+    buildCatalogRoutingSignal: input.buildCatalogRoutingSignal,
+  });
+
+  // ===============================
+  // ✅ PENDING LINK GUARDRAIL — dentro del dominio catálogo
+  // ===============================
+  {
+    const pendingLinkGuardrailResult = handlePendingLinkGuardrail({
+      userInput: input.userInput,
+      convoCtx: input.convoCtx,
+      isFreshCatalogPriceTurn,
+    });
+
+    if (pendingLinkGuardrailResult.handled) {
+      input.convoCtx = {
+        ...(input.convoCtx || {}),
+        ...(pendingLinkGuardrailResult.ctxPatch || {}),
+      };
+    }
+  }
+
+  // ===============================
+  // ✅ VARIANT FOLLOWUP SAME SERVICE — dentro del dominio catálogo
+  // ===============================
+  if (!pendingCatalogChoice) {
+    const variantFollowupSameServiceResult =
+      await handleVariantFollowupSameService({
+        pool: input.pool,
+        userInput: input.userInput,
+        idiomaDestino: input.idiomaDestino as any,
+        intentOut: input.intentOut || null,
+        convoCtx: input.convoCtx,
+        catalogReferenceClassification: input.catalogReferenceClassification,
+        isFreshCatalogPriceTurn,
+      });
+
+    if (variantFollowupSameServiceResult.handled) {
+      return variantFollowupSameServiceResult;
+    }
+  }
+
+  // ===============================
+  // ✅ VARIANT SECOND TURN — dentro del dominio catálogo
+  // ===============================
+  {
+    const variantSecondTurnResult = await handleVariantSecondTurn({
+      pool: input.pool,
+      tenantId: input.tenantId,
+      userInput: input.userInput,
+      idiomaDestino: input.idiomaDestino as any,
+      convoCtx: input.convoCtx,
+      detectedIntent: input.detectedIntent,
+      intentOut: input.intentOut || null,
+      catalogReferenceClassification: input.catalogReferenceClassification,
+    });
+
+    if (variantSecondTurnResult.handled) {
+      return variantSecondTurnResult;
+    }
+  }
+
+  // ===============================
+  // ✅ FIRST TURN VARIANT DETAIL — dentro del dominio catálogo
+  // ===============================
+  {
+    const catalogRouteIntent =
+      String(input.intentOut || "").trim().toLowerCase() || null;
+
+    const firstTurnVariantDetailResult = await handleFirstTurnVariantDetail({
+      pool: input.pool,
+      tenantId: input.tenantId,
+      userInput: input.userInput,
+      idiomaDestino: input.idiomaDestino as any,
+      convoCtx: input.convoCtx,
+      detectedIntent: input.detectedIntent,
+      intentOut: input.intentOut || null,
+      isCatalogOverviewTurn:
+        currentCatalogReferenceKind === "catalog_overview",
+      catalogReferenceClassification: input.catalogReferenceClassification,
+      traducirMensaje,
+      getCatalogStructuredSignals,
+      getCatalogDetailSignals,
+      handleLastVariantIncludes,
+      resolveFirstTurnServiceDetailTarget,
+      handleResolvedServiceDetail,
+      normalizeText,
+      resolveServiceIdFromText,
+    });
+
+    if (firstTurnVariantDetailResult.handled) {
+      return firstTurnVariantDetailResult;
+    }
+  }
+  
   const shouldForceResolvedVariant =
     shouldSkipVariantDisambiguation({
       catalogRoutingSignal,
