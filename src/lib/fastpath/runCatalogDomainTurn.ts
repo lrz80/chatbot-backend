@@ -12,10 +12,9 @@ import {
   resolveServiceIdFromText,
 } from "../services/pricing/resolveServiceIdFromText";
 import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
-import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
+
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
-import { extractQueryFrames } from "./extractQueryFrames";
-import { resolveServiceMatchesFromText } from "../services/pricing/resolveServiceMatchesFromText";
+
 import type { CatalogReferenceClassification } from "../catalog/types";
 import { buildCatalogRoutingSignal } from "../catalog/buildCatalogRoutingSignal";
 import { runCatalogFastpath } from "./handlers/catalog/runCatalogFastpath";
@@ -27,14 +26,11 @@ import { handleVariantSecondTurn } from "./handlers/catalog/handleVariantSecondT
 import { handleLastVariantIncludes } from "./handlers/catalog/handleLastVariantIncludes";
 import { handleResolvedServiceDetail } from "./handlers/catalog/handleResolvedServiceDetail";
 import { handleVariantFollowupSameService } from "./handlers/catalog/handleVariantFollowupSameService";
-import { handleFollowupRouter } from "./handlers/catalog/handleFollowupRouter";
 import { handlePickFromLastList } from "./handlers/catalog/handlePickFromLastList";
-import { handleMultiQuestionSplitAnswer } from "./handlers/catalog/handleMultiQuestionSplitAnswer";
+
 import { handleFastpathDismiss } from "./handlers/catalog/handleFastpathDismiss";
 import { handlePendingLinkSelection } from "./handlers/catalog/handlePendingLinkSelection";
 import { handlePendingLinkGuardrail } from "./handlers/catalog/handlePendingLinkGuardrail";
-import { handleFreeOffer } from "./handlers/catalog/handleFreeOffer";
-import { handleInterestToLink } from "./handlers/catalog/handleInterestToLink";
 import { resolveFirstTurnServiceDetailTarget } from "./handlers/catalog/resolveFirstTurnServiceDetailTarget";
 import { handleFirstTurnVariantDetail } from "./handlers/catalog/handleFirstTurnVariantDetail";
 import {
@@ -382,25 +378,6 @@ export async function runCatalogDomainTurn(
     convoCtx,
     buildCatalogRoutingSignal,
   });
-
-  {
-    const multiQuestionResult = await handleMultiQuestionSplitAnswer({
-      userInput,
-      idiomaDestino,
-      tenantId,
-      pool,
-      intentOut,
-      extractQueryFrames,
-      normalizeText,
-      resolveServiceMatchesFromText,
-      resolveServiceIdFromText,
-      bestNameMatch,
-    });
-
-    if (multiQuestionResult.handled) {
-      return multiQuestionResult as any;
-    }
-  }
 
   {
     const fastpathDismissResult = handleFastpathDismiss({
