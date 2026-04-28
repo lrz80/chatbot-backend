@@ -1196,7 +1196,14 @@ function normalizeIncomingCanonicalResolution(input: {
     variantName: string;
   }> | null;
 } | null | undefined): {
-  resolutionKind: "resolved_single" | "resolved_service_variant_ambiguous" | "ambiguous" | "none";
+  resolutionKind:
+    | "resolved_single"
+    | "resolved_service_variant_ambiguous"
+    | "resolved_family"
+    | "ambiguous_family"
+    | "ambiguous_entities"
+    | "ambiguous"
+    | "none";
   resolvedServiceId: string | null;
   resolvedServiceName: string | null;
   variantOptions: Array<{
@@ -1209,6 +1216,9 @@ function normalizeIncomingCanonicalResolution(input: {
   const resolutionKind =
     resolutionKindRaw === "resolved_single" ||
     resolutionKindRaw === "resolved_service_variant_ambiguous" ||
+    resolutionKindRaw === "resolved_family" ||
+    resolutionKindRaw === "ambiguous_family" ||
+    resolutionKindRaw === "ambiguous_entities" ||
     resolutionKindRaw === "ambiguous"
       ? resolutionKindRaw
       : "none";
@@ -1279,6 +1289,9 @@ export async function runCatalogFastpath(
     Boolean(incomingCanonicalResolution.resolvedServiceId);
 
   const hasIncomingCanonicalAmbiguous =
+    incomingCanonicalResolution.resolutionKind === "resolved_family" ||
+    incomingCanonicalResolution.resolutionKind === "ambiguous_family" ||
+    incomingCanonicalResolution.resolutionKind === "ambiguous_entities" ||
     incomingCanonicalResolution.resolutionKind === "ambiguous";
 
   const hasIncomingCanonicalVariantAmbiguous =

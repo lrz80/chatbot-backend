@@ -351,7 +351,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       detectedIntent,
       detectedFacets,
       catalogReferenceClassification,
-      maxDisambiguationOptions,
     });
   }
 
