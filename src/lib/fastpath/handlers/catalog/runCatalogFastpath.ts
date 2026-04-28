@@ -183,7 +183,7 @@ const semanticMatches = pending.options.filter((option) => {
     return true;
   }
 
-  const inputHasAllTokensOfAnyCandidate = candidateTexts.some((value) => {
+  const inputTokensMatchAnyCandidate = candidateTexts.some((value) => {
     const candidateTokens = value
       .split(/\s+/)
       .map((part) => part.trim())
@@ -191,10 +191,10 @@ const semanticMatches = pending.options.filter((option) => {
 
     if (!candidateTokens.length) return false;
 
-    return candidateTokens.every((token) => tokenizedInput.includes(token));
+    return tokenizedInput.every((token) => candidateTokens.includes(token));
   });
 
-  return inputHasAllTokensOfAnyCandidate;
+  return inputTokensMatchAnyCandidate;
 });
 
 if (semanticMatches.length === 1) {
