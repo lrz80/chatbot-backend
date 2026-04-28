@@ -483,50 +483,6 @@ export async function runCatalogDomainTurn(
     }
   }
 
-  {
-    const shouldAllowGenericFreeOfferHandler =
-      !hasConcreteTargetThisTurn &&
-      !canonicalCatalogResolution?.resolvedServiceId &&
-      effectiveCatalogReferenceClassification?.kind !== "entity_specific" &&
-      effectiveCatalogReferenceClassification?.kind !== "variant_specific";
-
-    if (shouldAllowGenericFreeOfferHandler) {
-      const freeOfferResult = await handleFreeOffer({
-        pool,
-        tenantId,
-        idiomaDestino,
-        detectedIntent,
-        catalogReferenceClassification: effectiveCatalogReferenceClassification,
-        convoCtx,
-      });
-
-      if (freeOfferResult.handled) {
-        return freeOfferResult;
-      }
-    }
-  }
-
-  {
-    const interestToLinkResult = await handleInterestToLink({
-      pool,
-      tenantId,
-      userInput,
-      idiomaDestino,
-      detectedIntent,
-      intentOut,
-      catalogReferenceClassification: effectiveCatalogReferenceClassification,
-      convoCtx,
-      buildCatalogRoutingSignal,
-      resolveBestLinkForService,
-      getServiceDetailsText,
-      getServiceAndVariantUrl,
-    });
-
-    if (interestToLinkResult.handled) {
-      return interestToLinkResult;
-    }
-  }
-
   if (
     shouldUseCatalogAnchorResolution({
       convoCtx,

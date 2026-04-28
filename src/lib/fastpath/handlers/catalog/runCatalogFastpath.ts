@@ -12,6 +12,11 @@ import {
   formatMoneyAmount,
   toNullableMoneyNumber,
 } from "./helpers/catalogMoneyFormat";
+import { handleFreeOffer } from "./handleFreeOffer";
+import { handleInterestToLink } from "./handleInterestToLink";
+import { resolveBestLinkForService } from "../../../links/resolveBestLinkForService";
+import { getServiceDetailsText } from "../../../services/resolveServiceInfo";
+import { getServiceAndVariantUrl } from "../../../services/getServiceAndVariantUrl";
 
 type CatalogFacets = {
   asksPrices?: boolean;
@@ -1015,6 +1020,98 @@ function buildCatalogDisambiguationResult(input: {
   };
 }
 
+function countCatalogSignalsForTurn(input: {
+  userInput: string;
+  canonicalResolutionStatus?: string | null;
+  canonicalOptionCount?: number;
+  hasBookingSignal: boolean;
+  hasFamilySignal: boolean;
+  hasServiceSignal: boolean;
+  hasVariantSignal: boolean;
+  asksPrices: boolean;
+  asksIncludesOnly: boolean;
+  asksSchedules: boolean;
+  asksAvailability: boolean;
+}): number {
+  const signals = new Set<string>();
+
+  if (input.hasBookingSignal) {
+    signals.add("booking");
+  }
+
+  if (input.hasFamilySignal) {
+    signals.add("catalog_family");
+  }
+
+  if (input.hasServiceSignal) {
+    signals.add("service");
+  }
+
+  if (input.hasVariantSignal) {
+    signals.add("variant");
+  }
+
+  if (input.asksPrices) {
+    signals.add("prices");
+  }
+
+  if (input.asksIncludesOnly) {
+    signals.add("includes");
+  }
+
+  if (input.asksSchedules) {
+    signals.add("schedules");
+  }
+
+  if (input.asksAvailability) {
+    signals.add("availability");
+  }
+
+  if (
+    input.canonicalResolutionStatus === "ambiguous" &&
+    Number(input.canonicalOptionCount || 0) > 1
+  ) {
+    signals.add("multiple_catalog_candidates");
+  }
+
+  return signals.size;
+}
+
+function shouldTreatAsMultiCatalogQuestion(input: {
+  userInput: string;
+  intentOutNorm: string;
+  routeIntent: string;
+  canonicalResolutionStatus?: string | null;
+  canonicalOptionCount?: number;
+  hasFamilyStructuredCatalogTarget: boolean;
+  hasServiceStructuredCatalogTarget: boolean;
+  hasVariantStructuredCatalogTarget: boolean;
+  asksPrices: boolean;
+  asksIncludesOnly: boolean;
+  asksSchedules: boolean;
+  asksAvailability: boolean;
+  wantsBooking: boolean;
+}): boolean {
+  const signalCount = countCatalogSignalsForTurn({
+    userInput: input.userInput,
+    canonicalResolutionStatus: input.canonicalResolutionStatus,
+    canonicalOptionCount: input.canonicalOptionCount,
+    hasBookingSignal:
+      input.wantsBooking ||
+      input.intentOutNorm === "reserva" ||
+      input.intentOutNorm === "clase_prueba",
+    hasFamilySignal: input.hasFamilyStructuredCatalogTarget,
+    hasServiceSignal: input.hasServiceStructuredCatalogTarget,
+    hasVariantSignal: input.hasVariantStructuredCatalogTarget,
+    asksPrices: input.asksPrices,
+    asksIncludesOnly: input.asksIncludesOnly,
+    asksSchedules: input.asksSchedules,
+    asksAvailability: input.asksAvailability,
+  });
+
+  return signalCount >= 2;
+}
+
 export type RunCatalogFastpathInput = {
   pool: Pool;
   tenantId: string;
@@ -1025,6 +1122,13 @@ export type RunCatalogFastpathInput = {
   intentOut?: string | null;
   detectedIntent?: string | null;
   infoClave?: string | null;
+
+  commercial?: {
+    wantsBooking?: boolean;
+    wantsQuote?: boolean;
+    purchaseIntent?: string | null;
+    urgency?: string | null;
+  } | null;
 
   hasStructuredTarget: boolean;
 
@@ -1630,6 +1734,7 @@ export async function runCatalogFastpath(
   });
 
   type QuestionType =
+    | "multi_catalog_question"
     | "combination_and_price"
     | "price_or_plan"
     | "schedule_and_price"
@@ -1694,18 +1799,6 @@ export async function runCatalogFastpath(
         });
       }
     }
-  }
-
-  let questionType: QuestionType;
-
-  if (executionRouteIntent === "catalog_combination") {
-    questionType = "combination_and_price";
-  } else if (executionRouteIntent === "catalog_alternatives") {
-    questionType = "other_plans";
-  } else if (asksSchedules && asksPrices) {
-    questionType = "schedule_and_price";
-  } else {
-    questionType = "price_or_plan";
   }
 
   const hasActivePendingChoiceForThisTurn =
@@ -1807,50 +1900,76 @@ export async function runCatalogFastpath(
     });
 
     if (canonicalCatalogResolution.status === "ambiguous") {
-      const normalizedOptions = normalizeCatalogDisambiguationOptions(
-        canonicalCatalogResolution.options
-      );
-
-      const variantOptions = normalizedOptions.filter(
-        (option): option is CatalogVariantDisambiguationOption =>
-          option.kind === "variant"
-      );
-
-      const serviceOptions = normalizedOptions.filter(
-        (option): option is CatalogServiceDisambiguationOption =>
-          option.kind === "service"
-      );
-
-      const allAreVariants =
-        normalizedOptions.length > 1 &&
-        variantOptions.length === normalizedOptions.length;
-
-      const singleServiceId = allAreVariants
-        ? Array.from(new Set(variantOptions.map((option) => option.serviceId)))
-        : [];
-
-      if (allAreVariants && singleServiceId.length === 1 && shouldOpenVariantChoice) {
-        const serviceId = singleServiceId[0];
-        const serviceName =
-          variantOptions.find((option) => option.serviceId === serviceId)?.serviceName || null;
-
-        return buildCatalogDisambiguationResult({
-          routeIntent: executionRouteIntent || routeIntent,
-          kind: "variant_choice",
-          options: variantOptions,
-          serviceId,
-          serviceName,
-          originalIntent: disambiguationOriginalIntent,
-        });
-      }
-
-      return buildCatalogDisambiguationResult({
-        routeIntent: executionRouteIntent || routeIntent,
-        kind: "service_choice",
-        options: serviceOptions.length > 0 ? serviceOptions : normalizedOptions,
-        originalIntent: disambiguationOriginalIntent,
-      });
+      // No retornamos todavía.
+      // Primero dejamos que questionType decida si es multi_catalog_question,
+      // service_choice normal o variant_choice.
     }
+  }
+
+  // ===============================
+  // ✅ INTEREST → LINK — dentro del dominio catálogo
+  // ===============================
+  // Solo corre si no es pregunta múltiple ni ambigüedad de catálogo.
+  {
+    const shouldAllowInterestToLink =
+      canonicalCatalogResolution?.status !== "ambiguous" &&
+      referenceKind !== "catalog_family";
+
+    if (shouldAllowInterestToLink) {
+      const interestToLinkResult = await handleInterestToLink({
+        pool: input.pool,
+        tenantId: input.tenantId,
+        userInput: input.userInput,
+        idiomaDestino: input.idiomaDestino as any,
+        detectedIntent: input.detectedIntent,
+        intentOut: input.intentOut || null,
+        catalogReferenceClassification: input.catalogReferenceClassification,
+        convoCtx: input.convoCtx,
+        buildCatalogRoutingSignal: input.buildCatalogRoutingSignal,
+        resolveBestLinkForService,
+        getServiceDetailsText,
+        getServiceAndVariantUrl,
+      });
+
+      if (interestToLinkResult.handled) {
+        return interestToLinkResult;
+      }
+    }
+  }
+
+  let questionType: QuestionType;
+
+  const canonicalOptionCount =
+    canonicalCatalogResolution?.status === "ambiguous"
+      ? canonicalCatalogResolution.options.length
+      : 0;
+
+  const isMultiCatalogQuestion = shouldTreatAsMultiCatalogQuestion({
+    userInput: input.userInput,
+    intentOutNorm,
+    routeIntent: executionRouteIntent || routeIntent,
+    canonicalResolutionStatus: canonicalCatalogResolution?.status || null,
+    canonicalOptionCount,
+    hasFamilyStructuredCatalogTarget,
+    hasServiceStructuredCatalogTarget,
+    hasVariantStructuredCatalogTarget,
+    asksPrices,
+    asksIncludesOnly,
+    asksSchedules,
+    asksAvailability: Boolean(input.facets?.asksAvailability),
+    wantsBooking: Boolean(input.commercial?.wantsBooking),
+  });
+
+  if (isMultiCatalogQuestion) {
+    questionType = "multi_catalog_question";
+  } else if (executionRouteIntent === "catalog_combination") {
+    questionType = "combination_and_price";
+  } else if (executionRouteIntent === "catalog_alternatives") {
+    questionType = "other_plans";
+  } else if (asksSchedules && asksPrices) {
+    questionType = "schedule_and_price";
+  } else {
+    questionType = "price_or_plan";
   }
 
   if (isCatalogPriceLikeTurn) {
@@ -2277,6 +2396,111 @@ export async function runCatalogFastpath(
     return {
       handled: false,
     };
+  }
+
+  if (questionType === "multi_catalog_question") {
+    if (canonicalCatalogResolution?.status === "ambiguous") {
+      const normalizedOptions = normalizeCatalogDisambiguationOptions(
+        canonicalCatalogResolution.options
+      );
+
+      const serviceOptions = normalizedOptions.filter(
+        (option): option is CatalogServiceDisambiguationOption =>
+          option.kind === "service"
+      );
+
+      if (serviceOptions.length > 1) {
+        return buildCatalogFamilyGuidedResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          options: serviceOptions,
+          originalIntent: disambiguationOriginalIntent,
+        });
+      }
+
+      const variantOptions = normalizedOptions.filter(
+        (option): option is CatalogVariantDisambiguationOption =>
+          option.kind === "variant"
+      );
+
+      const variantServiceIds = Array.from(
+        new Set(variantOptions.map((option) => option.serviceId))
+      );
+
+      if (variantOptions.length > 1 && variantServiceIds.length === 1) {
+        const serviceId = variantServiceIds[0];
+        const serviceName =
+          variantOptions.find((option) => option.serviceId === serviceId)
+            ?.serviceName || null;
+
+        return buildCatalogDisambiguationResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          kind: "variant_choice",
+          options: variantOptions,
+          serviceId,
+          serviceName,
+          originalIntent: disambiguationOriginalIntent,
+        });
+      }
+    }
+
+    if (hasFamilyStructuredCatalogTarget) {
+      const familyResolution = await resolveServiceCandidatesFromText(
+        input.pool,
+        input.tenantId,
+        input.userInput,
+        { mode: "loose" }
+      );
+
+      if (familyResolution.kind === "ambiguous") {
+        const normalizedOptions = normalizeCatalogDisambiguationOptions(
+          familyResolution.candidates
+        );
+
+        const serviceOptions = normalizedOptions.filter(
+          (option): option is CatalogServiceDisambiguationOption =>
+            option.kind === "service"
+        );
+
+        if (serviceOptions.length > 1) {
+          return buildCatalogFamilyGuidedResult({
+            routeIntent: executionRouteIntent || routeIntent,
+            options: serviceOptions,
+            originalIntent: disambiguationOriginalIntent,
+          });
+        }
+      }
+    }
+
+    return {
+      handled: false,
+    };
+  }
+
+  // ===============================
+  // ✅ FREE OFFER — subordinado al plan de catálogo
+  // ===============================
+  // No puede correr antes de multi_catalog_question.
+  // Solo aplica cuando NO hay múltiples candidatos de catálogo.
+  {
+    const shouldAllowGenericFreeOfferHandler =
+      !hasAnyStructuredCatalogTarget &&
+      canonicalCatalogResolution?.status !== "ambiguous" &&
+      intentOutNorm === "clase_prueba";
+
+    if (shouldAllowGenericFreeOfferHandler) {
+      const freeOfferResult = await handleFreeOffer({
+        pool: input.pool,
+        tenantId: input.tenantId,
+        idiomaDestino: input.idiomaDestino as any,
+        detectedIntent: input.detectedIntent,
+        catalogReferenceClassification: input.catalogReferenceClassification,
+        convoCtx: input.convoCtx,
+      });
+
+      if (freeOfferResult.handled) {
+        return freeOfferResult;
+      }
+    }
   }
 
   // PRICE OR PLAN
