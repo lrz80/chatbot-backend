@@ -1885,11 +1885,33 @@ export async function procesarMensajeWhatsApp(
       ) ||
       Boolean((convoCtx as any)?.continuationContext?.lastTurn);
 
-    const normalizedInput = String(userInput || "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .trim();
+    const rawInput = String(userInput || "").trim();
+    const inputTokens = rawInput
+      .split(" ")
+      .map((token) => token.trim())
+      .filter(Boolean);
+
+    const numericInput = Number(rawInput);
+
+    const isNumericSelection =
+      Number.isInteger(numericInput) &&
+      numericInput >= 1 &&
+      numericInput <= 9 &&
+      String(numericInput) === rawInput;
+
+    const hasQuestionMark =
+      rawInput.includes("?") || rawInput.includes("¿");
+
+    const isShortFreeText =
+      rawInput.length > 0 && rawInput.length <= 20;
+
+    const isClearlyLongSentence =
+      inputTokens.length >= 5;
+
+    const isLowAutonomySelectionCandidate =
+      isShortFreeText &&
+      !hasQuestionMark &&
+      !isClearlyLongSentence;
 
     const hasPendingCatalogChoiceForSelection =
       Boolean((convoCtx as any)?.pendingCatalogChoice) &&
@@ -1906,23 +1928,11 @@ export async function procesarMensajeWhatsApp(
       (Array.isArray((convoCtx as any)?.last_plan_list) &&
         (convoCtx as any).last_plan_list.length > 0);
 
-    const isShortFreeText =
-      typeof userInput === "string" &&
-      userInput.trim().length > 0 &&
-      userInput.trim().length <= 20;
-
-    const hasQuestionMark = /[?¿]/.test(userInput);
-
-    const isClearlyLongSentence =
-      userInput.trim().split(/\s+/).length >= 5;
-
     const looksLikeSelectionReply =
-      hasPendingCatalogChoiceForSelection ||
+      isNumericSelection ||
       (
         hasActiveSelectionContext &&
-        isShortFreeText &&
-        !hasQuestionMark &&
-        !isClearlyLongSentence
+        isLowAutonomySelectionCandidate
       );
 
     const shouldResetStaleSelectionContext =
