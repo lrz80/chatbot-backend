@@ -2063,6 +2063,86 @@ export async function runCatalogFastpath(
     prevAt > 0 &&
     now - prevAt <= 30 * 60 * 1000;
 
+  if (questionType === "multi_catalog_question") {
+    if (canonicalCatalogResolution?.status === "ambiguous") {
+      const normalizedOptions = normalizeCatalogDisambiguationOptions(
+        canonicalCatalogResolution.options
+      );
+
+      const serviceOptions = normalizedOptions.filter(
+        (option): option is CatalogServiceDisambiguationOption =>
+          option.kind === "service"
+      );
+
+      if (serviceOptions.length > 1) {
+        return buildCatalogFamilyGuidedResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          options: serviceOptions,
+          originalIntent: disambiguationOriginalIntent,
+        });
+      }
+
+      const variantOptions = normalizedOptions.filter(
+        (option): option is CatalogVariantDisambiguationOption =>
+          option.kind === "variant"
+      );
+
+      const variantServiceIds = Array.from(
+        new Set(variantOptions.map((option) => option.serviceId))
+      );
+
+      if (variantOptions.length > 1 && variantServiceIds.length === 1) {
+        const serviceId = variantServiceIds[0];
+        const serviceName =
+          variantOptions.find((option) => option.serviceId === serviceId)
+            ?.serviceName || null;
+
+        return buildCatalogDisambiguationResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          kind: "variant_choice",
+          options: variantOptions,
+          serviceId,
+          serviceName,
+          originalIntent: disambiguationOriginalIntent,
+        });
+      }
+    }
+
+    if (hasFamilyStructuredCatalogTarget) {
+      const familyResolution = await resolveServiceCandidatesFromText(
+        input.pool,
+        input.tenantId,
+        input.userInput,
+        { mode: "loose" }
+      );
+
+      if (familyResolution.kind === "ambiguous") {
+        const normalizedOptions = normalizeCatalogDisambiguationOptions(
+          familyResolution.candidates
+        );
+
+        const serviceOptions = normalizedOptions.filter(
+          (option): option is CatalogServiceDisambiguationOption =>
+            option.kind === "service"
+        );
+
+        if (serviceOptions.length > 1) {
+          return buildCatalogFamilyGuidedResult({
+            routeIntent: executionRouteIntent || routeIntent,
+            options: serviceOptions,
+            originalIntent: disambiguationOriginalIntent,
+          });
+        }
+      }
+    }
+
+    console.log("[CATALOG][MULTI_QUESTION_UNRESOLVED_FALLBACK]", {
+      userInput: input.userInput,
+      canonicalStatus: canonicalCatalogResolution?.status || null,
+      routeIntent: executionRouteIntent || routeIntent,
+    });
+  }
+
   if (executionRouteIntent === "catalog_includes" || executionRouteIntent === "entity_detail") {
     if (canonicalCatalogResolution?.status === "resolved_single") {
             if (isGenericServiceInterestTurn) {
@@ -2390,84 +2470,6 @@ export async function runCatalogFastpath(
             ...clearPendingCatalogChoiceCtxPatch(),
           },
         };
-      }
-    }
-
-    return {
-      handled: false,
-    };
-  }
-
-  if (questionType === "multi_catalog_question") {
-    if (canonicalCatalogResolution?.status === "ambiguous") {
-      const normalizedOptions = normalizeCatalogDisambiguationOptions(
-        canonicalCatalogResolution.options
-      );
-
-      const serviceOptions = normalizedOptions.filter(
-        (option): option is CatalogServiceDisambiguationOption =>
-          option.kind === "service"
-      );
-
-      if (serviceOptions.length > 1) {
-        return buildCatalogFamilyGuidedResult({
-          routeIntent: executionRouteIntent || routeIntent,
-          options: serviceOptions,
-          originalIntent: disambiguationOriginalIntent,
-        });
-      }
-
-      const variantOptions = normalizedOptions.filter(
-        (option): option is CatalogVariantDisambiguationOption =>
-          option.kind === "variant"
-      );
-
-      const variantServiceIds = Array.from(
-        new Set(variantOptions.map((option) => option.serviceId))
-      );
-
-      if (variantOptions.length > 1 && variantServiceIds.length === 1) {
-        const serviceId = variantServiceIds[0];
-        const serviceName =
-          variantOptions.find((option) => option.serviceId === serviceId)
-            ?.serviceName || null;
-
-        return buildCatalogDisambiguationResult({
-          routeIntent: executionRouteIntent || routeIntent,
-          kind: "variant_choice",
-          options: variantOptions,
-          serviceId,
-          serviceName,
-          originalIntent: disambiguationOriginalIntent,
-        });
-      }
-    }
-
-    if (hasFamilyStructuredCatalogTarget) {
-      const familyResolution = await resolveServiceCandidatesFromText(
-        input.pool,
-        input.tenantId,
-        input.userInput,
-        { mode: "loose" }
-      );
-
-      if (familyResolution.kind === "ambiguous") {
-        const normalizedOptions = normalizeCatalogDisambiguationOptions(
-          familyResolution.candidates
-        );
-
-        const serviceOptions = normalizedOptions.filter(
-          (option): option is CatalogServiceDisambiguationOption =>
-            option.kind === "service"
-        );
-
-        if (serviceOptions.length > 1) {
-          return buildCatalogFamilyGuidedResult({
-            routeIntent: executionRouteIntent || routeIntent,
-            options: serviceOptions,
-            originalIntent: disambiguationOriginalIntent,
-          });
-        }
       }
     }
 
