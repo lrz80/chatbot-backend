@@ -18,6 +18,10 @@ import { resolveBestLinkForService } from "../../../links/resolveBestLinkForServ
 import { getServiceDetailsText } from "../../../services/resolveServiceInfo";
 import { getServiceAndVariantUrl } from "../../../services/getServiceAndVariantUrl";
 
+import { handlePendingLinkSelection } from "./handlePendingLinkSelection";
+import { normalizeText } from "../../../infoclave/resolveIncludes";
+import { bestNameMatch } from "../../helpers/catalogTextMatching";
+
 type CatalogFacets = {
   asksPrices?: boolean;
   asksSchedules?: boolean;
@@ -1396,6 +1400,27 @@ export async function runCatalogFastpath(
         last_service_at: now,
       },
     };
+  }
+
+  // ===============================
+  // ✅ PENDING LINK SELECTION — dentro del dominio catálogo
+  // ===============================
+  // Solo resuelve una selección pendiente de link.
+  // No debe competir con service_choice / variant_choice.
+  if (!pendingCatalogChoice) {
+    const pendingLinkSelectionResult = await handlePendingLinkSelection({
+      userInput: input.userInput,
+      idiomaDestino: input.idiomaDestino as any,
+      convoCtx: input.convoCtx,
+      pool: input.pool,
+      normalizeText,
+      bestNameMatch,
+      intentOut: input.intentOut || null,
+    });
+
+    if (pendingLinkSelectionResult.handled) {
+      return pendingLinkSelectionResult;
+    }
   }
 
   const shouldForceResolvedVariant =

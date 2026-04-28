@@ -18,7 +18,7 @@ import { renderGenericPriceSummaryReply } from "../services/pricing/renderGeneri
 import type { CatalogReferenceClassification } from "../catalog/types";
 import { buildCatalogRoutingSignal } from "../catalog/buildCatalogRoutingSignal";
 import { runCatalogFastpath } from "./handlers/catalog/runCatalogFastpath";
-import { handleCatalogComparison } from "./handlers/catalog/handleCatalogComparison";
+
 import { getCatalogStructuredSignals } from "./handlers/catalog/getCatalogStructuredSignals";
 import { getCatalogDetailSignals } from "./handlers/catalog/getCatalogDetailSignals";
 import { getCatalogRoutingState } from "./handlers/catalog/getCatalogRoutingState";
@@ -389,38 +389,6 @@ export async function runCatalogDomainTurn(
 
     if (fastpathDismissResult.handled) {
       return fastpathDismissResult;
-    }
-  }
-
-  {
-    if (effectiveCatalogReferenceClassification?.kind === "comparison") {
-      const comparisonResult = await handleCatalogComparison({
-        pool,
-        tenantId,
-        userInput,
-        idiomaDestino,
-        catalogReferenceClassification: effectiveCatalogReferenceClassification,
-      });
-
-      if (comparisonResult.handled) {
-        return comparisonResult;
-      }
-    }
-  }
-
-  if (!hasPendingCatalogChoice) {
-    const pendingLinkSelectionResult = await handlePendingLinkSelection({
-      userInput,
-      idiomaDestino,
-      convoCtx,
-      pool,
-      normalizeText,
-      bestNameMatch,
-      intentOut,
-    });
-
-    if (pendingLinkSelectionResult.handled) {
-      return pendingLinkSelectionResult;
     }
   }
 
