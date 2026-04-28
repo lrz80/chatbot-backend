@@ -41,6 +41,21 @@ export type ResolveServiceDecision =
       }>;
     }
   | {
+      kind: "resolved_family";
+      hit: null;
+      candidates: ResolveServiceCandidate[];
+    }
+  | {
+      kind: "ambiguous_family";
+      hit: null;
+      candidates: ResolveServiceCandidate[];
+    }
+  | {
+      kind: "ambiguous_entities";
+      hit: null;
+      candidates: ResolveServiceCandidate[];
+    }
+  | {
       kind: "ambiguous";
       hit: null;
       candidates: ResolveServiceCandidate[];
@@ -456,6 +471,44 @@ function buildEntityEvidenceQueryTokens(
     const coverage = df / totalCandidates;
     return coverage <= 0.2;
   });
+}
+
+function hasMultiQuestionShape(text: string): boolean {
+  const value = String(text || "").trim();
+
+  if (!value) {
+    return false;
+  }
+
+  let questionMarks = 0;
+  let bulletSignals = 0;
+  let lineStart = true;
+
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+
+    if (ch === "?") {
+      questionMarks += 1;
+    }
+
+    if (lineStart) {
+      if (ch === " " || ch === "\t") {
+        continue;
+      }
+
+      if (ch === "-" || ch === "*" || ch === "•") {
+        bulletSignals += 1;
+      }
+
+      lineStart = false;
+    }
+
+    if (ch === "\n" || ch === "\r") {
+      lineStart = true;
+    }
+  }
+
+  return questionMarks >= 2 || bulletSignals >= 2;
 }
 
 export async function resolveServiceCandidatesFromText(
@@ -1385,6 +1438,62 @@ export async function resolveServiceCandidatesFromText(
       candidates: variantCandidates,
       variantOptions,
     };
+  }
+
+  const isMultiQuestionTurn = hasMultiQuestionShape(userText);
+
+  if (isMultiQuestionTurn) {
+    const coherentCandidates = scored
+      .filter((s) => s.score > 0 && s.allOverlapTokens.length > 0)
+      .slice(0, 5)
+      .map((s) => ({
+        id: s.cand.serviceId,
+        name: s.cand.label,
+        score: s.score,
+        category: s.cand.category || null,
+        tipo: s.cand.tipo || null,
+        parentServiceId: s.cand.parentServiceId || null,
+        catalogRole: s.cand.catalogRole || null,
+        overlapNameTokens: s.overlapNameTokens,
+        overlapTipoTokens: s.overlapTipoTokens,
+        overlapSupportTokens: s.overlapSupportTokens,
+        dominantOverlapTokens: s.dominantOverlapTokens,
+      }));
+
+    if (coherentCandidates.length > 1) {
+      const bestCategoryNorm = normalizeLabel(best.cand.category || "");
+      const secondCategoryNorm = normalizeLabel(second?.cand.category || "");
+
+      const bestTipoNorm = normalizeLabel(best.cand.tipo || "");
+      const secondTipoNorm = normalizeLabel(second?.cand.tipo || "");
+
+      const sameFamily =
+        (!!bestCategoryNorm &&
+          !!secondCategoryNorm &&
+          bestCategoryNorm === secondCategoryNorm) ||
+        (!!bestTipoNorm &&
+          !!secondTipoNorm &&
+          bestTipoNorm === secondTipoNorm);
+
+      console.log(
+        "[RESOLVE-SERVICE] multi-question turn con varios candidatos coherentes, evitando resolved_single",
+        {
+          userText,
+          sameFamily,
+          candidates: coherentCandidates.map((c) => ({
+            id: c.id,
+            name: c.name,
+            score: c.score,
+          })),
+        }
+      );
+
+      return {
+        kind: "ambiguous",
+        hit: null,
+        candidates: coherentCandidates,
+      };
+    }
   }
 
   console.log("[RESOLVE-SERVICE] match aceptado por evidencia resolutiva", {

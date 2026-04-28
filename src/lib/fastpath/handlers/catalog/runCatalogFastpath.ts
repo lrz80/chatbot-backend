@@ -2429,6 +2429,39 @@ export async function runCatalogFastpath(
       }
     }
 
+    if (canonicalCatalogResolution?.status === "resolved_single") {
+      const resolvedDetailResult = await handleResolvedServiceDetail({
+        pool: input.pool,
+        userInput: input.userInput,
+        idiomaDestino: input.idiomaDestino as any,
+        intentOut: input.intentOut || "info_servicio",
+        hit: {
+          id: canonicalCatalogResolution.serviceId,
+          name: canonicalCatalogResolution.serviceName,
+        },
+        traducirMensaje: input.traducirTexto as any,
+        convoCtx: {
+          ...(input.convoCtx || {}),
+          selectedServiceId: canonicalCatalogResolution.serviceId,
+          last_service_id: canonicalCatalogResolution.serviceId,
+          last_service_name: canonicalCatalogResolution.serviceName || null,
+        },
+      });
+
+      if (resolvedDetailResult.handled) {
+        return {
+          ...resolvedDetailResult,
+          ctxPatch: {
+            ...((resolvedDetailResult as any).ctxPatch || {}),
+            selectedServiceId: canonicalCatalogResolution.serviceId,
+            last_service_id: canonicalCatalogResolution.serviceId,
+            last_service_name: canonicalCatalogResolution.serviceName || null,
+            last_service_at: Date.now(),
+          },
+        };
+      }
+    }
+
     return {
       handled: false,
     };
