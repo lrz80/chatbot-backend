@@ -21,6 +21,7 @@ import { getServiceAndVariantUrl } from "../../../services/getServiceAndVariantU
 import { handlePendingLinkSelection } from "./handlePendingLinkSelection";
 import { normalizeText } from "../../../infoclave/resolveIncludes";
 import { bestNameMatch } from "../../helpers/catalogTextMatching";
+import { handlePickFromLastList } from "./handlePickFromLastList";
 
 type CatalogFacets = {
   asksPrices?: boolean;
@@ -1420,6 +1421,32 @@ export async function runCatalogFastpath(
 
     if (pendingLinkSelectionResult.handled) {
       return pendingLinkSelectionResult;
+    }
+  }
+
+  // ===============================
+  // ✅ PICK FROM LAST LIST — dentro del dominio catálogo
+  // ===============================
+  // Resuelve selecciones desde la última lista presentada.
+  // No debe competir con pendingCatalogChoice.
+  if (!pendingCatalogChoice) {
+    const pickFromLastListResult = await handlePickFromLastList({
+      userInput: input.userInput,
+      idiomaDestino: input.idiomaDestino as any,
+      convoCtx: input.convoCtx,
+      tenantId: input.tenantId,
+      pool: input.pool,
+      detectedIntent: input.detectedIntent,
+      catalogReferenceClassification: input.catalogReferenceClassification,
+      intentOut: input.intentOut || null,
+      normalizeText,
+      bestNameMatch,
+      getServiceDetailsText,
+      resolveBestLinkForService,
+    });
+
+    if (pickFromLastListResult.handled) {
+      return pickFromLastListResult as any;
     }
   }
 

@@ -6,12 +6,10 @@ import type { Lang } from "../channels/engine/clients/clientDb";
 import { traducirMensaje } from "../traducirMensaje";
 import { traducirTexto } from "../traducirTexto";
 import { normalizeText } from "../infoclave/resolveIncludes";
-import { getServiceDetailsText } from "../services/resolveServiceInfo";
 import {
   resolveServiceCandidatesFromText,
   resolveServiceIdFromText,
 } from "../services/pricing/resolveServiceIdFromText";
-import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
 
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 
@@ -26,10 +24,8 @@ import { handleVariantSecondTurn } from "./handlers/catalog/handleVariantSecondT
 import { handleLastVariantIncludes } from "./handlers/catalog/handleLastVariantIncludes";
 import { handleResolvedServiceDetail } from "./handlers/catalog/handleResolvedServiceDetail";
 import { handleVariantFollowupSameService } from "./handlers/catalog/handleVariantFollowupSameService";
-import { handlePickFromLastList } from "./handlers/catalog/handlePickFromLastList";
 
 import { handleFastpathDismiss } from "./handlers/catalog/handleFastpathDismiss";
-import { handlePendingLinkSelection } from "./handlers/catalog/handlePendingLinkSelection";
 import { handlePendingLinkGuardrail } from "./handlers/catalog/handlePendingLinkGuardrail";
 import { resolveFirstTurnServiceDetailTarget } from "./handlers/catalog/resolveFirstTurnServiceDetailTarget";
 import { handleFirstTurnVariantDetail } from "./handlers/catalog/handleFirstTurnVariantDetail";
@@ -389,27 +385,6 @@ export async function runCatalogDomainTurn(
 
     if (fastpathDismissResult.handled) {
       return fastpathDismissResult;
-    }
-  }
-
-  if (!hasPendingCatalogChoice) {
-    const pickFromLastListResult = await handlePickFromLastList({
-      userInput,
-      idiomaDestino,
-      convoCtx,
-      tenantId,
-      pool,
-      detectedIntent,
-      catalogReferenceClassification: effectiveCatalogReferenceClassification,
-      intentOut,
-      normalizeText,
-      bestNameMatch,
-      getServiceDetailsText,
-      resolveBestLinkForService,
-    });
-
-    if (pickFromLastListResult.handled) {
-      return pickFromLastListResult as any;
     }
   }
 
