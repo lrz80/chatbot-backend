@@ -90,6 +90,29 @@ Paso actual: ${stepInstruction[step]}
   return completion.choices[0].message.content?.trim() || '';
 }
 
+function buildAnswersBySlot(params: {
+  flow: Awaited<ReturnType<typeof getBookingFlow>>;
+  bookingData: Record<string, string>;
+}) {
+  const answersBySlot: Record<string, string> = {};
+
+  for (const step of params.flow) {
+    const slot =
+      typeof step.validation_config?.slot === "string"
+        ? step.validation_config.slot
+        : null;
+
+    if (!slot || slot === "none") continue;
+
+    const value = params.bookingData?.[step.step_key];
+    if (!value) continue;
+
+    answersBySlot[slot] = value;
+  }
+
+  return answersBySlot;
+}
+
 // ———————————————————————————
 //  Helpers de formato de hora / idioma / sanitización
 // ———————————————————————————
@@ -1358,12 +1381,14 @@ router.post('/', async (req: Request, res: Response) => {
                 enabled: true,
               };
 
+              const answersBySlot = buildAnswersBySlot({
+                flow,
+                bookingData: state.bookingData || {},
+              });
+
               const appointment = await createAppointmentFromVoice({
                 tenantId: tenant.id,
-                serviceName: state.bookingData?.service || "General",
-                customerPhone: callerE164,
-                customerName: callerE164 || "Cliente Voz",
-                datetimeText: state.bookingData?.datetime || "",
+                answersBySlot,
                 idempotencyKey: `voice:${callSid}`,
                 settings: appointmentSettings,
               });

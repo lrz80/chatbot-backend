@@ -9,12 +9,17 @@ type AppointmentSettings = {
   enabled: boolean;
 };
 
+type BookingSlot =
+  | "service"
+  | "datetime"
+  | "customer_name"
+  | "customer_phone"
+  | "customer_email"
+  | "confirmation";
+
 type Args = {
   tenantId: string;
-  serviceName: string;
-  customerPhone: string | null;
-  customerName?: string | null;
-  datetimeText: string;
+  answersBySlot: Partial<Record<BookingSlot, string>>;
   idempotencyKey?: string;
   settings: AppointmentSettings;
 };
@@ -32,8 +37,13 @@ function parseVoiceDatetime(input: string): Date | null {
   let hour = Number(hourMatch[1]);
   const minute = hourMatch[2] ? Number(hourMatch[2]) : 0;
 
-  const isMorning = raw.includes("mañana") || raw.includes("am") || raw.includes("a.m");
-  const isAfternoon = raw.includes("tarde") || raw.includes("noche") || raw.includes("pm") || raw.includes("p.m");
+  const isMorning =
+    raw.includes("mañana") || raw.includes("am") || raw.includes("a.m");
+  const isAfternoon =
+    raw.includes("tarde") ||
+    raw.includes("noche") ||
+    raw.includes("pm") ||
+    raw.includes("p.m");
 
   if (isAfternoon && hour < 12) hour += 12;
   if (isMorning && hour === 12) hour = 0;
@@ -43,10 +53,15 @@ function parseVoiceDatetime(input: string): Date | null {
 }
 
 export async function createAppointmentFromVoice(args: Args) {
-  const start = parseVoiceDatetime(args.datetimeText);
+  const datetimeText = args.answersBySlot.datetime || "";
+  const customerPhone = args.answersBySlot.customer_phone || null;
+  const customerName = args.answersBySlot.customer_name || "Cliente Voz";
+  const customerEmail = args.answersBySlot.customer_email || null;
+
+  const start = parseVoiceDatetime(datetimeText);
 
   if (!start) {
-    throw new Error(`INVALID_VOICE_DATETIME: ${args.datetimeText}`);
+    throw new Error(`INVALID_VOICE_DATETIME: ${datetimeText}`);
   }
 
   if (!args.settings.enabled) {
@@ -58,7 +73,7 @@ export async function createAppointmentFromVoice(args: Args) {
 
   const idempotencyKey =
     args.idempotencyKey ||
-    `voice:${args.tenantId}:${args.customerPhone || "unknown"}:${start.toISOString()}`;
+    `voice:${args.tenantId}:${customerPhone || "unknown"}:${start.toISOString()}`;
 
   const { rows } = await pool.query(
     `
@@ -86,14 +101,14 @@ export async function createAppointmentFromVoice(args: Args) {
       'voice',
       $2,
       $3,
-      NULL,
       $4,
       $5,
+      $6,
       'confirmed',
       NULL,
       NULL,
       NULL,
-      $6,
+      $7,
       NULL,
       NOW(),
       NOW()
@@ -105,8 +120,9 @@ export async function createAppointmentFromVoice(args: Args) {
     `,
     [
       args.tenantId,
-      args.customerName || "Cliente Voz",
-      args.customerPhone,
+      customerName,
+      customerPhone,
+      customerEmail,
       start.toISOString(),
       end.toISOString(),
       idempotencyKey,
