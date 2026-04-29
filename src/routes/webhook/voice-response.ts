@@ -11,6 +11,77 @@ const router = Router();
 
 const GLOBAL_ID = process.env.GLOBAL_CHANNEL_TENANT_ID!;
 
+async function generateVoiceReply({
+  tenantName,
+  userInput,
+  step,
+  locale,
+  bookingData,
+}: {
+  tenantName: string;
+  userInput: string;
+  step: 'service' | 'datetime' | 'confirm';
+  locale: string;
+  bookingData?: {
+    service?: string;
+    datetime?: string;
+  };
+}) {
+  const { default: OpenAI } = await import('openai');
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const system = `
+Eres una recepcionista amable del negocio ${tenantName}.
+
+REGLAS:
+- Máximo 1-2 frases
+- Sonar natural, humana
+- No mencionar "IA"
+- No inventar información
+- Mantener enfoque en agendar cita
+- No usar texto largo
+`;
+
+  const stepInstruction = {
+    service: locale.startsWith('es')
+      ? `El cliente quiere una cita. Pregunta qué servicio desea de forma natural.`
+      : `The client wants to book. Ask what service they want.`,
+
+    datetime: locale.startsWith('es')
+      ? `El cliente ya dijo el servicio. Pide día y hora de forma natural.`
+      : `Ask for date and time.`,
+
+    confirm: locale.startsWith('es')
+      ? `Confirma la cita usando estos datos:
+    Servicio: ${bookingData?.service || 'no especificado'}
+    Fecha/hora: ${bookingData?.datetime || 'no especificada'}
+
+    Debe sonar natural, corto y pedir confirmación.`
+      : `Confirm appointment using:
+    Service: ${bookingData?.service || 'not specified'}
+    Date/time: ${bookingData?.datetime || 'not specified'}
+
+    Keep it natural and ask for confirmation.`,
+  };
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    temperature: 0.3,
+    messages: [
+      { role: 'system', content: system },
+      {
+        role: 'user',
+        content: `
+Cliente dijo: "${userInput}"
+Paso actual: ${stepInstruction[step]}
+`,
+      },
+    ],
+  });
+
+  return completion.choices[0].message.content?.trim() || '';
+}
+
 // ———————————————————————————
 //  Helpers de formato de hora / idioma / sanitización
 // ———————————————————————————
@@ -1084,9 +1155,14 @@ router.post('/', async (req: Request, res: Response) => {
           bookingData: {}
         });
 
-        const ask = currentLocale.startsWith('es')
-          ? 'Perfecto, ¿qué servicio te interesa?'
-          : 'Great, what service are you interested in?';
+        const askRaw = await generateVoiceReply({
+          tenantName: brand,
+          userInput,
+          step: 'service',
+          locale: currentLocale,
+        });
+
+        const ask = twoSentencesMax(askRaw);
 
         const gather = vr.gather({
           input: ['speech'] as any,
@@ -1102,9 +1178,14 @@ router.post('/', async (req: Request, res: Response) => {
       }
 
       if (state.bookingStep === 'service') {
-        const reply = currentLocale.startsWith('es')
-          ? 'Perfecto. ¿Qué día y hora te gustaría?'
-          : 'Great. What day and time would you like?';
+        const replyRaw = await generateVoiceReply({
+          tenantName: brand,
+          userInput,
+          step: 'datetime',
+          locale: currentLocale,
+        });
+
+        const reply = twoSentencesMax(replyRaw);
 
         CALL_STATE.set(callSid, {
           ...state,
@@ -1128,9 +1209,18 @@ router.post('/', async (req: Request, res: Response) => {
       }
 
       if (state.bookingStep === 'datetime') {
-        const confirm = currentLocale.startsWith('es')
-          ? `Perfecto, te agendo para ${userInput}. ¿Confirmas?`
-          : `Perfect, I’ll book you for ${userInput}. Confirm?`;
+        const confirmRaw = await generateVoiceReply({
+          tenantName: brand,
+          userInput,
+          step: 'confirm',
+          locale: currentLocale,
+          bookingData: {
+            service: state.bookingData?.service,
+            datetime: userInput,
+          },
+        });
+
+        const confirm = twoSentencesMax(confirmRaw);
 
         CALL_STATE.set(callSid, {
           ...state,
@@ -1238,7 +1328,6 @@ router.post('/', async (req: Request, res: Response) => {
         return res.type('text/xml').send(vr.toString());
       }
 
-      const brand = await getTenantBrand(tenant.id);
       const s = userInput.toLowerCase();
 
       const wantsPrices   = /(precio|precios|tarifa|tarifas|cost|price)/i.test(s);
