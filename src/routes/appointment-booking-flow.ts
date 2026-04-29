@@ -193,6 +193,8 @@ router.post("/", authenticateUser, async (req: any, res) => {
         step_key,
         step_order,
         prompt,
+        retry_prompt,
+        validation_config,
         expected_type,
         required,
         enabled,
