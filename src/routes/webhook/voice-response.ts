@@ -773,7 +773,10 @@ router.post('/', async (req: Request, res: Response) => {
     );
 
     const tenant = tRes.rows[0];
-    if (!tenant) return res.sendStatus(404);
+    if (!tenant) {
+      console.error("[VOICE] tenant no encontrado para twilio_voice_number:", didNumber);
+      return res.status(404).type("text/plain").send("tenant_not_found");
+    }
 
     // Nombre de marca del tenant (para hablar en la intro)
     const brand = await getTenantBrand(tenant.id);
@@ -838,17 +841,23 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type('text/xml').send(vr.toString());
     }
 
+    const currentLocale = (state.lang as any) || (langParam === 'es' ? 'es-ES' : 'en-US');
+
     const cfgRes = await pool.query(
-      `SELECT * FROM voice_configs
-        WHERE tenant_id = $1 AND canal = 'voz'
+      `SELECT *
+        FROM voice_configs
+        WHERE tenant_id = $1
+          AND canal = 'voice'
+          AND idioma = $2
         ORDER BY updated_at DESC, created_at DESC
         LIMIT 1`,
-      [tenant.id]
+      [tenant.id, currentLocale]
     );
     const cfg = cfgRes.rows[0];
-    if (!cfg) return res.sendStatus(404);
-
-    const currentLocale = (state.lang as any) || (langParam === 'es' ? 'es-ES' : 'en-US');
+    if (!cfg) {
+      console.error("[VOICE] voice_config no encontrada para tenant:", tenant.id);
+      return res.status(404).type("text/plain").send("voice_config_not_found");
+    }
 
     const voiceName: any = resolveVoice(currentLocale, cfg?.voice_name);
 
@@ -1080,12 +1089,18 @@ router.post('/', async (req: Request, res: Response) => {
       const { rows: lastAssistantRows } = await pool.query(
         `SELECT content
           FROM messages
-          WHERE tenant_id = $1 AND canal = 'voz' AND role = 'assistant' AND from_number = $2
-          ORDER BY timestamp DESC LIMIT 1`,
+          WHERE tenant_id = $1
+            AND canal = 'voice'
+            AND role = 'assistant'
+            AND from_number = $2
+          ORDER BY timestamp DESC
+          LIMIT 1`,
         [tenant?.id, didNumber || 'sistema']
       );
+
       const lastAssistantText: string = lastAssistantRows?.[0]?.content || '';
       const pendingMatch = lastAssistantText.match(/<SMS_PENDING:(reservar|comprar|soporte|web)>/i);
+
       if (pendingMatch && (saidYes(userInput) || digits === '1')) {
         earlySmsType = pendingMatch[1].toLowerCase() as LinkType;
       }
@@ -1468,7 +1483,7 @@ router.post('/', async (req: Request, res: Response) => {
           `SELECT content
             FROM messages
             WHERE tenant_id = $1
-              AND canal = 'voz'
+              AND canal = 'voice'
               AND role = 'assistant'
               AND from_number = $2
             ORDER BY timestamp DESC
