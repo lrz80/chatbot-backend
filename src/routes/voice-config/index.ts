@@ -5,6 +5,12 @@ import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
 import { normalizarNumero } from "../../lib/senders/sms";
 
+const canonLocale = (x: string) =>
+  x.startsWith("es") ? "es-ES" :
+  x.startsWith("en") ? "en-US" :
+  x.startsWith("pt") ? "pt-BR" :
+  x;
+
 const router = express.Router();
 const upload = multer();
 
@@ -70,44 +76,51 @@ router.get("/", authenticateUser, async (req, res) => {
 // 📤 GUARDAR configuración de voz
 router.post("/", authenticateUser, upload.none(), async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
+
+  const canonLocale = (x: string) =>
+    x.startsWith("es") ? "es-ES" :
+    x.startsWith("en") ? "en-US" :
+    x.startsWith("pt") ? "pt-BR" :
+    x;
+
   let {
     idioma,
     voice_name,
     system_prompt,
     welcome_message,
     voice_hints,
-    canal = "voz",                 // ✅ usa "voz"
+    canal = "voice",
     funciones_asistente,
     info_clave,
     audio_demo_url,
     representante_number
   } = req.body;
 
-  // Normaliza a texto
-  idioma              = toText(idioma);
-  voice_name          = toText(voice_name) || "alice";
-  system_prompt       = toText(system_prompt);
-  welcome_message     = toText(welcome_message);
-  voice_hints         = toText(voice_hints);
-  canal               = toText(canal) || "voz";
+  idioma = canonLocale(toText(idioma).toLowerCase());
+  voice_name = toText(voice_name) || "alice";
+  system_prompt = toText(system_prompt);
+  welcome_message = toText(welcome_message);
+  voice_hints = toText(voice_hints);
+  canal = toText(canal) || "voice";
   funciones_asistente = toText(funciones_asistente);
-  info_clave          = toText(info_clave);
+  info_clave = toText(info_clave);
   representante_number = toText(representante_number);
 
   if (!tenant_id) {
     return res.status(401).json({ error: "Tenant no autenticado." });
   }
+
   if (!idioma) {
-  return res.status(400).json({ error: "Falta idioma." });
+    return res.status(400).json({ error: "Falta idioma." });
   }
-  // voice_name es opcional: si viene vacío, usamos 'alice' como default
-  voice_name = voice_name || "alice";
+
   if (!system_prompt || !welcome_message) {
     return res.status(400).json({ error: "Prompt o mensaje de bienvenida vacío." });
   }
+
   if (representante_number) {
     try {
-      representante_number = normalizarNumero(representante_number); // ej: +13057206515
+      representante_number = normalizarNumero(representante_number);
     } catch {
       return res.status(400).json({ error: "representante_number inválido" });
     }
@@ -138,12 +151,12 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
       `,
       [
         tenant_id,
-        idioma || "en-US",
-        voice_name || "alice",
+        idioma,
+        voice_name,
         system_prompt,
         welcome_message,
         voice_hints || "",
-        canal || "voice",
+        canal,
         funciones_asistente || "",
         info_clave || "",
         audio_demo_url || null,

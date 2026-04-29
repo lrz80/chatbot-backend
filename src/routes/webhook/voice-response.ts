@@ -8,6 +8,7 @@ import { sendSMS, normalizarNumero } from '../../lib/senders/sms';
 import { canUseChannel } from "../../lib/features";
 
 const router = Router();
+const CHANNEL_KEY = "voice";
 
 function resolveVoice(locale: string, cfgVoice?: string) {
   if (cfgVoice && cfgVoice !== 'alice') return cfgVoice;
@@ -39,17 +40,29 @@ async function generateVoiceReply({
   const { default: OpenAI } = await import('openai');
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  const system = `
-Eres una recepcionista amable del negocio ${tenantName}.
+  const system = locale.startsWith('es')
+    ? `
+  Eres una recepcionista amable del negocio ${tenantName}.
 
-REGLAS:
-- Máximo 1-2 frases
-- Sonar natural, humana
-- No mencionar "IA"
-- No inventar información
-- Mantener enfoque en agendar cita
-- No usar texto largo
-`;
+  REGLAS:
+  - Máximo 1-2 frases
+  - Sonar natural, humana
+  - No mencionar "IA"
+  - No inventar información
+  - Mantener enfoque en agendar cita
+  - No usar texto largo
+  `.trim()
+    : `
+  You are a friendly receptionist for ${tenantName}.
+
+  RULES:
+  - Maximum 1-2 sentences
+  - Sound natural and human
+  - Do not mention AI
+  - Do not invent information
+  - Keep focus on booking appointments
+  - Do not use long text
+  `.trim();
 
   const stepInstruction = {
     service: locale.startsWith('es')
@@ -389,8 +402,8 @@ async function enviarSmsConLink(
   STATE_TIME.set(callSid, Date.now());
   await pool.query(
     `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-     VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
-    [tenantId, 'SMS enviado con link único.', smsFrom || 'sms']
+    VALUES ($1, 'system', $2, NOW(), $3, $4)`,
+    [tenantId, 'SMS enviado con link único.', CHANNEL_KEY, smsFrom || 'sms']
   );
 }
 
@@ -545,7 +558,7 @@ function introByLanguage(
     ? `Hi, this is Amy from ${business}.`
     : 'Hi, this is Amy.';
 
-  vr.say({ language: 'en-US', voice: resolveVoice('es-ES') as any }, lineEn);
+  vr.say({ language: 'en-US', voice: resolveVoice('en-US') as any }, lineEn);
 
   // Frase en ESPAÑOL para elegir idioma + gather
   const g = vr.gather({
@@ -843,19 +856,43 @@ router.post('/', async (req: Request, res: Response) => {
 
     const currentLocale = (state.lang as any) || (langParam === 'es' ? 'es-ES' : 'en-US');
 
-    const cfgRes = await pool.query(
+    let cfgRes = await pool.query(
       `SELECT *
         FROM voice_configs
         WHERE tenant_id = $1
-          AND canal = 'voice'
-          AND idioma = $2
+          AND canal = $2
+          AND idioma = $3
         ORDER BY updated_at DESC, created_at DESC
         LIMIT 1`,
-      [tenant.id, currentLocale]
+      [tenant.id, CHANNEL_KEY, currentLocale]
     );
-    const cfg = cfgRes.rows[0];
+
+    let cfg = cfgRes.rows[0];
+
     if (!cfg) {
-      console.error("[VOICE] voice_config no encontrada para tenant:", tenant.id);
+      cfgRes = await pool.query(
+        `SELECT *
+          FROM voice_configs
+          WHERE tenant_id = $1
+            AND canal = $2
+          ORDER BY
+            CASE
+              WHEN idioma = 'en-US' THEN 0
+              WHEN idioma = 'es-ES' THEN 1
+              WHEN idioma = 'pt-BR' THEN 2
+              ELSE 3
+            END,
+            updated_at DESC,
+            created_at DESC
+          LIMIT 1`,
+        [tenant.id, CHANNEL_KEY]
+      );
+
+      cfg = cfgRes.rows[0];
+    }
+
+    if (!cfg) {
+      console.error("[VOICE] voice_config no encontrada para tenant:", tenant.id, "locale:", currentLocale);
       return res.status(404).type("text/plain").send("voice_config_not_found");
     }
 
@@ -1134,18 +1171,20 @@ router.post('/', async (req: Request, res: Response) => {
       // Guarda conversación mínima del fast-path
       await pool.query(
         `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-        VALUES ($1, 'user', $2, NOW(), 'voz', $3)`,
-        [tenant.id, userInput, callerE164 || 'anónimo']
+        VALUES ($1, 'user', $2, NOW(), $3, $4)`,
+        [tenant.id, userInput, CHANNEL_KEY, callerE164 || 'anónimo']
       );
+
       await pool.query(
         `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-        VALUES ($1, 'assistant', $2, NOW(), 'voz', $3)`,
-        [tenant.id, ok, didNumber || 'sistema']
+        VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
+        [tenant.id, ok, CHANNEL_KEY, didNumber || 'sistema']
       );
+
       await pool.query(
         `INSERT INTO interactions (tenant_id, canal, created_at)
-        VALUES ($1, 'voz', NOW())`,
-        [tenant.id]
+        VALUES ($1, $2, NOW())`,
+        [tenant.id, CHANNEL_KEY]
       );
 
       await incrementarUsoPorNumero(didNumber);
@@ -1468,10 +1507,10 @@ router.post('/', async (req: Request, res: Response) => {
       if (totalTokens > 0) {
         await pool.query(
           `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-           VALUES ($1, 'voz', $2::date, $3)
-           ON CONFLICT (tenant_id, canal, mes)
-           DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-          [tenant.id, cicloInicio, totalTokens]
+          VALUES ($1, $2, $3::date, $4)
+          ON CONFLICT (tenant_id, canal, mes)
+          DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+          [tenant.id, CHANNEL_KEY, cicloInicio, totalTokens]
         );
       }
     } catch (e) {
