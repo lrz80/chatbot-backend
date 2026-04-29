@@ -9,6 +9,15 @@ import { canUseChannel } from "../../lib/features";
 
 const router = Router();
 
+function resolveVoice(locale: string, cfgVoice?: string) {
+  if (cfgVoice && cfgVoice !== 'alice') return cfgVoice;
+
+  // fallback limpio
+  if (locale.startsWith('es')) return 'Polly.Mia';
+  if (locale.startsWith('pt')) return 'Polly.Vitoria';
+  return 'Polly.Joanna';
+}
+
 const GLOBAL_ID = process.env.GLOBAL_CHANNEL_TENANT_ID!;
 
 async function generateVoiceReply({
@@ -511,7 +520,11 @@ function playMainMenu(
 
 // --- Selección de idioma inicial ---
 // Antes: function introByLanguage(selected?: string) {
-function introByLanguage(selected?: string, brand?: string) {
+function introByLanguage(
+  selected: string | undefined,
+  brand: string | undefined,
+  voiceName: string
+) {
   const vr = new twiml.VoiceResponse();
 
   const business = brand && brand.trim().length > 0 ? brand.trim() : undefined;
@@ -522,7 +535,7 @@ function introByLanguage(selected?: string, brand?: string) {
       ? `Hola, soy Amy del equipo de ${business}. Continuamos en español.`
       : 'Hola, soy Amy. Continuamos en español.';
 
-    vr.say({ language: 'es-ES', voice: 'alice' }, lineEs);
+    vr.say({ language: 'es-ES', voice: resolveVoice('es-ES') as any }, lineEs);
     vr.redirect('/webhook/voice-response?lang=es');
     return vr.toString();
   }
@@ -532,7 +545,7 @@ function introByLanguage(selected?: string, brand?: string) {
     ? `Hi, this is Amy from ${business}.`
     : 'Hi, this is Amy.';
 
-  vr.say({ language: 'en-US', voice: 'alice' }, lineEn);
+  vr.say({ language: 'en-US', voice: resolveVoice('es-ES') as any }, lineEn);
 
   // Frase en ESPAÑOL para elegir idioma + gather
   const g = vr.gather({
@@ -551,7 +564,7 @@ function introByLanguage(selected?: string, brand?: string) {
   });
 
   g.say(
-    { language: 'es-ES', voice: 'alice' },
+    { language: 'es-ES', voice: resolveVoice('es-ES') as any },
     'Para español, marque dos o diga “Español”.'
   );
 
@@ -689,10 +702,10 @@ router.post('/lang', async (req: Request, res: Response) => {
 
   const vr = new twiml.VoiceResponse();
   if (chosen === 'es') {
-    vr.say({ language: 'es-ES', voice: 'alice' }, 'Has seleccionado español.');
+    vr.say({ language: 'es-ES', voice: resolveVoice('es-ES') as any }, 'Has seleccionado español.');
     vr.redirect('/webhook/voice-response?lang=es');
   } else {
-    vr.say({ language: 'en-US', voice: 'alice' }, 'Continuing in English.');
+    vr.say({ language: 'en-US', voice: resolveVoice('en-US') as any }, 'Continuing in English.');
     vr.redirect('/webhook/voice-response?lang=en');
   }
 
@@ -794,7 +807,7 @@ router.post('/', async (req: Request, res: Response) => {
           reason: gate.reason,
         });
 
-        bye.say({ language: lang, voice: 'alice' }, msg);
+        bye.say({ language: lang, voice: resolveVoice(lang) as any }, msg);
         bye.hangup();
         return res.type("text/xml").send(bye.toString());
       }
@@ -803,7 +816,7 @@ router.post('/', async (req: Request, res: Response) => {
       CALL_STATE.delete(callSid);
       STATE_TIME.delete(callSid);
       const bye = new twiml.VoiceResponse();
-      bye.say({ language: "es-ES", voice: "alice" }, "Lo sentimos, no podemos atender esta llamada ahora.");
+      bye.say({ language: "es-ES", voice: resolveVoice("es-ES") as any }, "Lo sentimos, no podemos atender esta llamada ahora.");
       bye.hangup();
       return res.type("text/xml").send(bye.toString());
     }
@@ -820,7 +833,7 @@ router.post('/', async (req: Request, res: Response) => {
         ? 'En este momento no hay asistente disponible en este número. Gracias por llamar.'
         : 'The assistant for this number is not available at the moment. Thank you for calling.';
 
-      vr.say({ voice: 'alice', language: lang }, text);
+      vr.say({ voice: resolveVoice(lang) as any, language: lang }, text);
       vr.hangup();
       return res.type('text/xml').send(vr.toString());
     }
@@ -837,11 +850,11 @@ router.post('/', async (req: Request, res: Response) => {
 
     const currentLocale = (state.lang as any) || (langParam === 'es' ? 'es-ES' : 'en-US');
 
-    const voiceName: any = (cfg?.voice_name || 'alice') as any;
+    const voiceName: any = resolveVoice(currentLocale, cfg?.voice_name);
 
     // 👉 Primer hit de la llamada: intro en inglés + “para español oprima 2” con nombre del negocio
     if (!state.turn && !langParam && !userInput && !digits) {
-      const introXml = introByLanguage(undefined, brand);
+      const introXml = introByLanguage(undefined, brand, voiceName);
       return res.type('text/xml').send(introXml);
     }
 
@@ -953,7 +966,7 @@ router.post('/', async (req: Request, res: Response) => {
           ? 'No pude tomar ese número. Dímelo con código de país o márcalo ahora.'
           : 'I couldn’t catch that number. Please include the country code or key it in now.';
         const vrNum = new twiml.VoiceResponse();
-        vrNum.say({ language: currentLocale as any, voice: 'alice' }, askAgain);
+        vrNum.say({ language: currentLocale as any, voice: voiceName }, askAgain);
         vrNum.gather({
         input: ['speech','dtmf'] as any,
         numDigits: 15,
@@ -995,7 +1008,7 @@ router.post('/', async (req: Request, res: Response) => {
           : 'Done, I just texted you the link. Anything else?';
 
         const vrOk = new twiml.VoiceResponse();
-        vrOk.say({ language: currentLocale as any, voice: 'alice' }, ok);
+        vrOk.say({ language: currentLocale as any, voice: voiceName }, ok);
         vrOk.gather({
           input: ['speech','dtmf'] as any,
           numDigits: 1,
@@ -1012,7 +1025,7 @@ router.post('/', async (req: Request, res: Response) => {
           ? 'No pude enviar el SMS ahora mismo.'
           : 'I couldn’t send the text right now.';
         const vrBad = new twiml.VoiceResponse();
-        vrBad.say({ language: currentLocale as any, voice: 'alice' }, bad);
+        vrBad.say({ language: currentLocale as any, voice: voiceName }, bad);
         return res.type('text/xml').send(vrBad.toString());
       }
     }
@@ -1752,7 +1765,7 @@ router.post('/', async (req: Request, res: Response) => {
   const errText = errLocale.startsWith('es')
     ? 'Perdón, hubo un problema. ¿Quieres que te envíe la información por SMS? Di sí o pulsa 1.'
     : 'Sorry, there was a problem. Do you want me to text you the info? Say yes or press 1.';
-  vrErr.say({ language: errLocale as any, voice: 'alice' }, errText);
+  vrErr.say({ language: errLocale as any, voice: resolveVoice('es-ES') as any }, errText);
   vrErr.gather({
     input: ['speech','dtmf'] as any,
     numDigits: 1,
