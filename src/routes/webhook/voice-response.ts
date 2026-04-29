@@ -6,6 +6,7 @@ import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { cycleStartForNow } from '../../utils/billingCycle';
 import { sendSMS, normalizarNumero } from '../../lib/senders/sms';
 import { canUseChannel } from "../../lib/features";
+import { createAppointmentFromVoice } from "../../lib/appointments/createAppointmentFromVoice";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -1383,17 +1384,44 @@ router.post('/', async (req: Request, res: Response) => {
         // ✅ CASO: CONFIRMA
         if (saidYes(userInput) || digits === '1') {
           try {
-            const axios = (await import('axios')).default;
-
-            await axios.post(
-              `${process.env.API_URL}/internal/appointments/book-from-voice`,
-              {
-                tenant_id: tenant.id,
-                service_name: state.bookingData?.service || 'General',
-                customer_phone: callerE164,
-                datetime: state.bookingData?.datetime,
-              }
+            const { rows: settingsRows } = await pool.query(
+              `
+              SELECT
+                default_duration_min,
+                buffer_min,
+                min_lead_minutes,
+                timezone,
+                enabled
+              FROM appointment_settings
+              WHERE tenant_id = $1
+              LIMIT 1
+              `,
+              [tenant.id]
             );
+
+            const appointmentSettings = settingsRows[0] || {
+              default_duration_min: 30,
+              buffer_min: 10,
+              min_lead_minutes: 60,
+              timezone: "America/New_York",
+              enabled: true,
+            };
+
+            const appointment = await createAppointmentFromVoice({
+              tenantId: tenant.id,
+              serviceName: state.bookingData?.service || "General",
+              customerPhone: callerE164,
+              customerName: callerE164 || "Cliente Voz",
+              datetimeText: state.bookingData?.datetime || "",
+              idempotencyKey: `voice:${callSid}`,
+              settings: appointmentSettings,
+            });
+
+            console.log("[VOICE][APPOINTMENT_CREATED]", {
+              callSid,
+              appointmentId: appointment.id,
+              tenantId: tenant.id,
+            });
 
             const done = currentLocale.startsWith('es')
               ? 'Listo, tu cita quedó agendada. Te esperamos.'
