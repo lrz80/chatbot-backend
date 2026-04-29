@@ -20,7 +20,7 @@ async function generateVoiceReply({
 }: {
   tenantName: string;
   userInput: string;
-  step: 'service' | 'datetime' | 'confirm';
+  step: 'service' | 'datetime' | 'confirm' | 'fallback';
   locale: string;
   bookingData?: {
     service?: string;
@@ -62,6 +62,10 @@ REGLAS:
     Date/time: ${bookingData?.datetime || 'not specified'}
 
     Keep it natural and ask for confirmation.`,
+
+    fallback: locale.startsWith('es')
+      ? `El cliente dijo que no al SMS. Continúa la conversación de forma natural preguntando cómo puedes ayudar.`
+      : `Client declined SMS. Continue conversation naturally.`,
   };
 
   const completion = await openai.chat.completions.create({
@@ -1020,6 +1024,42 @@ router.post('/', async (req: Request, res: Response) => {
     if (state.awaiting && (saidYes(userInput) || digits === '1')) {
       earlySmsType = (state.pendingType || guessType(userInput)) as LinkType;
       CALL_STATE.set(callSid, { ...state, awaiting: false, pendingType: null });
+    }
+
+    if (state.awaiting && (saidNo(userInput) || digits === '2')) {
+      CALL_STATE.set(callSid, {
+        ...state,
+        awaiting: false,
+        pendingType: null,
+      });
+
+      STATE_TIME.set(callSid, Date.now());
+
+      // 👉 RESPUESTA CON LLM (no hardcode)
+      const replyRaw = await generateVoiceReply({
+        tenantName: brand,
+        userInput,
+        step: 'fallback',
+        locale: currentLocale,
+      });
+
+      const reply = twoSentencesMax(replyRaw);
+
+      const gather = vr.gather({
+        input: ['speech','dtmf'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: currentLocale as any,
+        speechTimeout: 'auto',
+        timeout: 7,
+        actionOnEmptyResult: true,
+        bargeIn: true,
+      });
+
+      gather.say({ language: currentLocale as any, voice: voiceName }, reply);
+
+      return res.type('text/xml').send(vr.toString());
     }
 
     // Caso B: último turno marcó <SMS_PENDING:...> y ahora dijo “sí/1”
