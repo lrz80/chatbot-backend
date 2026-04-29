@@ -7,6 +7,7 @@ import { cycleStartForNow } from '../../utils/billingCycle';
 import { sendSMS, normalizarNumero } from '../../lib/senders/sms';
 import { canUseChannel } from "../../lib/features";
 import { createAppointmentFromVoice } from "../../lib/appointments/createAppointmentFromVoice";
+import { getBookingFlow } from "../../lib/appointments/getBookingFlow";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -174,11 +175,9 @@ type CallState = {
   smsSent?: boolean;        // idempotencia: ya se envió SMS en esta llamada
   lang?: 'es-ES' | 'en-US' | 'pt-BR';
   turn?: number;
-  bookingStep?: 'service' | 'datetime' | 'confirm';
-  bookingData?: {
-    service?: string;
-    datetime?: string;
-  };
+  bookingFlow?: Awaited<ReturnType<typeof getBookingFlow>>;
+  bookingStepIndex?: number;
+  bookingData?: Record<string, string>;
 };
 
 const CALL_STATE = new Map<string, CallState>();
@@ -1280,22 +1279,23 @@ router.post('/', async (req: Request, res: Response) => {
     if (userInput) {
       const wantsBooking = /(cita|reservar|agendar|appointment|book)/i.test(userInput);
 
-      if (wantsBooking && !state.bookingStep) {
+      if (wantsBooking && !state.bookingFlow) {
+        const flow = await getBookingFlow(tenant.id);
+
+        if (!flow.length) {
+          throw new Error("BOOKING_FLOW_NOT_CONFIGURED");
+        }
+
+        const firstStep = flow[0];
+
         CALL_STATE.set(callSid, {
           ...state,
-          bookingStep: 'service',
-          bookingData: {}
+          bookingFlow: flow,
+          bookingStepIndex: 0,
+          bookingData: {},
         });
 
-        const askRaw = await generateVoiceReply({
-          tenantName: brand,
-          userInput,
-          step: 'service',
-          locale: currentLocale,
-          cfg,
-        });
-
-        const ask = twoSentencesMax(askRaw);
+        const ask = twoSentencesMax(firstStep.prompt);
 
         const gather = vr.gather({
           input: ['speech'] as any,
@@ -1310,155 +1310,96 @@ router.post('/', async (req: Request, res: Response) => {
         return res.type('text/xml').send(vr.toString());
       }
 
-      if (state.bookingStep === 'service') {
-        const replyRaw = await generateVoiceReply({
-          tenantName: brand,
-          userInput,
-          step: 'datetime',
-          locale: currentLocale,
-          cfg,
-        });
+      if (state.bookingFlow && typeof state.bookingStepIndex === "number") {
+        const flow = state.bookingFlow;
+        const currentIndex = state.bookingStepIndex;
+        const currentStep = flow[currentIndex];
 
-        const reply = twoSentencesMax(replyRaw);
+        if (!currentStep) {
+          CALL_STATE.delete(callSid);
+          STATE_TIME.delete(callSid);
+          throw new Error("BOOKING_STEP_NOT_FOUND");
+        }
 
-        CALL_STATE.set(callSid, {
-          ...state,
-          bookingStep: 'datetime',
-          bookingData: {
-            ...state.bookingData,
-            service: userInput
+        if (currentStep.expected_type === "confirmation") {
+          if (saidYes(userInput) || digits === "1") {
+            try {
+              const { rows: settingsRows } = await pool.query(
+                `
+                SELECT
+                  default_duration_min,
+                  buffer_min,
+                  min_lead_minutes,
+                  timezone,
+                  enabled
+                FROM appointment_settings
+                WHERE tenant_id = $1
+                LIMIT 1
+                `,
+                [tenant.id]
+              );
+
+              const appointmentSettings = settingsRows[0] || {
+                default_duration_min: 30,
+                buffer_min: 10,
+                min_lead_minutes: 60,
+                timezone: "America/New_York",
+                enabled: true,
+              };
+
+              const appointment = await createAppointmentFromVoice({
+                tenantId: tenant.id,
+                serviceName: state.bookingData?.service || "General",
+                customerPhone: callerE164,
+                customerName: callerE164 || "Cliente Voz",
+                datetimeText: state.bookingData?.datetime || "",
+                idempotencyKey: `voice:${callSid}`,
+                settings: appointmentSettings,
+              });
+
+              console.log("[VOICE][APPOINTMENT_CREATED]", {
+                callSid,
+                appointmentId: appointment.id,
+                tenantId: tenant.id,
+              });
+
+              CALL_STATE.delete(callSid);
+              STATE_TIME.delete(callSid);
+
+              const doneRaw = cfg?.booking_success_message || "Listo, tu cita quedó agendada.";
+              vr.say({ language: currentLocale as any, voice: voiceName }, twoSentencesMax(doneRaw));
+              vr.hangup();
+
+              return res.type('text/xml').send(vr.toString());
+            } catch (err) {
+              console.error("❌ Error creando cita:", err);
+
+              const failRaw = cfg?.booking_error_message || "Hubo un problema al agendar la cita.";
+              vr.say({ language: currentLocale as any, voice: voiceName }, twoSentencesMax(failRaw));
+              vr.hangup();
+
+              return res.type('text/xml').send(vr.toString());
+            }
           }
-        });
 
-        const gather = vr.gather({
-          input: ['speech'] as any,
-          action: '/webhook/voice-response',
-          method: 'POST',
-          language: currentLocale as any,
-        });
-
-        gather.say({ language: currentLocale as any, voice: voiceName }, reply);
-
-        return res.type('text/xml').send(vr.toString());
-      }
-
-      if (state.bookingStep === 'datetime') {
-        const confirmRaw = await generateVoiceReply({
-          tenantName: brand,
-          userInput,
-          step: 'confirm',
-          locale: currentLocale,
-          bookingData: {
-            service: state.bookingData?.service,
-            datetime: userInput,
-          },
-          cfg,
-        });
-
-        const confirm = twoSentencesMax(confirmRaw);
-
-        CALL_STATE.set(callSid, {
-          ...state,
-          bookingStep: 'confirm',
-          bookingData: {
-            ...state.bookingData,
-            datetime: userInput
-          }
-        });
-
-        const gather = vr.gather({
-          input: ['speech','dtmf'] as any,
-          numDigits: 1,
-          action: '/webhook/voice-response',
-          method: 'POST',
-          language: currentLocale as any,
-        });
-
-        gather.say({ language: currentLocale as any, voice: voiceName }, confirm);
-
-        return res.type('text/xml').send(vr.toString());
-      }
-
-      if (state.bookingStep === 'confirm') {
-
-        // ✅ CASO: CONFIRMA
-        if (saidYes(userInput) || digits === '1') {
-          try {
-            const { rows: settingsRows } = await pool.query(
-              `
-              SELECT
-                default_duration_min,
-                buffer_min,
-                min_lead_minutes,
-                timezone,
-                enabled
-              FROM appointment_settings
-              WHERE tenant_id = $1
-              LIMIT 1
-              `,
-              [tenant.id]
-            );
-
-            const appointmentSettings = settingsRows[0] || {
-              default_duration_min: 30,
-              buffer_min: 10,
-              min_lead_minutes: 60,
-              timezone: "America/New_York",
-              enabled: true,
-            };
-
-            const appointment = await createAppointmentFromVoice({
-              tenantId: tenant.id,
-              serviceName: state.bookingData?.service || "General",
-              customerPhone: callerE164,
-              customerName: callerE164 || "Cliente Voz",
-              datetimeText: state.bookingData?.datetime || "",
-              idempotencyKey: `voice:${callSid}`,
-              settings: appointmentSettings,
-            });
-
-            console.log("[VOICE][APPOINTMENT_CREATED]", {
-              callSid,
-              appointmentId: appointment.id,
-              tenantId: tenant.id,
-            });
-
-            const done = currentLocale.startsWith('es')
-              ? 'Listo, tu cita quedó agendada. Te esperamos.'
-              : 'Done, your appointment is booked. See you soon.';
-
+          if (saidNo(userInput) || digits === "2") {
             CALL_STATE.delete(callSid);
             STATE_TIME.delete(callSid);
 
-            vr.say({ language: currentLocale as any, voice: voiceName }, done);
-            vr.hangup();
+            const cancelRaw = cfg?.booking_cancel_message || "No se agendó la cita.";
+            const gather = vr.gather({
+              input: ['speech','dtmf'] as any,
+              numDigits: 1,
+              action: '/webhook/voice-response',
+              method: 'POST',
+              language: currentLocale as any,
+            });
 
-            return res.type('text/xml').send(vr.toString());
-
-          } catch (err) {
-            console.error('❌ Error creando cita:', err);
-
-            const fail = currentLocale.startsWith('es')
-              ? 'Hubo un problema al agendar la cita. Inténtalo nuevamente.'
-              : 'There was an issue booking the appointment. Please try again.';
-
-            vr.say({ language: currentLocale as any, voice: voiceName }, fail);
-            vr.hangup();
-
+            gather.say({ language: currentLocale as any, voice: voiceName }, twoSentencesMax(cancelRaw));
             return res.type('text/xml').send(vr.toString());
           }
-        }
 
-        // ❌ CASO: RECHAZA
-        if (saidNo(userInput) || digits === '2') {
-
-          CALL_STATE.delete(callSid);
-          STATE_TIME.delete(callSid);
-
-          const cancel = currentLocale.startsWith('es')
-            ? 'Perfecto, no agendamos nada. ¿Te ayudo con algo más?'
-            : 'Alright, nothing was booked. Can I help you with anything else?';
-
+          const retry = twoSentencesMax(currentStep.prompt);
           const gather = vr.gather({
             input: ['speech','dtmf'] as any,
             numDigits: 1,
@@ -1467,25 +1408,46 @@ router.post('/', async (req: Request, res: Response) => {
             language: currentLocale as any,
           });
 
-          gather.say({ language: currentLocale as any, voice: voiceName }, cancel);
-
+          gather.say({ language: currentLocale as any, voice: voiceName }, retry);
           return res.type('text/xml').send(vr.toString());
         }
 
-        // ⚠️ CASO: NO ENTENDIÓ
-        const retry = currentLocale.startsWith('es')
-          ? '¿Confirmas la cita? Di sí o no.'
-          : 'Do you confirm the appointment? Say yes or no.';
+        const nextData = {
+          ...(state.bookingData || {}),
+          [currentStep.step_key]: userInput,
+        };
+
+        const nextIndex = currentIndex + 1;
+        const nextStep = flow[nextIndex];
+
+        if (!nextStep) {
+          CALL_STATE.delete(callSid);
+          STATE_TIME.delete(callSid);
+          throw new Error("BOOKING_CONFIRM_STEP_MISSING");
+        }
+
+        let prompt = nextStep.prompt;
+        for (const [key, value] of Object.entries(nextData)) {
+          prompt = prompt.split(`{${key}}`).join(value);
+        }
+
+        CALL_STATE.set(callSid, {
+          ...state,
+          bookingFlow: flow,
+          bookingStepIndex: nextIndex,
+          bookingData: nextData,
+        });
 
         const gather = vr.gather({
-          input: ['speech','dtmf'] as any,
-          numDigits: 1,
+          input: nextStep.expected_type === "confirmation" ? ['speech','dtmf'] as any : ['speech'] as any,
+          numDigits: nextStep.expected_type === "confirmation" ? 1 : undefined,
           action: '/webhook/voice-response',
           method: 'POST',
           language: currentLocale as any,
+          speechTimeout: 'auto',
         });
 
-        gather.say({ language: currentLocale as any, voice: voiceName }, retry);
+        gather.say({ language: currentLocale as any, voice: voiceName }, twoSentencesMax(prompt));
 
         return res.type('text/xml').send(vr.toString());
       }
