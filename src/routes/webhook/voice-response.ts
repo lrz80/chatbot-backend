@@ -97,10 +97,8 @@ function buildAnswersBySlot(params: {
   const answersBySlot: Record<string, string> = {};
 
   for (const step of params.flow) {
-    const slot =
-      typeof step.validation_config?.slot === "string"
-        ? step.validation_config.slot
-        : null;
+    const rawSlot = step.validation_config?.slot;
+    const slot = typeof rawSlot === "string" ? rawSlot.trim() : "";
 
     if (!slot || slot === "none") continue;
 
@@ -1313,6 +1311,11 @@ router.post('/', async (req: Request, res: Response) => {
             order: s.step_order,
             type: s.expected_type,
             enabled: s.enabled,
+            slot:
+              typeof s.validation_config?.slot === "string"
+                ? s.validation_config.slot
+                : null,
+            validation_config: s.validation_config || null,
           })),
         });
 
@@ -1384,6 +1387,12 @@ router.post('/', async (req: Request, res: Response) => {
               const answersBySlot = buildAnswersBySlot({
                 flow,
                 bookingData: state.bookingData || {},
+              });
+
+              console.log("[VOICE][BOOKING_DATA_RESOLVED]", {
+                callSid,
+                bookingData: state.bookingData || {},
+                answersBySlot,
               });
 
               const appointment = await createAppointmentFromVoice({
