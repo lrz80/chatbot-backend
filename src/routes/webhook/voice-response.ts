@@ -505,8 +505,8 @@ function playMainMenu(
   });
 
   const text = locale.startsWith('es')
-    ? `¿En qué puedo ayudarte? Marca 1 para precios, 2 para horarios, 3 para ubicación, 4 para hablar con un representante.`
-    : `How can I help? Press 1 for prices, 2 for hours, 3 for location, 4 to speak with a representative.`;
+    ? `¿En qué puedo ayudarte? Puedes decirme que quieres agendar una cita, o marcar 1 para precios, 2 para horarios, 3 para ubicación, 4 para hablar con un representante.`
+    : `How can I help? You can tell me you want to book an appointment, or press 1 for prices, 2 for hours, 3 for location, 4 to speak with a representative.`;
 
   const line = locale.startsWith('es')
     ? `Hola, soy Amy de ${brand}. ${text}`
