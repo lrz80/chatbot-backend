@@ -422,23 +422,41 @@ async function snippetFromPrompt({
   const { default: OpenAI } = await import('openai');
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
-  const sys = `
-Eres Amy, asistente del negocio ${brand}.
-Usa EXCLUSIVAMENTE la información en estas dos fuentes:
-1) SYSTEM_PROMPT DEL NEGOCIO:
-${(cfg.system_prompt || '').toString().trim()}
+  const sys = locale.startsWith('es')
+    ? `
+  Eres Amy, asistente del negocio ${brand}.
+  Usa EXCLUSIVAMENTE la información en estas dos fuentes:
+  1) SYSTEM_PROMPT DEL NEGOCIO:
+  ${(cfg.system_prompt || '').toString().trim()}
 
-2) INFO_CLAVE DEL NEGOCIO:
-${(cfg.info_clave || '').toString().trim()}
+  2) INFO_CLAVE DEL NEGOCIO:
+  ${(cfg.info_clave || '').toString().trim()}
 
-REGLAS DE RESPUESTA:
-- Devuelve 1-2 frases MÁXIMO, aptas para locución telefónica.
-- NO incluyas URLs ni digas "te envío link" (eso se ofrece fuera).
-- NO inventes datos: si no hay dato explícito en lo anterior, di:
-  "${locale.startsWith('es') ? 'No tengo ese dato exacto aquí.' : 'I don’t have that exact detail here.'}"
-- Para HORARIOS, formatea horas natural (ej. "de 9 a 18"). 
-- Para PRECIOS, sólo menciona montos si aparecen literalmente en las fuentes.
-- Mantén el tono breve, claro y natural.`;
+  REGLAS DE RESPUESTA:
+  - Devuelve 1-2 frases MÁXIMO, aptas para locución telefónica.
+  - NO incluyas URLs ni digas "te envío link" (eso se ofrece fuera).
+  - NO inventes datos.
+  - Para HORARIOS, formatea horas natural.
+  - Para PRECIOS, sólo menciona montos si aparecen literalmente.
+  - Mantén el tono breve, claro y natural.
+  `.trim()
+    : `
+  You are Amy, the assistant for ${brand}.
+  Use ONLY the information from these two sources:
+  1) BUSINESS SYSTEM PROMPT:
+  ${(cfg.system_prompt || '').toString().trim()}
+
+  2) BUSINESS KEY INFO:
+  ${(cfg.info_clave || '').toString().trim()}
+
+  RESPONSE RULES:
+  - Reply in 1-2 sentences MAX, suitable for phone speech.
+  - Do NOT include URLs or say you will send a link here.
+  - Do NOT invent information.
+  - For HOURS, format time naturally.
+  - For PRICES, mention amounts only if they appear literally.
+  - Keep the tone brief, clear, and natural.
+  `.trim();
 
   const user = `Dame un breve resumen de ${topic} (máx 2 frases), usando sólo lo provisto.`;
 
@@ -1127,12 +1145,12 @@ router.post('/', async (req: Request, res: Response) => {
         `SELECT content
           FROM messages
           WHERE tenant_id = $1
-            AND canal = 'voice'
+            AND canal = $2
             AND role = 'assistant'
-            AND from_number = $2
+            AND from_number = $3
           ORDER BY timestamp DESC
           LIMIT 1`,
-        [tenant?.id, didNumber || 'sistema']
+        [tenant?.id, CHANNEL_KEY, didNumber || 'sistema']
       );
 
       const lastAssistantText: string = lastAssistantRows?.[0]?.content || '';
@@ -1522,12 +1540,12 @@ router.post('/', async (req: Request, res: Response) => {
           `SELECT content
             FROM messages
             WHERE tenant_id = $1
-              AND canal = 'voice'
+              AND canal = $2
               AND role = 'assistant'
-              AND from_number = $2
+              AND from_number = $3
             ORDER BY timestamp DESC
             LIMIT 1`,
-          [tenant.id, didNumber || 'sistema']
+          [tenant.id, CHANNEL_KEY, didNumber || 'sistema']
         );
         const lastAssistantText: string = lastAssistantRows?.[0]?.content || '';
         const pendingMatch = lastAssistantText.match(/<SMS_PENDING:(reservar|comprar|soporte|web)>/i);
