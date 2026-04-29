@@ -7,21 +7,22 @@ export type BookingStep = {
   prompt: string;
   expected_type: string;
   required: boolean;
+  enabled: boolean;
 };
 
 export async function getBookingFlow(tenantId: string) {
   const { rows } = await pool.query(
     `
     SELECT
-      step_key,
-      step_order,
-      prompt,
-      expected_type,
-      required
+        step_key,
+        step_order,
+        prompt,
+        expected_type,
+        required,
+        enabled
     FROM appointment_booking_flows
     WHERE tenant_id = $1
-      AND channel = 'voice'
-      AND enabled = true
+        AND channel = 'voice'
     ORDER BY step_order ASC
     `,
     [tenantId]

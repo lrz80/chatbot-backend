@@ -1282,6 +1282,17 @@ router.post('/', async (req: Request, res: Response) => {
       if (wantsBooking && !state.bookingFlow) {
         const flow = await getBookingFlow(tenant.id);
 
+        console.log("[VOICE][BOOKING_FLOW_LOADED]", {
+          callSid,
+          tenantId: tenant.id,
+          steps: flow.map((s) => ({
+            key: s.step_key,
+            order: s.step_order,
+            type: s.expected_type,
+            enabled: s.enabled,
+          })),
+        });
+
         if (!flow.length) {
           throw new Error("BOOKING_FLOW_NOT_CONFIGURED");
         }
