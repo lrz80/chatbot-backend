@@ -60,7 +60,7 @@ router.post("/", authenticateUser, async (req, res) => {
          canal, funciones_asistente, info_clave
        )
        VALUES ($1, $2, $3, $4, $5, $6, 'voz', $7, $8)
-       ON CONFLICT (tenant_id, idioma, canal) DO UPDATE SET
+       ON CONFLICT (tenant_id) DO UPDATE SET
          voice_name = EXCLUDED.voice_name,
          system_prompt = EXCLUDED.system_prompt,
          welcome_message = EXCLUDED.welcome_message,
