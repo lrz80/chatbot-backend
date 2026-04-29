@@ -720,6 +720,17 @@ function renderBookingTemplate(
   return output.trim();
 }
 
+function buildBookingPromptVariables(params: {
+  bookingData: Record<string, string>;
+  callerE164: string | null;
+}) {
+  return {
+    ...params.bookingData,
+    current_phone: params.callerE164 || "",
+    current_phone_masked: params.callerE164 ? maskForVoice(params.callerE164) : "",
+  };
+}
+
 function resolveBookingSuccessStep(params: {
   flow: Awaited<ReturnType<typeof getBookingFlow>>;
 }) {
@@ -773,6 +784,44 @@ router.post('/lang', async (req: Request, res: Response) => {
 
   return res.type('text/xml').send(vr.toString());
 });
+
+type PhoneResolutionResult =
+  | { ok: true; value: string }
+  | { ok: false };
+
+function resolvePhoneFromVoiceInput(params: {
+  userInput: string;
+  digits: string;
+  callerE164: string | null;
+  step: any;
+}): PhoneResolutionResult {
+  const raw = (params.userInput || params.digits || "").trim();
+  const config = params.step?.validation_config || {};
+  const mode = typeof config.mode === "string" ? config.mode : "free_input";
+  const useInboundCaller = !!config.use_inbound_caller;
+
+  const spoken = wordsToDigits(raw || "");
+  const digitsOnly = extractDigits(spoken || raw || "");
+
+  if (digitsOnly) {
+    const normalized = normalizarNumero(`+${digitsOnly}`);
+    if (isValidE164(normalized)) {
+      return { ok: true, value: normalized };
+    }
+  }
+
+  if (
+    mode === "confirm_or_replace" &&
+    useInboundCaller &&
+    params.callerE164 &&
+    isValidE164(params.callerE164) &&
+    (saidYes(raw) || params.digits === "1")
+  ) {
+    return { ok: true, value: params.callerE164 };
+  }
+
+  return { ok: false };
+}
 
 //  Handler
 router.post('/', async (req: Request, res: Response) => {
@@ -1446,7 +1495,10 @@ router.post('/', async (req: Request, res: Response) => {
 
               const successPrompt = renderBookingTemplate(
                 successStep.prompt,
-                state.bookingData || {}
+                buildBookingPromptVariables({
+                  bookingData: state.bookingData || {},
+                  callerE164,
+                })
               );
 
               const gather = vr.gather({
@@ -1515,6 +1567,81 @@ router.post('/', async (req: Request, res: Response) => {
           return res.type('text/xml').send(vr.toString());
         }
 
+        if (currentStep.expected_type === "phone") {
+          const phoneResolution = resolvePhoneFromVoiceInput({
+            userInput,
+            digits,
+            callerE164,
+            step: currentStep,
+          });
+
+          if (!phoneResolution.ok) {
+            const gather = vr.gather({
+              input: ['speech','dtmf'] as any,
+              numDigits: 1,
+              action: '/webhook/voice-response',
+              method: 'POST',
+              language: currentLocale as any,
+              speechTimeout: 'auto',
+              timeout: 7,
+              actionOnEmptyResult: true,
+              bargeIn: true,
+            });
+
+            gather.say(
+              { language: currentLocale as any, voice: voiceName },
+              twoSentencesMax(currentStep.retry_prompt || currentStep.prompt)
+            );
+
+            return res.type('text/xml').send(vr.toString());
+          }
+
+          const nextData: Record<string, string> = {
+            ...(state.bookingData || {}),
+            [currentStep.step_key]: phoneResolution.value,
+          };
+
+          const nextIndex = currentIndex + 1;
+          const nextStep = flow[nextIndex];
+
+          if (!nextStep) {
+            CALL_STATE.delete(callSid);
+            STATE_TIME.delete(callSid);
+            throw new Error("BOOKING_CONFIRM_STEP_MISSING");
+          }
+
+          const prompt = renderBookingTemplate(
+            nextStep.prompt,
+            buildBookingPromptVariables({
+              bookingData: nextData,
+              callerE164,
+            })
+          );
+
+          CALL_STATE.set(callSid, {
+            ...state,
+            bookingFlow: flow,
+            bookingStepIndex: nextIndex,
+            bookingData: nextData,
+          });
+
+          const gather = vr.gather({
+            input: nextStep.expected_type === "confirmation" ? ['speech','dtmf'] as any : ['speech'] as any,
+            numDigits: nextStep.expected_type === "confirmation" ? 1 : undefined,
+            action: '/webhook/voice-response',
+            method: 'POST',
+            language: currentLocale as any,
+            speechTimeout: 'auto',
+          });
+
+          gather.say(
+            { language: currentLocale as any, voice: voiceName },
+            twoSentencesMax(prompt)
+          );
+
+          return res.type('text/xml').send(vr.toString());
+        }
+
         const nextData = {
           ...(state.bookingData || {}),
           [currentStep.step_key]: userInput,
@@ -1529,10 +1656,13 @@ router.post('/', async (req: Request, res: Response) => {
           throw new Error("BOOKING_CONFIRM_STEP_MISSING");
         }
 
-        let prompt = nextStep.prompt;
-        for (const [key, value] of Object.entries(nextData)) {
-          prompt = prompt.split(`{${key}}`).join(value);
-        }
+        const prompt = renderBookingTemplate(
+          nextStep.prompt,
+          buildBookingPromptVariables({
+            bookingData: nextData,
+            callerE164,
+          })
+        );
 
         CALL_STATE.set(callSid, {
           ...state,
