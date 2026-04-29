@@ -96,6 +96,11 @@ type CallState = {
   smsSent?: boolean;        // idempotencia: ya se envió SMS en esta llamada
   lang?: 'es-ES' | 'en-US' | 'pt-BR';
   turn?: number;
+  bookingStep?: 'service' | 'datetime' | 'confirm';
+  bookingData?: {
+    service?: string;
+    datetime?: string;
+  };
 };
 
 const CALL_STATE = new Map<string, CallState>();
@@ -1070,6 +1075,169 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ——— FAST INTENT: si el usuario pidió algo directo (sin DTMF), lee desde prompt y luego ofrece SMS ———
     if (userInput) {
+      const wantsBooking = /(cita|reservar|agendar|appointment|book)/i.test(userInput);
+
+      if (wantsBooking && !state.bookingStep) {
+        CALL_STATE.set(callSid, {
+          ...state,
+          bookingStep: 'service',
+          bookingData: {}
+        });
+
+        const ask = currentLocale.startsWith('es')
+          ? 'Perfecto, ¿qué servicio te interesa?'
+          : 'Great, what service are you interested in?';
+
+        const gather = vr.gather({
+          input: ['speech'] as any,
+          action: '/webhook/voice-response',
+          method: 'POST',
+          language: currentLocale as any,
+          speechTimeout: 'auto',
+        });
+
+        gather.say({ language: currentLocale as any, voice: voiceName }, ask);
+
+        return res.type('text/xml').send(vr.toString());
+      }
+
+      if (state.bookingStep === 'service') {
+        const reply = currentLocale.startsWith('es')
+          ? 'Perfecto. ¿Qué día y hora te gustaría?'
+          : 'Great. What day and time would you like?';
+
+        CALL_STATE.set(callSid, {
+          ...state,
+          bookingStep: 'datetime',
+          bookingData: {
+            ...state.bookingData,
+            service: userInput
+          }
+        });
+
+        const gather = vr.gather({
+          input: ['speech'] as any,
+          action: '/webhook/voice-response',
+          method: 'POST',
+          language: currentLocale as any,
+        });
+
+        gather.say({ language: currentLocale as any, voice: voiceName }, reply);
+
+        return res.type('text/xml').send(vr.toString());
+      }
+
+      if (state.bookingStep === 'datetime') {
+        const confirm = currentLocale.startsWith('es')
+          ? `Perfecto, te agendo para ${userInput}. ¿Confirmas?`
+          : `Perfect, I’ll book you for ${userInput}. Confirm?`;
+
+        CALL_STATE.set(callSid, {
+          ...state,
+          bookingStep: 'confirm',
+          bookingData: {
+            ...state.bookingData,
+            datetime: userInput
+          }
+        });
+
+        const gather = vr.gather({
+          input: ['speech','dtmf'] as any,
+          numDigits: 1,
+          action: '/webhook/voice-response',
+          method: 'POST',
+          language: currentLocale as any,
+        });
+
+        gather.say({ language: currentLocale as any, voice: voiceName }, confirm);
+
+        return res.type('text/xml').send(vr.toString());
+      }
+
+      if (state.bookingStep === 'confirm') {
+
+        // ✅ CASO: CONFIRMA
+        if (saidYes(userInput) || digits === '1') {
+          try {
+            const axios = (await import('axios')).default;
+
+            await axios.post(
+              `${process.env.API_URL}/internal/appointments/book-from-voice`,
+              {
+                tenant_id: tenant.id,
+                service_name: state.bookingData?.service || 'General',
+                customer_phone: callerE164,
+                datetime: state.bookingData?.datetime,
+              }
+            );
+
+            const done = currentLocale.startsWith('es')
+              ? 'Listo, tu cita quedó agendada. Te esperamos.'
+              : 'Done, your appointment is booked. See you soon.';
+
+            CALL_STATE.delete(callSid);
+            STATE_TIME.delete(callSid);
+
+            vr.say({ language: currentLocale as any, voice: voiceName }, done);
+            vr.hangup();
+
+            return res.type('text/xml').send(vr.toString());
+
+          } catch (err) {
+            console.error('❌ Error creando cita:', err);
+
+            const fail = currentLocale.startsWith('es')
+              ? 'Hubo un problema al agendar la cita. Inténtalo nuevamente.'
+              : 'There was an issue booking the appointment. Please try again.';
+
+            vr.say({ language: currentLocale as any, voice: voiceName }, fail);
+            vr.hangup();
+
+            return res.type('text/xml').send(vr.toString());
+          }
+        }
+
+        // ❌ CASO: RECHAZA
+        if (saidNo(userInput) || digits === '2') {
+
+          CALL_STATE.delete(callSid);
+          STATE_TIME.delete(callSid);
+
+          const cancel = currentLocale.startsWith('es')
+            ? 'Perfecto, no agendamos nada. ¿Te ayudo con algo más?'
+            : 'Alright, nothing was booked. Can I help you with anything else?';
+
+          const gather = vr.gather({
+            input: ['speech','dtmf'] as any,
+            numDigits: 1,
+            action: '/webhook/voice-response',
+            method: 'POST',
+            language: currentLocale as any,
+          });
+
+          gather.say({ language: currentLocale as any, voice: voiceName }, cancel);
+
+          return res.type('text/xml').send(vr.toString());
+        }
+
+        // ⚠️ CASO: NO ENTENDIÓ
+        const retry = currentLocale.startsWith('es')
+          ? '¿Confirmas la cita? Di sí o no.'
+          : 'Do you confirm the appointment? Say yes or no.';
+
+        const gather = vr.gather({
+          input: ['speech','dtmf'] as any,
+          numDigits: 1,
+          action: '/webhook/voice-response',
+          method: 'POST',
+          language: currentLocale as any,
+        });
+
+        gather.say({ language: currentLocale as any, voice: voiceName }, retry);
+
+        return res.type('text/xml').send(vr.toString());
+      }
+
       const brand = await getTenantBrand(tenant.id);
       const s = userInput.toLowerCase();
 
