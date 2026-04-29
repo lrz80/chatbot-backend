@@ -31,6 +31,8 @@ router.get("/", authenticateUser, async (req: any, res) => {
         step_key,
         step_order,
         prompt,
+        retry_prompt,
+        validation_config,
         expected_type,
         required,
         enabled,
@@ -128,46 +130,54 @@ router.post("/", authenticateUser, async (req: any, res) => {
       await client.query(
         `
         INSERT INTO appointment_booking_flows (
-          tenant_id,
-          channel,
-          step_key,
-          step_order,
-          prompt,
-          expected_type,
-          required,
-          enabled,
-          created_at,
-          updated_at
+            tenant_id,
+            channel,
+            step_key,
+            step_order,
+            prompt,
+            retry_prompt,
+            validation_config,
+            expected_type,
+            required,
+            enabled,
+            created_at,
+            updated_at
         )
         VALUES (
-          $1,
-          'voice',
-          $2,
-          $3,
-          $4,
-          $5,
-          $6,
-          $7,
-          NOW(),
-          NOW()
+            $1,
+            'voice',
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            NOW(),
+            NOW()
         )
         ON CONFLICT (tenant_id, channel, step_key)
         DO UPDATE SET
-          step_order = EXCLUDED.step_order,
-          prompt = EXCLUDED.prompt,
-          expected_type = EXCLUDED.expected_type,
-          required = EXCLUDED.required,
-          enabled = EXCLUDED.enabled,
-          updated_at = NOW()
+            step_order = EXCLUDED.step_order,
+            prompt = EXCLUDED.prompt,
+            retry_prompt = EXCLUDED.retry_prompt,
+            validation_config = EXCLUDED.validation_config,
+            expected_type = EXCLUDED.expected_type,
+            required = EXCLUDED.required,
+            enabled = EXCLUDED.enabled,
+            updated_at = NOW()
         `,
         [
-          tenantId,
-          stepKey,
-          stepOrder,
-          prompt,
-          expectedType,
-          required,
-          enabled,
+            tenantId,
+            stepKey,
+            stepOrder,
+            prompt,
+            rawStep.retry_prompt || null,
+            rawStep.validation_config || {},
+            expectedType,
+            required,
+            enabled,
         ]
       );
     }
