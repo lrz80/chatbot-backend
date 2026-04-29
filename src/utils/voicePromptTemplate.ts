@@ -22,6 +22,15 @@ export async function PromptTemplate({
   info_clave,
   modo_resumen_sms,                // 👈 NUEVO
 }: PromptData) {
+  console.log("[VOICE_PROMPT][TEMPLATE_INPUT]", {
+    idioma,
+    categoria,
+    tenant_id,
+    isEn: (idioma || "").toLowerCase().startsWith("en"),
+    funcionesPreview: (funciones_asistente || "").slice(0, 80),
+    infoPreview: (info_clave || "").slice(0, 80),
+  });
+
   // 1) Cargar datos del tenant si faltan funciones/info + obtener nombre de marca
   let funciones = sanitize(funciones_asistente || "");
   let info = sanitize(info_clave || "");
@@ -53,6 +62,11 @@ export async function PromptTemplate({
 
   // 3) Idioma y plantillas
   const isEn = (idioma || "").toLowerCase().startsWith("en");
+
+  console.log("[VOICE_PROMPT][LANG_DECISION]", {
+    idioma,
+    isEn,
+  });
 
   // ---------- ESPAÑOL ----------
   if (!isEn) {

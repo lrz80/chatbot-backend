@@ -55,6 +55,14 @@ router.post("/", authenticateUser, async (req, res) => {
 
     const idiomaNormalizado = normLocale(idioma);
 
+    console.log("[VOICE_PROMPT][ROUTE]", {
+      idiomaRecibido: idioma,
+      idiomaNormalizado,
+      categoria,
+      funcionesPreview: funciones_asistente?.slice(0, 80),
+      infoPreview: info_clave?.slice(0, 80),
+    });
+
     const { prompt, bienvenida } = await PromptTemplate({
       idioma: idiomaNormalizado,
       categoria: categoria || "default",
