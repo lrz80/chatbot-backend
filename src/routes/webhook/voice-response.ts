@@ -707,6 +707,36 @@ function wordsToDigits(s: string) {
   return joined;
 }
 
+function renderBookingTemplate(
+  template: string,
+  bookingData: Record<string, string>
+) {
+  let output = template || "";
+
+  for (const [key, value] of Object.entries(bookingData || {})) {
+    output = output.split(`{${key}}`).join(value || "");
+  }
+
+  return output.trim();
+}
+
+function resolveBookingSuccessStep(params: {
+  flow: Awaited<ReturnType<typeof getBookingFlow>>;
+}) {
+  return params.flow.find((step) => {
+    if (!step.enabled) return false;
+    if (step.expected_type !== "text") return false;
+    if (step.required) return false;
+
+    const slot =
+      typeof step.validation_config?.slot === "string"
+        ? step.validation_config.slot.trim()
+        : "";
+
+    return slot === "none";
+  });
+}
+
 router.post('/lang', async (req: Request, res: Response) => {
   const rawDigits = (req.body.Digits || '').toString().trim();
 
@@ -1408,19 +1438,16 @@ router.post('/', async (req: Request, res: Response) => {
                 tenantId: tenant.id,
               });
 
-              const successStep = flow.find(
-                (s) => s.step_key === "success" && s.enabled
-              );
+              const successStep = resolveBookingSuccessStep({ flow });
 
               if (!successStep) {
                 throw new Error("BOOKING_SUCCESS_STEP_NOT_CONFIGURED");
               }
 
-              let successPrompt = successStep.prompt;
-
-              for (const [key, value] of Object.entries(state.bookingData || {})) {
-                successPrompt = successPrompt.split(`{${key}}`).join(value);
-              }
+              const successPrompt = renderBookingTemplate(
+                successStep.prompt,
+                state.bookingData || {}
+              );
 
               const gather = vr.gather({
                 input: ['speech','dtmf'] as any,
