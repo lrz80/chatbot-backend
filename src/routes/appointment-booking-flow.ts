@@ -82,6 +82,25 @@ router.post("/", authenticateUser, async (req: any, res) => {
   try {
     await client.query("BEGIN");
 
+    const seenOrders = new Set<number>();
+    const seenKeys = new Set<string>();
+
+    for (const rawStep of steps) {
+    const stepKey = String(rawStep.step_key || "").trim();
+    const stepOrder = Number(rawStep.step_order);
+
+    if (seenKeys.has(stepKey)) {
+        throw new Error(`step_key duplicado: ${stepKey}`);
+    }
+
+    if (seenOrders.has(stepOrder)) {
+        throw new Error(`step_order duplicado: ${stepOrder}`);
+    }
+
+    seenKeys.add(stepKey);
+    seenOrders.add(stepOrder);
+    }
+
     for (const rawStep of steps) {
       const stepKey = String(rawStep.step_key || "").trim();
       const prompt = String(rawStep.prompt || "").trim();
