@@ -27,6 +27,7 @@ async function generateVoiceReply({
   step,
   locale,
   bookingData,
+  cfg,
 }: {
   tenantName: string;
   userInput: string;
@@ -36,33 +37,12 @@ async function generateVoiceReply({
     service?: string;
     datetime?: string;
   };
+  cfg: any; // 👈 importante (puedes tiparlo mejor luego)
 }) {
   const { default: OpenAI } = await import('openai');
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  const system = locale.startsWith('es')
-    ? `
-  Eres una recepcionista amable del negocio ${tenantName}.
-
-  REGLAS:
-  - Máximo 1-2 frases
-  - Sonar natural, humana
-  - No mencionar "IA"
-  - No inventar información
-  - Mantener enfoque en agendar cita
-  - No usar texto largo
-  `.trim()
-    : `
-  You are a friendly receptionist for ${tenantName}.
-
-  RULES:
-  - Maximum 1-2 sentences
-  - Sound natural and human
-  - Do not mention AI
-  - Do not invent information
-  - Keep focus on booking appointments
-  - Do not use long text
-  `.trim();
+  const system = cfg.system_prompt;
 
   const stepInstruction = {
     service: locale.startsWith('es')
@@ -972,7 +952,7 @@ router.post('/', async (req: Request, res: Response) => {
             tenantId: tenant.id,
             callerE164,
             callerRaw,
-            smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || '',
+            smsFromCandidate: tenant.twilio_sms_number || '',
             callSid,
           });
           vr.say({ language: currentLocale as any, voice: voiceName },
@@ -1063,7 +1043,7 @@ router.post('/', async (req: Request, res: Response) => {
           tenantId: tenant.id,
           callerE164,
           callerRaw,
-          smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || '',
+          smsFromCandidate: tenant.twilio_sms_number || '',
           callSid,
           overrideDestE164: candidate,
         });
@@ -1118,6 +1098,7 @@ router.post('/', async (req: Request, res: Response) => {
         userInput,
         step: 'fallback',
         locale: currentLocale,
+        cfg,
       });
 
       const reply = twoSentencesMax(replyRaw);
@@ -1166,7 +1147,7 @@ router.post('/', async (req: Request, res: Response) => {
         tenantId: tenant.id,
         callerE164,
         callerRaw,
-        smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || '',
+        smsFromCandidate: tenant.twilio_sms_number || '',
         callSid,
         overrideDestE164: (state.altDest && isValidE164(state.altDest)) ? state.altDest : undefined,
       });
@@ -1291,6 +1272,7 @@ router.post('/', async (req: Request, res: Response) => {
           userInput,
           step: 'service',
           locale: currentLocale,
+          cfg,
         });
 
         const ask = twoSentencesMax(askRaw);
@@ -1314,6 +1296,7 @@ router.post('/', async (req: Request, res: Response) => {
           userInput,
           step: 'datetime',
           locale: currentLocale,
+          cfg,
         });
 
         const reply = twoSentencesMax(replyRaw);
@@ -1349,6 +1332,7 @@ router.post('/', async (req: Request, res: Response) => {
             service: state.bookingData?.service,
             datetime: userInput,
           },
+          cfg,
         });
 
         const confirm = twoSentencesMax(confirmRaw);
