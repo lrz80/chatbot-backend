@@ -718,14 +718,20 @@ router.post('/', async (req: Request, res: Response) => {
   const vr = new twiml.VoiceResponse();
 
   const callSid: string = (req.body.CallSid || '').toString();
-  const state = CALL_STATE.get(callSid) || {};
+  let state = CALL_STATE.get(callSid) || {};
 
   const langParam = typeof req.query.lang === 'string' ? (req.query.lang as string) : undefined;
 
-  // Si viene ?lang=..., persiste en estado para el resto de la llamada
   if (langParam) {
     const chosen = langParam === 'es' ? 'es-ES' : 'en-US';
-    CALL_STATE.set(callSid, { ...state, lang: chosen });
+
+    state = {
+      ...state,
+      lang: chosen,
+    };
+
+    CALL_STATE.set(callSid, state);
+    STATE_TIME.set(callSid, Date.now());
   }
 
   // ⬇️ LOG — lo que dijo el cliente
