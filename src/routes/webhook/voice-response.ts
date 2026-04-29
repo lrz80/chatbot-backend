@@ -1374,12 +1374,43 @@ router.post('/', async (req: Request, res: Response) => {
                 tenantId: tenant.id,
               });
 
-              CALL_STATE.delete(callSid);
-              STATE_TIME.delete(callSid);
+              const successStep = flow.find(
+                (s) => s.step_key === "success" && s.enabled
+              );
 
-              const doneRaw = cfg?.booking_success_message || "Listo, tu cita quedó agendada.";
-              vr.say({ language: currentLocale as any, voice: voiceName }, twoSentencesMax(doneRaw));
-              vr.hangup();
+              if (!successStep) {
+                throw new Error("BOOKING_SUCCESS_STEP_NOT_CONFIGURED");
+              }
+
+              let successPrompt = successStep.prompt;
+
+              for (const [key, value] of Object.entries(state.bookingData || {})) {
+                successPrompt = successPrompt.split(`{${key}}`).join(value);
+              }
+
+              const gather = vr.gather({
+                input: ['speech','dtmf'] as any,
+                numDigits: 1,
+                action: '/webhook/voice-response',
+                method: 'POST',
+                language: currentLocale as any,
+                speechTimeout: 'auto',
+                timeout: 7,
+                actionOnEmptyResult: true,
+                bargeIn: true,
+              });
+
+              gather.say(
+                { language: currentLocale as any, voice: voiceName },
+                twoSentencesMax(successPrompt)
+              );
+
+              CALL_STATE.set(callSid, {
+                lang: currentLocale,
+                turn: 0,
+              });
+
+              STATE_TIME.set(callSid, Date.now());
 
               return res.type('text/xml').send(vr.toString());
             } catch (err) {
