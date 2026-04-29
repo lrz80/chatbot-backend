@@ -1077,6 +1077,25 @@ router.post('/', async (req: Request, res: Response) => {
     // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI
     let earlySmsType: LinkType | null = null;
 
+    // Si estábamos esperando confirmación de SMS, pero el usuario hizo una nueva pregunta,
+    // cancelamos el SMS pendiente y seguimos procesando esa intención en el mismo turno.
+    if (state.awaiting && userInput && !saidYes(userInput) && !saidNo(userInput)) {
+      const nextDigit = coerceSpeechToDigit(userInput);
+
+      state = {
+        ...state,
+        awaiting: false,
+        pendingType: null,
+      };
+
+      CALL_STATE.set(callSid, state);
+      STATE_TIME.set(callSid, Date.now());
+
+      if (nextDigit) {
+        digits = nextDigit;
+      }
+    }
+
     // Caso A: venías esperando confirmación por estado y dijo “sí/1”
     if (state.awaiting && (saidYes(userInput) || digits === '1')) {
       earlySmsType = (state.pendingType || guessType(userInput)) as LinkType;
