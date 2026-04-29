@@ -5,6 +5,7 @@ import { authenticateUser } from "../../middleware/auth";
 import { PromptTemplate } from "../../utils/voicePromptTemplate";
 
 const router = express.Router();
+const CHANNEL_KEY = "voice";
 
 const normLocale = (l?: string) => {
   const v = (l || "es-ES").toLowerCase();
@@ -21,60 +22,80 @@ router.post("/", authenticateUser, async (req, res) => {
     categoria,
     funciones_asistente,
     info_clave,
-    // 👇 nueva bandera opcional desde el frontend
     modo_resumen_sms,
   } = req.body || {};
 
-  if (!tenant_id) return res.status(401).json({ error: "Tenant no autenticado." });
-  if (!idioma) return res.status(400).json({ error: "Falta idioma." });
+  if (!tenant_id) {
+    return res.status(401).json({ error: "Tenant no autenticado." });
+  }
+
+  if (!idioma) {
+    return res.status(400).json({ error: "Falta idioma." });
+  }
+
   if (!funciones_asistente?.trim() || !info_clave?.trim()) {
     return res.status(400).json({ error: "Debes completar funciones e info clave." });
   }
 
   try {
-    // Membresía
     const { rows } = await pool.query(
       `SELECT name, membresia_activa FROM tenants WHERE id = $1 LIMIT 1`,
       [tenant_id]
     );
-    if (!rows[0]) return res.status(404).json({ error: "Tenant no encontrado." });
-    if (!rows[0].membresia_activa) {
-      return res.status(403).json({ error: "Tu membresía está inactiva. Actívala para continuar." });
+
+    if (!rows[0]) {
+      return res.status(404).json({ error: "Tenant no encontrado." });
     }
 
-    // Generar prompt + bienvenida (multi-tenant)
+    if (!rows[0].membresia_activa) {
+      return res.status(403).json({
+        error: "Tu membresía está inactiva. Actívala para continuar.",
+      });
+    }
+
+    const idiomaNormalizado = normLocale(idioma);
+
     const { prompt, bienvenida } = await PromptTemplate({
-      idioma: normLocale(idioma),
+      idioma: idiomaNormalizado,
       categoria: categoria || "default",
       tenant_id,
       funciones_asistente: funciones_asistente.trim(),
       info_clave: info_clave.trim(),
-      // 👇 pasamos la bandera al template
       modo_resumen_sms: Boolean(modo_resumen_sms),
     });
 
-    // Guardar/actualizar voice_config
     await pool.query(
-      `INSERT INTO voice_configs (
-         tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
-         canal, funciones_asistente, info_clave
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'voz', $7, $8)
-       ON CONFLICT (tenant_id) DO UPDATE SET
-         voice_name = EXCLUDED.voice_name,
-         system_prompt = EXCLUDED.system_prompt,
-         welcome_message = EXCLUDED.welcome_message,
-         voice_hints = EXCLUDED.voice_hints,
-         funciones_asistente = EXCLUDED.funciones_asistente,
-         info_clave = EXCLUDED.info_clave,
-         updated_at = NOW()`,
+      `
+      INSERT INTO voice_configs (
+        tenant_id,
+        idioma,
+        voice_name,
+        system_prompt,
+        welcome_message,
+        voice_hints,
+        canal,
+        funciones_asistente,
+        info_clave
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (tenant_id, idioma, canal)
+      DO UPDATE SET
+        voice_name = EXCLUDED.voice_name,
+        system_prompt = EXCLUDED.system_prompt,
+        welcome_message = EXCLUDED.welcome_message,
+        voice_hints = EXCLUDED.voice_hints,
+        funciones_asistente = EXCLUDED.funciones_asistente,
+        info_clave = EXCLUDED.info_clave,
+        updated_at = NOW()
+      `,
       [
         tenant_id,
-        normLocale(idioma),
-        "alice",                 // voz por defecto
+        idiomaNormalizado,
+        "alice",
         prompt,
         bienvenida,
-        null,                    // voice_hints opcional
+        null,
+        CHANNEL_KEY,
         funciones_asistente.trim(),
         info_clave.trim(),
       ]

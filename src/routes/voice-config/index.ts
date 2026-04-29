@@ -36,38 +36,31 @@ const normRowForUI = (row: any = {}) => {
 router.get("/", authenticateUser, async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
   const idiomaQ = String((req.query.idioma as string) || "es").toLowerCase();
-  const canalQ  = String((req.query.canal  as string) || "voz").toLowerCase();
+  const canalQ = String((req.query.canal as string) || "voice").toLowerCase();
 
-  // normaliza: es -> es-ES, en -> en-US (opcional; sirve para guardar coherente)
-  const canon = (x: string) => x.startsWith("es") ? "es-ES" : x.startsWith("en") ? "en-US" : x;
+  const canon = (x: string) =>
+    x.startsWith("es") ? "es-ES" :
+    x.startsWith("en") ? "en-US" :
+    x.startsWith("pt") ? "pt-BR" :
+    x;
+
   const idiomaCanon = canon(idiomaQ);
 
   try {
-    // 1) intenta match exacto o por prefijo (es / es-ES)
     const { rows } = await pool.query(
       `
-      SELECT * FROM voice_configs
-       WHERE tenant_id = $1
-         AND lower(canal) = $2
-         AND (
-           lower(idioma) = $3
-           OR lower(idioma) LIKE $4    -- 'es-%' si piden 'es'
-           OR $3 LIKE lower(idioma)||'%'  -- si guardaste 'es' y piden 'es-ES'
-         )
+      SELECT *
+      FROM voice_configs
+      WHERE tenant_id = $1
+        AND lower(canal) = $2
+        AND lower(idioma) = lower($3)
       ORDER BY updated_at DESC, created_at DESC
       LIMIT 1
       `,
-      [tenant_id, canalQ, idiomaCanon, idiomaCanon.split("-")[0] + "-%"]
+      [tenant_id, canalQ, idiomaCanon]
     );
 
-    if (rows[0]) return res.json(normRowForUI(rows[0]));
-
-    // 2) Fallback: última config del tenant (cualquier idioma/canal)
-    const r2 = await pool.query(
-      `SELECT * FROM voice_configs WHERE tenant_id = $1 ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
-      [tenant_id]
-    );
-    return res.json(normRowForUI(r2.rows[0] || {}));
+    return res.json(normRowForUI(rows[0] || {}));
   } catch (err) {
     console.error("❌ Error al obtener configuración de voz:", err);
     res.status(500).json({ error: "Error al obtener configuración." });
@@ -131,14 +124,12 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
         created_at, updated_at
       )
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW(), NOW())
-      ON CONFLICT (tenant_id)                             -- 👈 misma key única del error
+      ON CONFLICT (tenant_id, idioma, canal)
       DO UPDATE SET
-        idioma               = EXCLUDED.idioma,
         voice_name           = COALESCE(NULLIF(EXCLUDED.voice_name, ''), voice_configs.voice_name),
         system_prompt        = EXCLUDED.system_prompt,
         welcome_message      = EXCLUDED.welcome_message,
         voice_hints          = EXCLUDED.voice_hints,
-        canal                = EXCLUDED.canal,
         funciones_asistente  = EXCLUDED.funciones_asistente,
         info_clave           = EXCLUDED.info_clave,
         audio_demo_url       = EXCLUDED.audio_demo_url,
@@ -147,14 +138,14 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
       `,
       [
         tenant_id,
-        idioma || 'es',
-        voice_name || 'alice',
+        idioma || "en-US",
+        voice_name || "alice",
         system_prompt,
         welcome_message,
-        voice_hints || '',
-        'voz',                                // asegura canal consistente
-        funciones_asistente || '',
-        info_clave || '',
+        voice_hints || "",
+        canal || "voice",
+        funciones_asistente || "",
+        info_clave || "",
         audio_demo_url || null,
         representante_number || null,
       ]
