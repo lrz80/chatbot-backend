@@ -90,6 +90,7 @@ import serviceVariantsRouter from "./routes/serviceVariants";
 import servicesImportCsv from "./routes/services/import-csv";
 import estimateFlowRoutes from "./routes/estimate-flow";
 import squareIntegrationRouter from "./routes/integrations/square";
+import appointmentBookingFlowRoutes from "./routes/appointment-booking-flow";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -232,6 +233,7 @@ app.use("/api/service-variants", serviceVariantsRouter);
 app.use("/api/services", servicesImportCsv);
 app.use("/api/estimate-flow", estimateFlowRoutes);
 app.use("/api/integrations/square", squareIntegrationRouter);
+app.use("/api/appointment-booking-flow", appointmentBookingFlowRoutes);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
