@@ -1574,6 +1574,9 @@ router.post('/', async (req: Request, res: Response) => {
           method: 'POST',
           language: currentLocale as any,
           speechTimeout: 'auto',
+          timeout: 7,
+          actionOnEmptyResult: true,
+          bargeIn: true,
         });
 
         gather.say({ language: currentLocale as any, voice: voiceName }, ask);
@@ -1797,13 +1800,19 @@ router.post('/', async (req: Request, res: Response) => {
             bookingData: nextData,
           });
 
+          const isPhoneStep = nextStep.expected_type === "phone";
+          const isConfirmationStep = nextStep.expected_type === "confirmation";
+
           const gather = vr.gather({
-            input: nextStep.expected_type === "confirmation" ? ['speech','dtmf'] as any : ['speech'] as any,
-            numDigits: nextStep.expected_type === "confirmation" ? 1 : undefined,
+            input: isPhoneStep || isConfirmationStep ? ['speech', 'dtmf'] as any : ['speech'] as any,
+            numDigits: isPhoneStep ? 15 : isConfirmationStep ? 1 : undefined,
             action: '/webhook/voice-response',
             method: 'POST',
             language: currentLocale as any,
             speechTimeout: 'auto',
+            timeout: 7,
+            actionOnEmptyResult: true,
+            bargeIn: true,
           });
 
           gather.say(
@@ -1855,13 +1864,19 @@ router.post('/', async (req: Request, res: Response) => {
           bookingData: nextData,
         });
 
+        const isPhoneStep = nextStep.expected_type === "phone";
+        const isConfirmationStep = nextStep.expected_type === "confirmation";
+
         const gather = vr.gather({
-          input: nextStep.expected_type === "confirmation" ? ['speech','dtmf'] as any : ['speech'] as any,
-          numDigits: nextStep.expected_type === "confirmation" ? 1 : undefined,
+          input: isPhoneStep || isConfirmationStep ? ['speech', 'dtmf'] as any : ['speech'] as any,
+          numDigits: isPhoneStep ? 15 : isConfirmationStep ? 1 : undefined,
           action: '/webhook/voice-response',
           method: 'POST',
           language: currentLocale as any,
           speechTimeout: 'auto',
+          timeout: 7,
+          actionOnEmptyResult: true,
+          bargeIn: true,
         });
 
         gather.say({ language: currentLocale as any, voice: voiceName }, twoSentencesMax(prompt));
