@@ -1071,15 +1071,40 @@ router.post('/', async (req: Request, res: Response) => {
     // ——— Menú inicial si aún no hay input ni confirmaciones pendientes ———
     if (!userInput && !digits && !state.awaiting && !state.awaitingNumber) {
       const brandForMenu = await getTenantBrand(tenant.id);
-      playMainMenu(
-        vr,
-        currentLocale as any,
-        voiceName,
-        brandForMenu,
-        cfg?.welcome_message || "",
-        callSid,
-        didNumber
+
+      const fallbackWelcome = currentLocale.startsWith('es')
+        ? `Hola, soy Amy del equipo de ${brandForMenu}. ¿En qué puedo ayudarte hoy?`
+        : `Hi, this is Amy from ${brandForMenu}. How can I help you today?`;
+
+      const welcomeText = twoSentencesMax(
+        (cfg?.welcome_message || '').trim() || fallbackWelcome
       );
+
+      const gather = vr.gather({
+        input: ['speech', 'dtmf'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: currentLocale as any,
+        speechTimeout: 'auto',
+        timeout: 7,
+        actionOnEmptyResult: true,
+        bargeIn: true,
+      });
+
+      gather.say(
+        { language: currentLocale as any, voice: voiceName },
+        welcomeText
+      );
+
+      logBotSay({
+        callSid,
+        to: didNumber || 'ivr',
+        text: welcomeText,
+        lang: currentLocale,
+        context: 'welcome',
+      });
+
       return res.type('text/xml').send(vr.toString());
     }
 
@@ -1101,19 +1126,43 @@ router.post('/', async (req: Request, res: Response) => {
         return res.type('text/xml').send(vrAsk.toString());
       }
 
-      // Si NO estamos esperando confirmación → vuelve al menú
+      // Si NO estamos esperando confirmación → vuelve a la bienvenida natural
       const vrSilence = new twiml.VoiceResponse();
       const brandForMenu = await getTenantBrand(tenant.id);
-      playMainMenu(
-        vrSilence,
-        currentLocale as any,
-        voiceName,
-        brandForMenu,
-        cfg?.welcome_message || "",
-        callSid,
-        didNumber
+
+      const fallbackWelcome = currentLocale.startsWith('es')
+        ? `Hola, soy Amy del equipo de ${brandForMenu}. ¿En qué puedo ayudarte hoy?`
+        : `Hi, this is Amy from ${brandForMenu}. How can I help you today?`;
+
+      const welcomeText = twoSentencesMax(
+        (cfg?.welcome_message || '').trim() || fallbackWelcome
       );
-      
+
+      const gather = vrSilence.gather({
+        input: ['speech', 'dtmf'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: currentLocale as any,
+        speechTimeout: 'auto',
+        timeout: 7,
+        actionOnEmptyResult: true,
+        bargeIn: true,
+      });
+
+      gather.say(
+        { language: currentLocale as any, voice: voiceName },
+        welcomeText
+      );
+
+      logBotSay({
+        callSid,
+        to: didNumber || 'ivr',
+        text: welcomeText,
+        lang: currentLocale,
+        context: 'welcome_retry',
+      });
+
       return res.type('text/xml').send(vrSilence.toString());
     }
 
@@ -1679,7 +1728,7 @@ router.post('/', async (req: Request, res: Response) => {
                 callSid,
                 tenantId: tenant.id,
                 lang: state.lang ?? currentLocale,
-                turn: 0,
+                turn: state.turn ?? 0,
                 awaiting: false,
                 pendingType: null,
                 awaitingNumber: false,
