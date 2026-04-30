@@ -24,12 +24,122 @@ type Args = {
   settings: AppointmentSettings;
 };
 
-function parseVoiceDatetime(input: string): Date | null {
-  const raw = (input || "").trim().toLowerCase();
-  const now = new Date();
-  const target = new Date(now);
+function getTimeZoneParts(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
 
-  if (raw.includes("mañana")) target.setDate(target.getDate() + 1);
+  const parts = formatter.formatToParts(date);
+
+  const map = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  ) as Record<string, string>;
+
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    second: Number(map.second),
+  };
+}
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string) {
+  const parts = getTimeZoneParts(date, timeZone);
+
+  const asIfUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second
+  );
+
+  return asIfUtc - date.getTime();
+}
+
+function zonedLocalDateTimeToUtcDate(params: {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second?: number;
+  timeZone: string;
+}) {
+  const {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second = 0,
+    timeZone,
+  } = params;
+
+  const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second);
+  const firstGuessDate = new Date(utcGuess);
+
+  const firstOffset = getTimeZoneOffsetMs(firstGuessDate, timeZone);
+  let correctedTs = utcGuess - firstOffset;
+
+  const correctedDate = new Date(correctedTs);
+  const secondOffset = getTimeZoneOffsetMs(correctedDate, timeZone);
+
+  if (secondOffset !== firstOffset) {
+    correctedTs = utcGuess - secondOffset;
+  }
+
+  return new Date(correctedTs);
+}
+
+function addDaysToYmd(
+  year: number,
+  month: number,
+  day: number,
+  daysToAdd: number
+) {
+  const base = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  base.setUTCDate(base.getUTCDate() + daysToAdd);
+
+  return {
+    year: base.getUTCFullYear(),
+    month: base.getUTCMonth() + 1,
+    day: base.getUTCDate(),
+  };
+}
+
+function parseVoiceDatetime(input: string, timeZone: string): Date | null {
+  const raw = (input || "").trim().toLowerCase();
+  if (!raw) return null;
+
+  const nowInTz = getTimeZoneParts(new Date(), timeZone);
+
+  let targetDate = {
+    year: nowInTz.year,
+    month: nowInTz.month,
+    day: nowInTz.day,
+  };
+
+  if (raw.includes("mañana") || raw.includes("tomorrow")) {
+    targetDate = addDaysToYmd(
+      targetDate.year,
+      targetDate.month,
+      targetDate.day,
+      1
+    );
+  }
 
   const hourMatch = raw.match(/\b(\d{1,2})(?::(\d{2}))?\b/);
   if (!hourMatch) return null;
@@ -38,18 +148,32 @@ function parseVoiceDatetime(input: string): Date | null {
   const minute = hourMatch[2] ? Number(hourMatch[2]) : 0;
 
   const isMorning =
-    raw.includes("mañana") || raw.includes("am") || raw.includes("a.m");
+    raw.includes("am") ||
+    raw.includes("a.m") ||
+    /\bpor la mañana\b/.test(raw);
+
   const isAfternoon =
-    raw.includes("tarde") ||
-    raw.includes("noche") ||
     raw.includes("pm") ||
-    raw.includes("p.m");
+    raw.includes("p.m") ||
+    raw.includes("tarde") ||
+    raw.includes("noche");
 
   if (isAfternoon && hour < 12) hour += 12;
   if (isMorning && hour === 12) hour = 0;
 
-  target.setHours(hour, minute, 0, 0);
-  return Number.isNaN(target.getTime()) ? null : target;
+  if (hour > 23 || minute > 59) return null;
+
+  const utcDate = zonedLocalDateTimeToUtcDate({
+    year: targetDate.year,
+    month: targetDate.month,
+    day: targetDate.day,
+    hour,
+    minute,
+    second: 0,
+    timeZone,
+  });
+
+  return Number.isNaN(utcDate.getTime()) ? null : utcDate;
 }
 
 export async function createAppointmentFromVoice(args: Args) {
@@ -57,8 +181,10 @@ export async function createAppointmentFromVoice(args: Args) {
   const customerPhone = args.answersBySlot.customer_phone || null;
   const customerName = args.answersBySlot.customer_name || "Cliente Voz";
   const customerEmail = args.answersBySlot.customer_email || null;
+  const timeZone =
+    String(args.settings.timezone || "").trim() || "America/New_York";
 
-  const start = parseVoiceDatetime(datetimeText);
+  const start = parseVoiceDatetime(datetimeText, timeZone);
 
   if (!start) {
     throw new Error(`INVALID_VOICE_DATETIME: ${datetimeText}`);
