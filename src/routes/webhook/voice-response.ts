@@ -648,6 +648,27 @@ function logBotSay({
   }));
 }
 
+async function getLastAssistantVoiceMessage(params: {
+  tenantId: string;
+  didNumber: string;
+}) {
+  const { rows } = await pool.query(
+    `
+    SELECT content
+    FROM messages
+    WHERE tenant_id = $1
+      AND canal = $2
+      AND role = 'assistant'
+      AND from_number = $3
+    ORDER BY timestamp DESC
+    LIMIT 1
+    `,
+    [params.tenantId, CHANNEL_KEY, params.didNumber || 'sistema']
+  );
+
+  return (rows?.[0]?.content || '').toString().trim();
+}
+
 const LINK_SYNONYMS: Record<LinkType, string[]> = {
   reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
   comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay', 'precio', 'precios', 'prices'],
@@ -1243,7 +1264,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ✅ handler de silencio (cuando Twilio devuelve sin SpeechResult/Digits en turnos posteriores)
     if (!userInput && !digits && Object.prototype.hasOwnProperty.call(req.body, 'SpeechResult')) {
-      // Si estamos esperando confirmación del SMS, re-pregunta esa confirmación (y escucha)
+      // Si estamos esperando confirmación del SMS, re-pregunta esa confirmación
       if (state.awaiting && state.pendingType) {
         const vrAsk = new twiml.VoiceResponse();
         await offerSms(
@@ -1255,20 +1276,71 @@ router.post('/', async (req: Request, res: Response) => {
           state.pendingType,
           tenant.id
         );
-      
+
         return res.type('text/xml').send(vrAsk.toString());
       }
 
-      // Si NO estamos esperando confirmación → vuelve a la bienvenida natural
+      // Si estamos dentro de un booking, NO vuelvas a la bienvenida.
+      // Repite el step actual del booking.
+      if (typeof state.bookingStepIndex === "number") {
+        const flow = await getBookingFlow(tenant.id);
+        const currentStep = flow[state.bookingStepIndex];
+
+        if (currentStep) {
+          const vrBookingSilence = new twiml.VoiceResponse();
+
+          const prompt = renderBookingTemplate(
+            currentStep.retry_prompt || currentStep.prompt,
+            buildBookingPromptVariables({
+              bookingData: state.bookingData || {},
+              callerE164,
+            })
+          );
+
+          const isPhoneStep = currentStep.expected_type === "phone";
+          const isConfirmationStep = currentStep.expected_type === "confirmation";
+
+          const gather = vrBookingSilence.gather({
+            input: isPhoneStep || isConfirmationStep ? ['speech', 'dtmf'] as any : ['speech'] as any,
+            numDigits: isPhoneStep ? 15 : isConfirmationStep ? 1 : undefined,
+            action: '/webhook/voice-response',
+            method: 'POST',
+            language: currentLocale as any,
+            speechTimeout: 'auto',
+            timeout: 7,
+            actionOnEmptyResult: true,
+            bargeIn: true,
+          });
+
+          gather.say(
+            { language: currentLocale as any, voice: voiceName },
+            twoSentencesMax(prompt)
+          );
+
+          logBotSay({
+            callSid,
+            to: didNumber || 'ivr',
+            text: twoSentencesMax(prompt),
+            lang: currentLocale,
+            context: `booking_retry:${currentStep.step_key}`,
+          });
+
+          return res.type('text/xml').send(vrBookingSilence.toString());
+        }
+      }
+
+      // Si no hay booking activo, mantén el contexto repitiendo el último mensaje real del bot
       const vrSilence = new twiml.VoiceResponse();
-      const brandForMenu = await getTenantBrand(tenant.id);
 
-      const fallbackWelcome = currentLocale.startsWith('es')
-        ? `Hola, soy Amy del equipo de ${brandForMenu}. ¿En qué puedo ayudarte hoy?`
-        : `Hi, this is Amy from ${brandForMenu}. How can I help you today?`;
+      const lastAssistantMessage = await getLastAssistantVoiceMessage({
+        tenantId: tenant.id,
+        didNumber: didNumber || 'sistema',
+      });
 
-      const welcomeText = twoSentencesMax(
-        (cfg?.welcome_message || '').trim() || fallbackWelcome
+      const retryText = twoSentencesMax(
+        sanitizeForSay(
+          lastAssistantMessage || (cfg?.welcome_message || '').trim()
+        )
       );
 
       const gather = vrSilence.gather({
@@ -1283,18 +1355,20 @@ router.post('/', async (req: Request, res: Response) => {
         bargeIn: true,
       });
 
-      gather.say(
-        { language: currentLocale as any, voice: voiceName },
-        welcomeText
-      );
+      if (retryText) {
+        gather.say(
+          { language: currentLocale as any, voice: voiceName },
+          retryText
+        );
 
-      logBotSay({
-        callSid,
-        to: didNumber || 'ivr',
-        text: welcomeText,
-        lang: currentLocale,
-        context: 'welcome_retry',
-      });
+        logBotSay({
+          callSid,
+          to: didNumber || 'ivr',
+          text: retryText,
+          lang: currentLocale,
+          context: 'silence_retry_last_assistant',
+        });
+      }
 
       return res.type('text/xml').send(vrSilence.toString());
     }
