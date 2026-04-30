@@ -552,8 +552,8 @@ function playMainMenu(
   });
 
   const menuText = locale.startsWith('es')
-    ? `¿En qué puedo ayudarte? Puedes decirme que quieres agendar una cita, o marcar 1 para precios, 2 para horarios o 3 para ubicación.`
-    : `How can I help? You can tell me you want to book an appointment, or press 1 for prices, 2 for hours, or 3 for location.`;
+    ? `Puedes decirme que quieres agendar una cita, o marcar 1 para precios, 2 para horarios o 3 para ubicación.`
+    : `You can tell me you want to book an appointment, or press 1 for prices, 2 for hours, or 3 for location.`;
 
   const fallbackGreeting = locale.startsWith('es')
     ? `Hola, soy Amy de ${brand}.`
@@ -1670,7 +1670,19 @@ router.post('/', async (req: Request, res: Response) => {
                 twoSentencesMax(successPrompt)
               );
 
-              await deleteVoiceCallState(callSid);
+              await upsertVoiceCallState({
+                callSid,
+                tenantId: tenant.id,
+                lang: state.lang ?? currentLocale,
+                turn: 0,
+                awaiting: false,
+                pendingType: null,
+                awaitingNumber: false,
+                altDest: state.altDest ?? null,
+                smsSent: false,
+                bookingStepIndex: null,
+                bookingData: {},
+              });
 
               return res.type('text/xml').send(vr.toString());
             } catch (err) {
