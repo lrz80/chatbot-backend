@@ -783,6 +783,11 @@ type VoiceBookingServiceOption = {
   aliases: string[];
 };
 
+type VoiceBookingServiceResolution =
+  | { kind: "resolved_single"; value: string }
+  | { kind: "ambiguous"; options: string[] }
+  | { kind: "none" };
+
 function parseVoiceBookingServices(raw: string): VoiceBookingServiceOption[] {
   return (raw || "")
     .split("\n")
@@ -807,58 +812,93 @@ function parseVoiceBookingServices(raw: string): VoiceBookingServiceOption[] {
     .filter((item): item is VoiceBookingServiceOption => Boolean(item));
 }
 
+function scoreVoiceBookingCandidate(userInput: string, candidate: string): number {
+  const normalizedInput = normalizeVoiceServiceText(userInput);
+  const normalizedCandidate = normalizeVoiceServiceText(candidate);
+
+  if (!normalizedInput || !normalizedCandidate) return 0;
+
+  if (normalizedInput === normalizedCandidate) {
+    return 100;
+  }
+
+  if (
+    normalizedInput.includes(normalizedCandidate) ||
+    normalizedCandidate.includes(normalizedInput)
+  ) {
+    return 85;
+  }
+
+  const inputTokens = new Set(normalizedInput.split(" ").filter(Boolean));
+  const candidateTokens = normalizedCandidate.split(" ").filter(Boolean);
+
+  if (!candidateTokens.length) return 0;
+
+  const overlap = candidateTokens.filter((token) => inputTokens.has(token)).length;
+  const coverage = overlap / candidateTokens.length;
+
+  if (coverage >= 0.8) return 75;
+  if (coverage >= 0.6) return 60;
+  if (coverage >= 0.4) return 40;
+
+  return 0;
+}
+
 function resolveVoiceBookingService(params: {
   userInput: string;
   rawConfig: string;
-}): { ok: true; value: string } | { ok: false } {
+}): VoiceBookingServiceResolution {
   const normalizedInput = normalizeVoiceServiceText(params.userInput);
   const options = parseVoiceBookingServices(params.rawConfig);
 
   if (!normalizedInput || !options.length) {
-    return { ok: false };
+    return { kind: "none" };
   }
 
-  let bestMatch: { value: string; score: number } | null = null;
+  const ranked = options
+    .map((option) => {
+      const candidates = [option.value, ...option.aliases];
+      const bestScore = Math.max(
+        ...candidates.map((candidate) =>
+          scoreVoiceBookingCandidate(params.userInput, candidate)
+        )
+      );
 
-  for (const option of options) {
-    const candidates = [option.value, ...option.aliases];
+      return {
+        value: option.value,
+        score: bestScore,
+      };
+    })
+    .filter((item) => item.score >= 60)
+    .sort((a, b) => b.score - a.score);
 
-    for (const candidate of candidates) {
-      const normalizedCandidate = normalizeVoiceServiceText(candidate);
-      if (!normalizedCandidate) continue;
-
-      let score = 0;
-
-      if (normalizedInput === normalizedCandidate) {
-        score = 100;
-      } else if (
-        normalizedInput.includes(normalizedCandidate) ||
-        normalizedCandidate.includes(normalizedInput)
-      ) {
-        score = 80;
-      } else {
-        const inputTokens = new Set(normalizedInput.split(" ").filter(Boolean));
-        const candidateTokens = normalizedCandidate.split(" ").filter(Boolean);
-        const overlap = candidateTokens.filter((token) => inputTokens.has(token)).length;
-        const coverage = candidateTokens.length ? overlap / candidateTokens.length : 0;
-
-        if (coverage >= 0.75) score = 70;
-      }
-
-      if (!bestMatch || score > bestMatch.score) {
-        bestMatch = {
-          value: option.value,
-          score,
-        };
-      }
-    }
+  if (!ranked.length) {
+    return { kind: "none" };
   }
 
-  if (!bestMatch || bestMatch.score < 80) {
-    return { ok: false };
+  const top = ranked[0];
+  const second = ranked[1];
+
+  if (top.score >= 85 && (!second || top.score - second.score >= 15)) {
+    return {
+      kind: "resolved_single",
+      value: top.value,
+    };
   }
 
-  return { ok: true, value: bestMatch.value };
+  const ambiguousOptions = ranked.slice(0, 4).map((item) => item.value);
+
+  if (ambiguousOptions.length === 1) {
+    return {
+      kind: "resolved_single",
+      value: ambiguousOptions[0],
+    };
+  }
+
+  return {
+    kind: "ambiguous",
+    options: ambiguousOptions,
+  };
 }
 
 router.post('/lang', async (req: Request, res: Response) => {
@@ -1981,7 +2021,7 @@ router.post('/', async (req: Request, res: Response) => {
             rawConfig: cfg?.booking_services_text || "",
           });
 
-          if (!serviceResolution.ok) {
+          if (serviceResolution.kind === "none") {
             const retryPrompt =
               currentStep.retry_prompt ||
               (currentLocale.startsWith("es")
@@ -2002,6 +2042,32 @@ router.post('/', async (req: Request, res: Response) => {
             gather.say(
               { language: currentLocale as any, voice: voiceName },
               twoSentencesMax(retryPrompt)
+            );
+
+            return res.type('text/xml').send(vr.toString());
+          }
+
+          if (serviceResolution.kind === "ambiguous") {
+            const optionsText = serviceResolution.options.join(", ");
+
+            const ambiguousPrompt = currentLocale.startsWith("es")
+              ? `Encontré varias opciones parecidas: ${optionsText}. Dime el nombre completo del servicio que quieres agendar.`
+              : `I found several similar options: ${optionsText}. Please say the full service name you want to book.`;
+
+            const gather = vr.gather({
+              input: ['speech'] as any,
+              action: '/webhook/voice-response',
+              method: 'POST',
+              language: currentLocale as any,
+              speechTimeout: 'auto',
+              timeout: 7,
+              actionOnEmptyResult: true,
+              bargeIn: true,
+            });
+
+            gather.say(
+              { language: currentLocale as any, voice: voiceName },
+              twoSentencesMax(ambiguousPrompt)
             );
 
             return res.type('text/xml').send(vr.toString());
