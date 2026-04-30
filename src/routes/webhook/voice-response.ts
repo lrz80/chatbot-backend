@@ -768,6 +768,99 @@ function resolveBookingSuccessStep(params: {
   });
 }
 
+function normalizeVoiceServiceText(value: string) {
+  return (value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+type VoiceBookingServiceOption = {
+  value: string;
+  aliases: string[];
+};
+
+function parseVoiceBookingServices(raw: string): VoiceBookingServiceOption[] {
+  return (raw || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [canonicalPart, aliasesPart = ""] = line.split("|");
+      const value = (canonicalPart || "").trim();
+
+      const aliases = aliasesPart
+        .split(",")
+        .map((alias) => alias.trim())
+        .filter(Boolean);
+
+      if (!value) return null;
+
+      return {
+        value,
+        aliases,
+      };
+    })
+    .filter((item): item is VoiceBookingServiceOption => Boolean(item));
+}
+
+function resolveVoiceBookingService(params: {
+  userInput: string;
+  rawConfig: string;
+}): { ok: true; value: string } | { ok: false } {
+  const normalizedInput = normalizeVoiceServiceText(params.userInput);
+  const options = parseVoiceBookingServices(params.rawConfig);
+
+  if (!normalizedInput || !options.length) {
+    return { ok: false };
+  }
+
+  let bestMatch: { value: string; score: number } | null = null;
+
+  for (const option of options) {
+    const candidates = [option.value, ...option.aliases];
+
+    for (const candidate of candidates) {
+      const normalizedCandidate = normalizeVoiceServiceText(candidate);
+      if (!normalizedCandidate) continue;
+
+      let score = 0;
+
+      if (normalizedInput === normalizedCandidate) {
+        score = 100;
+      } else if (
+        normalizedInput.includes(normalizedCandidate) ||
+        normalizedCandidate.includes(normalizedInput)
+      ) {
+        score = 80;
+      } else {
+        const inputTokens = new Set(normalizedInput.split(" ").filter(Boolean));
+        const candidateTokens = normalizedCandidate.split(" ").filter(Boolean);
+        const overlap = candidateTokens.filter((token) => inputTokens.has(token)).length;
+        const coverage = candidateTokens.length ? overlap / candidateTokens.length : 0;
+
+        if (coverage >= 0.75) score = 70;
+      }
+
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = {
+          value: option.value,
+          score,
+        };
+      }
+    }
+  }
+
+  if (!bestMatch || bestMatch.score < 80) {
+    return { ok: false };
+  }
+
+  return { ok: true, value: bestMatch.value };
+}
+
 router.post('/lang', async (req: Request, res: Response) => {
   const rawDigits = (req.body.Digits || '').toString().trim();
 
@@ -1872,9 +1965,54 @@ router.post('/', async (req: Request, res: Response) => {
           return res.type('text/xml').send(vr.toString());
         }
 
+        let resolvedStepValue = userInput;
+
+        const rawSlot =
+          typeof currentStep.validation_config?.slot === "string"
+            ? currentStep.validation_config.slot.trim()
+            : "";
+
+        const isServiceStep =
+          currentStep.step_key === "service" || rawSlot === "service";
+
+        if (isServiceStep) {
+          const serviceResolution = resolveVoiceBookingService({
+            userInput,
+            rawConfig: cfg?.booking_services_text || "",
+          });
+
+          if (!serviceResolution.ok) {
+            const retryPrompt =
+              currentStep.retry_prompt ||
+              (currentLocale.startsWith("es")
+                ? "No entendí bien el servicio que deseas agendar. ¿Cuál servicio quieres reservar?"
+                : "I didn’t clearly catch the service you want to book. Which service would you like to book?");
+
+            const gather = vr.gather({
+              input: ['speech'] as any,
+              action: '/webhook/voice-response',
+              method: 'POST',
+              language: currentLocale as any,
+              speechTimeout: 'auto',
+              timeout: 7,
+              actionOnEmptyResult: true,
+              bargeIn: true,
+            });
+
+            gather.say(
+              { language: currentLocale as any, voice: voiceName },
+              twoSentencesMax(retryPrompt)
+            );
+
+            return res.type('text/xml').send(vr.toString());
+          }
+
+          resolvedStepValue = serviceResolution.value;
+        }
+
         const nextData = {
           ...(state.bookingData || {}),
-          [currentStep.step_key]: userInput,
+          [currentStep.step_key]: resolvedStepValue,
         };
 
         const nextIndex = currentIndex + 1;
