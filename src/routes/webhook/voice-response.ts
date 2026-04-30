@@ -12,6 +12,7 @@ import { getBookingFlow } from "../../lib/appointments/getBookingFlow";
 import { getVoiceCallState } from "../../lib/voice/getVoiceCallState";
 import { upsertVoiceCallState } from "../../lib/voice/upsertVoiceCallState";
 import { deleteVoiceCallState } from "../../lib/voice/deleteVoiceCallState";
+import { resolveVoiceIntentFromUtterance } from "../../lib/voice/resolveVoiceIntentFromUtterance";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -1517,7 +1518,8 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ——— FAST INTENT: si el usuario pidió algo directo (sin DTMF), lee desde prompt y luego ofrece SMS ———
     if (userInput) {
-      const wantsBooking = /(cita|reservar|agendar|appointment|book)/i.test(userInput);
+      const resolvedVoiceIntent = resolveVoiceIntentFromUtterance(userInput);
+      const wantsBooking = resolvedVoiceIntent === "booking";
 
       if (wantsBooking && typeof state.bookingStepIndex !== "number") {
         const flow = await getBookingFlow(tenant.id);
