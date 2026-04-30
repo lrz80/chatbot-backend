@@ -32,9 +32,10 @@ const normRowForUI = (row: any = {}) => {
   };
   return {
     ...row,
-    funciones_asistente: norm(row.funciones_asistente),
+    funciones_asistente:  norm(row.funciones_asistente),
     info_clave:           norm(row.info_clave),
     voice_hints:          norm(row.voice_hints),
+    booking_services_text: norm(row.booking_services_text),
   };
 };
 
@@ -92,6 +93,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
     canal = "voice",
     funciones_asistente,
     info_clave,
+    booking_services_text,
     audio_demo_url,
     representante_number
   } = req.body;
@@ -104,6 +106,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
   canal = toText(canal) || "voice";
   funciones_asistente = toText(funciones_asistente);
   info_clave = toText(info_clave);
+  booking_services_text = toText(booking_services_text);
   representante_number = toText(representante_number);
 
   if (!tenant_id) {
@@ -133,10 +136,10 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
       `
       INSERT INTO voice_configs (
         tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
-        canal, funciones_asistente, info_clave, audio_demo_url, representante_number,
+        canal, funciones_asistente, info_clave, booking_services_text, audio_demo_url, representante_number,
         created_at, updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW(), NOW())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW(), NOW())
       ON CONFLICT (tenant_id, idioma, canal)
       DO UPDATE SET
         voice_name           = COALESCE(NULLIF(EXCLUDED.voice_name, ''), voice_configs.voice_name),
@@ -145,6 +148,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
         voice_hints          = EXCLUDED.voice_hints,
         funciones_asistente  = EXCLUDED.funciones_asistente,
         info_clave           = EXCLUDED.info_clave,
+        booking_services_text = EXCLUDED.booking_services_text,
         audio_demo_url       = EXCLUDED.audio_demo_url,
         representante_number = EXCLUDED.representante_number,
         updated_at           = NOW()
@@ -159,6 +163,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
         canal,
         funciones_asistente || "",
         info_clave || "",
+        booking_services_text || "",
         audio_demo_url || null,
         representante_number || null,
       ]
