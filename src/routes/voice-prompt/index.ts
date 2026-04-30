@@ -55,6 +55,13 @@ router.post("/", authenticateUser, async (req, res) => {
 
     const idiomaNormalizado = normLocale(idioma);
 
+    const voiceNameResolved =
+      idiomaNormalizado === "es-ES"
+        ? "Polly.Mia"
+        : idiomaNormalizado === "pt-BR"
+          ? "Polly.Vitoria"
+          : "Polly.Joanna";
+
     console.log("[VOICE_PROMPT][ROUTE]", {
       idiomaRecibido: idioma,
       idiomaNormalizado,
@@ -99,7 +106,7 @@ router.post("/", authenticateUser, async (req, res) => {
       [
         tenant_id,
         idiomaNormalizado,
-        "alice",
+        voiceNameResolved,
         prompt,
         bienvenida,
         null,
