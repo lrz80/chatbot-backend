@@ -1,5 +1,6 @@
 //src/lib/appointments/createAppointmentFromVoice.ts
 import pool from "../db";
+import { resolveVoiceScheduleValidation } from "./resolveVoiceScheduleValidation";
 
 type AppointmentSettings = {
   default_duration_min: number;
@@ -177,6 +178,7 @@ function parseVoiceDatetime(input: string, timeZone: string): Date | null {
 }
 
 export async function createAppointmentFromVoice(args: Args) {
+  const serviceName = String(args.answersBySlot.service || "").trim();
   const datetimeText = args.answersBySlot.datetime || "";
   const customerPhone = args.answersBySlot.customer_phone || null;
   const customerName = args.answersBySlot.customer_name || "Cliente Voz";
@@ -184,14 +186,36 @@ export async function createAppointmentFromVoice(args: Args) {
   const timeZone =
     String(args.settings.timezone || "").trim() || "America/New_York";
 
-  const start = parseVoiceDatetime(datetimeText, timeZone);
-
-  if (!start) {
-    throw new Error(`INVALID_VOICE_DATETIME: ${datetimeText}`);
+  if (!serviceName) {
+    throw new Error("MISSING_SERVICE");
   }
 
   if (!args.settings.enabled) {
     throw new Error("APPOINTMENTS_DISABLED");
+  }
+
+  const scheduleValidation = await resolveVoiceScheduleValidation({
+    tenantId: args.tenantId,
+    serviceName,
+    rawDatetime: datetimeText,
+    channel: "voice",
+  });
+
+  if (!scheduleValidation.ok) {
+    if (scheduleValidation.reason === "invalid_datetime") {
+      throw new Error(`INVALID_VOICE_DATETIME: ${datetimeText}`);
+    }
+
+    throw new Error(
+      `VOICE_SCHEDULE_NOT_AVAILABLE:${serviceName}:${scheduleValidation.availableTimes.join(",")}`
+    );
+  }
+
+  const start = scheduleValidation.requestedAt;
+
+  const reparsedStart = parseVoiceDatetime(datetimeText, timeZone);
+  if (!reparsedStart) {
+    throw new Error(`INVALID_VOICE_DATETIME: ${datetimeText}`);
   }
 
   const duration = args.settings.default_duration_min;

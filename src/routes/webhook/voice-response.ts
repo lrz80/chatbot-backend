@@ -8,6 +8,7 @@ import { sendSMS, normalizarNumero } from '../../lib/senders/sms';
 import { canUseChannel } from "../../lib/features";
 import { createAppointmentFromVoice } from "../../lib/appointments/createAppointmentFromVoice";
 import { getBookingFlow } from "../../lib/appointments/getBookingFlow";
+import { resolveVoiceScheduleValidation } from "../../lib/appointments/resolveVoiceScheduleValidation";
 
 import { getVoiceCallState } from "../../lib/voice/getVoiceCallState";
 import { upsertVoiceCallState } from "../../lib/voice/upsertVoiceCallState";
@@ -1887,12 +1888,97 @@ router.post('/', async (req: Request, res: Response) => {
                 answersBySlot,
               });
 
-              const appointment = await createAppointmentFromVoice({
-                tenantId: tenant.id,
-                answersBySlot,
-                idempotencyKey: `voice:${callSid}`,
-                settings: appointmentSettings,
-              });
+              let appointment;
+
+              try {
+                appointment = await createAppointmentFromVoice({
+                  tenantId: tenant.id,
+                  answersBySlot,
+                  idempotencyKey: `voice:${callSid}`,
+                  settings: appointmentSettings,
+                });
+              } catch (error: any) {
+                const errorMessage = String(error?.message || "");
+
+                const mustRetryDatetime =
+                  errorMessage.startsWith("INVALID_VOICE_DATETIME:") ||
+                  errorMessage.startsWith("VOICE_SCHEDULE_NOT_AVAILABLE:");
+
+                if (!mustRetryDatetime) {
+                  throw error;
+                }
+
+                const datetimeStepIndex = flow.findIndex((step) => {
+                  const slot =
+                    typeof step.validation_config?.slot === "string"
+                      ? step.validation_config.slot.trim()
+                      : "";
+
+                  return step.step_key === "datetime" || slot === "datetime";
+                });
+
+                if (datetimeStepIndex < 0) {
+                  throw error;
+                }
+
+                const datetimeStep = flow[datetimeStepIndex];
+
+                state = {
+                  ...state,
+                  bookingStepIndex: datetimeStepIndex,
+                  bookingData: state.bookingData || {},
+                };
+
+                await upsertVoiceCallState({
+                  callSid,
+                  tenantId: tenant.id,
+                  lang: state.lang ?? currentLocale,
+                  turn: state.turn ?? 0,
+                  awaiting: false,
+                  pendingType: null,
+                  awaitingNumber: false,
+                  altDest: state.altDest ?? null,
+                  smsSent: false,
+                  bookingStepIndex: datetimeStepIndex,
+                  bookingData: state.bookingData || {},
+                });
+
+                const retryPrompt = twoSentencesMax(
+                  renderBookingTemplate(
+                    datetimeStep.retry_prompt || datetimeStep.prompt,
+                    buildBookingPromptVariables({
+                      bookingData: state.bookingData || {},
+                      callerE164,
+                    })
+                  )
+                );
+
+                const gather = vr.gather({
+                  input: ['speech'] as any,
+                  action: '/webhook/voice-response',
+                  method: 'POST',
+                  language: currentLocale as any,
+                  speechTimeout: 'auto',
+                  timeout: 7,
+                  actionOnEmptyResult: true,
+                  bargeIn: true,
+                });
+
+                gather.say(
+                  { language: currentLocale as any, voice: voiceName },
+                  retryPrompt
+                );
+
+                logBotSay({
+                  callSid,
+                  to: didNumber || 'ivr',
+                  text: retryPrompt,
+                  lang: currentLocale,
+                  context: `booking_retry:${datetimeStep.step_key}`,
+                });
+
+                return res.type('text/xml').send(vr.toString());
+              }
 
               console.log("[VOICE][APPOINTMENT_CREATED]", {
                 callSid,
