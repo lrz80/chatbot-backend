@@ -521,7 +521,9 @@ async function snippetFromPrompt({
   - Keep the tone brief, clear, and natural.
   `.trim();
 
-  const user = `Dame un breve resumen de ${topic} (máx 2 frases), usando sólo lo provisto.`;
+  const user = locale.startsWith('es')
+    ? `Responde ÚNICAMENTE en español. Dame un breve resumen de ${topic} (máx 2 frases), usando sólo lo provisto.`
+    : `Respond ONLY in English. Do not answer in Spanish. Give me a short summary about ${topic} in 1-2 sentences max, using only the provided information.`;
 
   const completion = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
@@ -744,7 +746,7 @@ function coerceSpeechToDigit(s: string): '1'|'2'|'3'|'4'|undefined {
 
   // Palabras clave → dígitos
   if (/\b(precio|precios|tarifa|tarifas|price|prices|pagar|pago|checkout|buy|pay|payment)\b/u.test(w)) return '1';
-  if (/\b(horario|horarios|hours|schedule|open|close|abren|cierran)\b/u.test(w)) return '2';
+  if (/\b(horario|horarios|hours|open|close|abren|cierran)\b/u.test(w)) return '2';
   if (/\b(ubicacion|ubicación|direccion|dirección|address|location|mapa|maps|google maps)\b/u.test(w)) return '3';
   if (/\b(representante|humano|agente|persona|operator|representative)\b/u.test(w)) return '4';
 
@@ -1082,7 +1084,11 @@ router.post('/', async (req: Request, res: Response) => {
 
   let digits = (req.body.Digits || '').toString().trim();
 
-  if (!digits && userInput) {
+  const resolvedInitialVoiceIntent = userInput
+    ? resolveVoiceIntentFromUtterance(userInput)
+    : null;
+
+  if (!digits && userInput && resolvedInitialVoiceIntent !== "booking") {
     const coerced = coerceSpeechToDigit(userInput);
     if (coerced) digits = coerced;
   }
@@ -1792,8 +1798,16 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // ===== IVR simple por dígito (1/2/3/4) =====
-    if (digits && !state.awaiting) {
+    const resolvedVoiceIntentForTurn = userInput
+      ? resolveVoiceIntentFromUtterance(userInput)
+      : null;
 
+    if (
+      digits &&
+      !state.awaiting &&
+      typeof state.bookingStepIndex !== "number" &&
+      resolvedVoiceIntentForTurn !== "booking"
+    ) {
       // Número de representante E.164 si quieres transferir (o deja null)
       const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
 
