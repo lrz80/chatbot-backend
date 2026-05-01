@@ -2236,6 +2236,89 @@ router.post('/', async (req: Request, res: Response) => {
           resolvedStepValue = serviceResolution.value;
         }
 
+        const isDatetimeStep =
+          currentStep.step_key === "datetime" || rawSlot === "datetime";
+
+        if (isDatetimeStep) {
+          const currentBookingData = {
+            ...(state.bookingData || {}),
+            [currentStep.step_key]: resolvedStepValue,
+          };
+
+          const serviceName = String(
+            currentBookingData.service || currentBookingData["service"] || ""
+          ).trim();
+
+          const rawDatetime = String(resolvedStepValue || "").trim();
+
+          if (serviceName && rawDatetime) {
+            const scheduleValidation = await resolveVoiceScheduleValidation({
+              tenantId: tenant.id,
+              serviceName,
+              rawDatetime,
+              channel: "voice",
+            });
+
+            if (!scheduleValidation.ok) {
+              state = {
+                ...state,
+                bookingStepIndex: currentIndex,
+                bookingData: currentBookingData,
+              };
+
+              await upsertVoiceCallState({
+                callSid,
+                tenantId: tenant.id,
+                lang: state.lang ?? currentLocale,
+                turn: state.turn ?? 0,
+                awaiting: false,
+                pendingType: null,
+                awaitingNumber: false,
+                altDest: state.altDest ?? null,
+                smsSent: state.smsSent ?? false,
+                bookingStepIndex: currentIndex,
+                bookingData: currentBookingData,
+              });
+
+              const retryPrompt = twoSentencesMax(
+                renderBookingTemplate(
+                  currentStep.retry_prompt || currentStep.prompt,
+                  buildBookingPromptVariables({
+                    bookingData: currentBookingData,
+                    callerE164,
+                  })
+                )
+              );
+
+              const gather = vr.gather({
+                input: ['speech'] as any,
+                action: '/webhook/voice-response',
+                method: 'POST',
+                language: currentLocale as any,
+                speechTimeout: 'auto',
+                timeout: 7,
+                actionOnEmptyResult: true,
+                bargeIn: true,
+              });
+
+              gather.say(
+                { language: currentLocale as any, voice: voiceName },
+                retryPrompt
+              );
+
+              logBotSay({
+                callSid,
+                to: didNumber || 'ivr',
+                text: retryPrompt,
+                lang: currentLocale,
+                context: `booking_retry:${currentStep.step_key}`,
+              });
+
+              return res.type('text/xml').send(vr.toString());
+            }
+          }
+        }
+
         const nextData = {
           ...(state.bookingData || {}),
           [currentStep.step_key]: resolvedStepValue,
