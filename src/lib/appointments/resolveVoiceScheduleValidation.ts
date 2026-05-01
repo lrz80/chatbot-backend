@@ -47,6 +47,7 @@ export async function resolveVoiceScheduleValidation(
     serviceName: params.serviceName,
     requestedAt: parsed.requestedAt,
     channel: params.channel || "voice",
+    timeZone: "America/New_York",
   });
 
   if (!scheduleValidation.ok) {

@@ -120,9 +120,25 @@ function buildAnswersBySlot(params: {
 // ———————————————————————————
 //  Helpers de formato de hora / idioma / sanitización
 // ———————————————————————————
+function verbalizeSpanishTime(hour24: number, minute: number) {
+  const period =
+    hour24 < 12 ? "de la mañana" :
+    hour24 < 19 ? "de la tarde" :
+    "de la noche";
+
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+
+  if (minute === 0) {
+    return `${hour12} ${period}`;
+  }
+
+  return `${hour12} y ${minute} ${period}`;
+}
+
 function normalizeClockText(text: string, locale: string) {
   let s = text || '';
   const isUS = (locale || '').toLowerCase() === 'en-us';
+  const isES = (locale || '').toLowerCase().startsWith('es');
 
   s = s
     .replace(/\bantes\s+del\s+meridiano\b/gi, 'am')
@@ -130,46 +146,26 @@ function normalizeClockText(text: string, locale: string) {
     .replace(/\ba\.?\s*m\.?\b/gi, 'am')
     .replace(/\bp\.?\s*m\.?\b/gi, 'pm');
 
-  s = s.replace(/\b(1[0-2]|0?[1-9]):([0-5]\d)\s*(am|pm)\b/gi, (_, h, mm, ap) => {
-    const hNum = parseInt(h, 10) % 12;
-    if (isUS) {
-      const h12 = hNum === 0 ? 12 : hNum;
-      return `${h12}:${mm} ${ap.toLowerCase()}`;
-    }
-    const h24 = (ap.toLowerCase() === 'pm') ? hNum + 12 : hNum;
-    return `${h24.toString().padStart(2, '0')}:${mm}`;
-  });
+  if (isES) {
+    s = s.replace(/\b(\d{1,2}):(\d{2})\s*(am|pm)\b/gi, (_, h, mm, ap) => {
+      let hour = Number(h) % 12;
+      const minute = Number(mm);
+      if (ap.toLowerCase() === 'pm') hour += 12;
+      return verbalizeSpanishTime(hour, minute);
+    });
 
-  s = s.replace(/\b(1[0-2]|0?[1-9])\s*(am|pm)\b/gi, (_, h, ap) => {
-    const hNum = parseInt(h, 10) % 12;
-    if (isUS) {
-      const h12 = hNum === 0 ? 12 : hNum;
-      return `${h12}:00 ${ap.toLowerCase()}`;
-    }
-    const h24 = (ap.toLowerCase() === 'pm') ? hNum + 12 : hNum;
-    return `${h24.toString().padStart(2, '0')}:00`;
-  });
+    s = s.replace(/\b(\d{1,2})\s*(am|pm)\b/gi, (_, h, ap) => {
+      let hour = Number(h) % 12;
+      if (ap.toLowerCase() === 'pm') hour += 12;
+      return verbalizeSpanishTime(hour, 0);
+    });
 
-  s = s.replace(/\b(1[0-2]|0?[1-9])\s*(?:a|hasta|-|–|—)\s*(1[0-2]|0?[1-9])\s*pm\b/gi, (_, h1, h2) => {
-    if (isUS) {
-      const a = (parseInt(h1,10)%12)||12;
-      const b = (parseInt(h2,10)%12)||12;
-      return `${a}:00 pm a ${b}:00 pm`;
-    }
-    const a24 = (parseInt(h1,10)%12)+12;
-    const b24 = (parseInt(h2,10)%12)+12;
-    return `${a24.toString().padStart(2,'0')}:00 a ${b24.toString().padStart(2,'0')}:00`;
-  });
-  s = s.replace(/\b(1[0-2]|0?[1-9])\s*(?:a|hasta|-|–|—)\s*(1[0-2]|0?[1-9])\s*am\b/gi, (_, h1, h2) => {
-    if (isUS) {
-      const a = (parseInt(h1,10)%12)||12;
-      const b = (parseInt(h2,10)%12)||12;
-      return `${a}:00 am a ${b}:00 am`;
-    }
-    const a24 = (parseInt(h1,10)%12);
-    const b24 = (parseInt(h2,10)%12);
-    return `${a24.toString().padStart(2,'0')}:00 a ${b24.toString().padStart(2,'0')}:00`;
-  });
+    s = s.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, hh, mm) => {
+      return verbalizeSpanishTime(Number(hh), Number(mm));
+    });
+
+    return s.replace(/\s+/g, ' ').trim();
+  }
 
   if (isUS) {
     s = s.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, hh, mm) => {
@@ -182,14 +178,76 @@ function normalizeClockText(text: string, locale: string) {
     s = s.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, hh, mm) =>
       `${parseInt(hh, 10).toString().padStart(2, '0')}:${mm}`
     );
-    s = s
-      .replace(/\b(am|pm)\b/gi, '')
-      .replace(/\b(a\.?\s*m\.?|p\.?\s*m\.?)\b/gi, '')
-      .replace(/\b(antes\s+del\s+meridiano|despu[eé]s\s+del\s+meridiano)\b/gi, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
   }
 
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+function expandUsStreetType(type: string, locale: string) {
+  const key = (type || "").toLowerCase().replace(/\./g, "");
+
+  const mapEs: Record<string, string> = {
+    st: "Street",
+    ave: "Avenue",
+    blvd: "Boulevard",
+    rd: "Road",
+    dr: "Drive",
+    ln: "Lane",
+    ct: "Court",
+    cir: "Circle",
+    pl: "Place",
+    pkwy: "Parkway",
+    hwy: "Highway",
+  };
+
+  const mapEn: Record<string, string> = {
+    st: "Street",
+    ave: "Avenue",
+    blvd: "Boulevard",
+    rd: "Road",
+    dr: "Drive",
+    ln: "Lane",
+    ct: "Court",
+    cir: "Circle",
+    pl: "Place",
+    pkwy: "Parkway",
+    hwy: "Highway",
+  };
+
+  const map = locale.toLowerCase().startsWith("es") ? mapEs : mapEn;
+  return map[key] || type;
+}
+
+function digitsForSpeech(value: string) {
+  return (value || "").split("").join(" ");
+}
+
+function normalizeAddressForSpeech(text: string, locale: string) {
+  let s = text || "";
+  const isES = locale.toLowerCase().startsWith("es");
+
+  s = s.replace(
+    /\b(\d{3,6})\s+([A-Za-zÀ-ÿ0-9'’.-]+(?:\s+[A-Za-zÀ-ÿ0-9'’.-]+)*)\s+(St|Ave|Blvd|Rd|Dr|Ln|Ct|Cir|Pl|Pkwy|Hwy)\b\.?/gi,
+    (_, streetNumber, streetName, streetType) => {
+      const spokenNumber = digitsForSpeech(String(streetNumber));
+      const spokenType = expandUsStreetType(String(streetType), locale);
+      return `${spokenNumber} ${streetName} ${spokenType}`;
+    }
+  );
+
+  s = s.replace(/\bFL\b/g, isES ? "Florida" : "Florida");
+  s = s.replace(/\b(\d{5})(-\d{4})?\b/g, (_, zip, extra) => {
+    const all = `${zip}${extra || ""}`.replace(/-/g, "");
+    return digitsForSpeech(all);
+  });
+
+  return s.replace(/\s+/g, " ").trim();
+}
+
+function normalizeSpeechOutput(text: string, locale: string) {
+  let s = text || "";
+  s = normalizeClockText(s, locale);
+  s = normalizeAddressForSpeech(s, locale);
   return s;
 }
 
@@ -2459,7 +2517,9 @@ router.post('/', async (req: Request, res: Response) => {
 
       const sayAndOffer = async (topic: 'precios'|'horarios'|'ubicacion'|'pagos', tipoLink: LinkType) => {
       const spokenRaw = await snippetFromPrompt({ topic, cfg, locale: currentLocale as any, brand });
-      const spoken = normalizeClockText(twoSentencesMax(spokenRaw), currentLocale as any);
+      const spoken = sanitizeForSay(
+        normalizeSpeechOutput(twoSentencesMax(spokenRaw), currentLocale as any)
+      );
       vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
 
       await offerSms(vr, currentLocale as any, voiceName, callSid, state, tipoLink, tenant.id);
@@ -2882,9 +2942,9 @@ router.post('/', async (req: Request, res: Response) => {
     const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
 
     // ✅ recorte a 2 frases y normalización de horas antes de locutar
-    respuesta = twoSentencesMax(respuesta);
-    respuesta = normalizeClockText(respuesta, currentLocale as any);
-    const speakOut = sanitizeForSay(respuesta);
+    const speakOut = sanitizeForSay(
+      normalizeSpeechOutput(twoSentencesMax(respuesta), currentLocale as any)
+    );
 
     // ⬇️ LOG — lo que dirá el bot (lo que Twilio locuta)
     logBotSay({
