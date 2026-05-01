@@ -190,7 +190,11 @@ export async function resolveBookingFlowSpeech(params: {
 
   if (!rendered) return "";
 
-  if ((params.locale || "").toLowerCase().startsWith("es")) {
+  const targetLocale = (params.locale || "").trim().toLowerCase();
+
+  // El booking flow base está persistido en inglés.
+  // Solo devolvemos directo cuando el idioma destino también es inglés.
+  if (!targetLocale || targetLocale === "en" || targetLocale.startsWith("en-")) {
     return rendered;
   }
 
