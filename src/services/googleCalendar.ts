@@ -251,21 +251,31 @@ export async function googleCreateEvent(params: {
     }
   );
 
-  const json = await resp.json().catch(() => ({}));
+  let json: any = null;
+  let rawText = "";
 
-  // ✅ Si Google devolvió meet link, lo anexamos al description para que sea visible siempre
-  const meetLink =
-    json?.hangoutLink ||
-    json?.conferenceData?.entryPoints?.find((e: any) => e?.entryPointType === "video")?.uri;
-
-  if (meetLink && typeof json?.description === "string" && !json.description.includes(meetLink)) {
-    json.description = `${json.description}\n\nGoogle Meet: ${meetLink}`.trim();
+  try {
+    rawText = await resp.text();
+    json = rawText ? JSON.parse(rawText) : null;
+  } catch (error) {
+    console.error("Google create event parse failed:", {
+      tenantId: params.tenantId,
+      calendarId: params.calendarId || "primary",
+      status: resp.status,
+      rawText,
+      error,
+    });
+    json = null;
   }
 
-  json.meetLink = meetLink || null;
-
   if (!resp.ok) {
-    console.error("Google create event failed:", json);
+    console.error("Google create event failed:", {
+      tenantId: params.tenantId,
+      calendarId: params.calendarId || "primary",
+      status: resp.status,
+      body: json,
+      rawText,
+    });
 
     if (resp.status === 401 || resp.status === 403) {
       await markGoogleDisconnected(params.tenantId, `create_${resp.status}`);
@@ -275,13 +285,38 @@ export async function googleCreateEvent(params: {
     throw new Error("google_create_event_failed");
   }
 
-  // ✅ VERIFICACIÓN: GET del evento recién creado
+  const meetLink =
+    json?.hangoutLink ||
+    json?.conferenceData?.entryPoints?.find((e: any) => e?.entryPointType === "video")?.uri ||
+    null;
+
+  if (json && meetLink && typeof json.description === "string" && !json.description.includes(meetLink)) {
+    json.description = `${json.description}\n\nGoogle Meet: ${meetLink}`.trim();
+  }
+
+  if (json) {
+    json.meetLink = meetLink;
+  }
+
   const createdEventId = String(json?.id || "").trim();
 
-  const verified =
-    createdEventId
-      ? await googleGetEvent({ accessToken, calendarId, eventId: createdEventId })
-      : null;
+  if (!createdEventId) {
+    console.error("Google create event returned success without id:", {
+      tenantId: params.tenantId,
+      calendarId: params.calendarId || "primary",
+      status: resp.status,
+      body: json,
+      rawText,
+    });
+
+    throw new Error("google_create_event_missing_id");
+  }
+
+  const verified = await googleGetEvent({
+    accessToken,
+    calendarId,
+    eventId: createdEventId,
+  });
 
   console.log("🟣 [GCAL INSERT]", {
     tenantId: params.tenantId,
@@ -305,7 +340,21 @@ export async function googleCreateEvent(params: {
   });
 
   // ✅ Devuelve SIEMPRE el evento verificado si existe
-  return verified || json;
+  const finalEvent = verified || json;
+
+  if (!finalEvent?.id) {
+    console.error("Google create event verification missing id:", {
+      tenantId: params.tenantId,
+      calendarId: params.calendarId || "primary",
+      createdEventId,
+      verified,
+      json,
+    });
+
+    throw new Error("google_create_event_missing_id");
+  }
+
+  return finalEvent;
 }
 
 async function googleGetEvent(args: {
