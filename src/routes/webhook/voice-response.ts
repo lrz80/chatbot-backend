@@ -6,15 +6,20 @@ import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { cycleStartForNow } from '../../utils/billingCycle';
 import { sendSMS, normalizarNumero } from '../../lib/senders/sms';
 import { canUseChannel } from "../../lib/features";
-import { createAppointmentFromVoice } from "../../lib/appointments/createAppointmentFromVoice";
+
 import { getBookingFlow } from "../../lib/appointments/getBookingFlow";
-import { resolveVoiceScheduleValidation } from "../../lib/appointments/resolveVoiceScheduleValidation";
 
 import { getVoiceCallState } from "../../lib/voice/getVoiceCallState";
 import { upsertVoiceCallState } from "../../lib/voice/upsertVoiceCallState";
 import { deleteVoiceCallState } from "../../lib/voice/deleteVoiceCallState";
 import { resolveVoiceIntentFromUtterance } from "../../lib/voice/resolveVoiceIntentFromUtterance";
 import { traducirTexto } from "../../lib/traducirTexto";
+
+import { CallState, LinkType } from "../../lib/voice/types";
+import {
+  wordsToDigits,
+} from "../../lib/voice/voiceBookingHelpers";
+import { handleVoiceBookingTurn } from "../../lib/voice/handleVoiceBookingTurn";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -95,27 +100,6 @@ Paso actual: ${stepInstruction[step]}
   });
 
   return completion.choices[0].message.content?.trim() || '';
-}
-
-function buildAnswersBySlot(params: {
-  flow: Awaited<ReturnType<typeof getBookingFlow>>;
-  bookingData: Record<string, string>;
-}) {
-  const answersBySlot: Record<string, string> = {};
-
-  for (const step of params.flow) {
-    const rawSlot = step.validation_config?.slot;
-    const slot = typeof rawSlot === "string" ? rawSlot.trim() : "";
-
-    if (!slot || slot === "none") continue;
-
-    const value = params.bookingData?.[step.step_key];
-    if (!value) continue;
-
-    answersBySlot[slot] = value;
-  }
-
-  return answersBySlot;
 }
 
 // ———————————————————————————
@@ -252,19 +236,6 @@ function normalizeSpeechOutput(text: string, locale: string) {
   return s;
 }
 
-// ===== Estado por llamada (en memoria) =====
-type CallState = {
-  awaiting?: boolean;
-  pendingType?: 'reservar' | 'comprar' | 'soporte' | 'web' | null;
-  awaitingNumber?: boolean;
-  altDest?: string | null;
-  smsSent?: boolean;
-  lang?: 'es-ES' | 'en-US' | 'pt-BR';
-  turn?: number;
-  bookingStepIndex?: number;
-  bookingData?: Record<string, string>;
-};
-
 const sanitizeForSay = (s: string) =>
   (s || '')
     .replace(/[*_`~^>#-]+/g, ' ')
@@ -305,8 +276,6 @@ const didAssistantPromiseSms = (t: string) => {
   const s = normTxt(t);
   return /\b(te lo envio por sms|te lo mand(o|are) por sms|te lo envio por mensaje|te lo mando por mensaje|ill text it to you|ill send it by text)\b/u.test(s);
 };
-
-type LinkType = 'reservar' | 'comprar' | 'soporte' | 'web';
 
 const guessType = (t: string): LinkType => {
   const s = (t || '').toLowerCase();
@@ -710,27 +679,6 @@ function logBotSay({
   }));
 }
 
-async function getLastAssistantVoiceMessage(params: {
-  tenantId: string;
-  didNumber: string;
-}) {
-  const { rows } = await pool.query(
-    `
-    SELECT content
-    FROM messages
-    WHERE tenant_id = $1
-      AND canal = $2
-      AND role = 'assistant'
-      AND from_number = $3
-    ORDER BY timestamp DESC
-    LIMIT 1
-    `,
-    [params.tenantId, CHANNEL_KEY, params.didNumber || 'sistema']
-  );
-
-  return (rows?.[0]?.content || '').toString().trim();
-}
-
 const LINK_SYNONYMS: Record<LinkType, string[]> = {
   reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
   comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay', 'precio', 'precios', 'prices'],
@@ -759,252 +707,6 @@ function coerceSpeechToDigit(s: string): '1'|'2'|'3'|'4'|undefined {
   if (/^(4|four|for)\b/u.test(w)) return '4';
 
   return undefined;
-}
-
-// Convierte números hablados a dígitos (ES/EN) para capturar teléfonos por voz
-function wordsToDigits(s: string) {
-  if (!s) return '';
-  const txt = s
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // sin acentos
-    .replace(/[^\p{L}\p{N}\s\+]/gu, ' ')             // limpia símbolos raros
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  const map: Record<string, string> = {
-    // ESP
-    'cero':'0','uno':'1','una':'1','dos':'2','tres':'3','cuatro':'4','cinco':'5','seis':'6','siete':'7','ocho':'8','nueve':'9',
-    'diez':'10', // por si lo dicen en pareja; intentaremos dividir luego
-    // ENG
-    'zero':'0','oh':'0','o':'0', // "oh" / "o" a veces para 0
-    'one':'1','won':'1', 'juan':'1','two':'2','too':'2','to':'2','three':'3','tri':'3', 'tree':'3', 'free':'3','four':'4','for':'4','fore':'4','five':'5','six':'6','seven':'7','eight':'8','ate':'8','eit':'8','nine':'9','nain':'9',
-    // Ruido común
-    'plus':'+','mas':'+','más':'+','signo':'','signo+':'','guion':'','guión':'','dash':'','space':'','y':'','and':'',
-    // “relleno” que conviene ignorar cuando dictan: “mi número es…”
-    'mi':'','numero':'','número':'','es':'','my':'','number':'','is':'','codigo':'','código':'','area':'','code':'',
-    'con':'','de':'','a':'','al':'','please':'','por':'','favor':'','please,':'',
-  };
-
-  const out: string[] = [];
-  for (const token of txt.split(' ')) {
-    if (/^\+?\d+$/.test(token)) { out.push(token); continue; } // ya venía como 305 o +1
-    const m = map[token];
-    if (m != null) out.push(m);
-  }
-
-  let joined = out.join('');
-  // Normaliza múltiplos '+' y deja solo el inicial
-  if ((joined.match(/\+/g) || []).length > 1) {
-    joined = '+' + joined.replace(/\+/g, '');
-  }
-  // Si quedó "10" proveniente de "diez", parte en "1" "0" (teléfonos se dictan dígito a dígito)
-  joined = joined.replace(/10/g, '10'); // (nada que hacer si realmente dijeron "diez"; se usa tal cual)
-  // Quita caracteres que no sean + o dígito:
-  joined = joined.replace(/[^\d+]/g, '');
-
-  // Si NO empieza con '+' y parece número válido de 10–15, prepende '+' (lo haces igual en tu flujo)
-  if (!joined.startsWith('+') && /^\d{10,15}$/.test(joined)) {
-    joined = '+' + joined;
-  }
-
-  return joined;
-}
-
-function renderBookingTemplate(
-  template: string,
-  bookingData: Record<string, string>
-) {
-  let output = template || "";
-
-  for (const [key, value] of Object.entries(bookingData || {})) {
-    output = output.split(`{${key}}`).join(value || "");
-  }
-
-  return output.trim();
-}
-
-function buildBookingPromptVariables(params: {
-  bookingData: Record<string, string>;
-  callerE164: string | null;
-}) {
-  return {
-    ...params.bookingData,
-    current_phone: params.callerE164 || "",
-    current_phone_masked: params.callerE164 ? maskForVoice(params.callerE164) : "",
-  };
-}
-
-async function resolveBookingFlowSpeech(params: {
-  baseText: string;
-  locale: string;
-  bookingData: Record<string, string>;
-  callerE164: string | null;
-}) {
-  const rendered = renderBookingTemplate(
-    params.baseText,
-    buildBookingPromptVariables({
-      bookingData: params.bookingData || {},
-      callerE164: params.callerE164,
-    })
-  ).trim();
-
-  if (!rendered) return "";
-
-  if ((params.locale || "").toLowerCase().startsWith("es")) {
-    return rendered;
-  }
-
-  return (await traducirTexto(rendered, params.locale)).trim();
-}
-
-function resolveBookingSuccessStep(params: {
-  flow: Awaited<ReturnType<typeof getBookingFlow>>;
-}) {
-  return params.flow.find((step) => {
-    if (!step.enabled) return false;
-    if (step.expected_type !== "text") return false;
-    if (step.required) return false;
-
-    const slot =
-      typeof step.validation_config?.slot === "string"
-        ? step.validation_config.slot.trim()
-        : "";
-
-    return slot === "none";
-  });
-}
-
-function normalizeVoiceServiceText(value: string) {
-  return (value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-type VoiceBookingServiceOption = {
-  value: string;
-  aliases: string[];
-};
-
-type VoiceBookingServiceResolution =
-  | { kind: "resolved_single"; value: string }
-  | { kind: "ambiguous"; options: string[] }
-  | { kind: "none" };
-
-function parseVoiceBookingServices(raw: string): VoiceBookingServiceOption[] {
-  return (raw || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [canonicalPart, aliasesPart = ""] = line.split("|");
-      const value = (canonicalPart || "").trim();
-
-      const aliases = aliasesPart
-        .split(",")
-        .map((alias) => alias.trim())
-        .filter(Boolean);
-
-      if (!value) return null;
-
-      return {
-        value,
-        aliases,
-      };
-    })
-    .filter((item): item is VoiceBookingServiceOption => Boolean(item));
-}
-
-function scoreVoiceBookingCandidate(userInput: string, candidate: string): number {
-  const normalizedInput = normalizeVoiceServiceText(userInput);
-  const normalizedCandidate = normalizeVoiceServiceText(candidate);
-
-  if (!normalizedInput || !normalizedCandidate) return 0;
-
-  if (normalizedInput === normalizedCandidate) {
-    return 100;
-  }
-
-  if (
-    normalizedInput.includes(normalizedCandidate) ||
-    normalizedCandidate.includes(normalizedInput)
-  ) {
-    return 85;
-  }
-
-  const inputTokens = new Set(normalizedInput.split(" ").filter(Boolean));
-  const candidateTokens = normalizedCandidate.split(" ").filter(Boolean);
-
-  if (!candidateTokens.length) return 0;
-
-  const overlap = candidateTokens.filter((token) => inputTokens.has(token)).length;
-  const coverage = overlap / candidateTokens.length;
-
-  if (coverage >= 0.8) return 75;
-  if (coverage >= 0.6) return 60;
-  if (coverage >= 0.4) return 40;
-
-  return 0;
-}
-
-function resolveVoiceBookingService(params: {
-  userInput: string;
-  rawConfig: string;
-}): VoiceBookingServiceResolution {
-  const normalizedInput = normalizeVoiceServiceText(params.userInput);
-  const options = parseVoiceBookingServices(params.rawConfig);
-
-  if (!normalizedInput || !options.length) {
-    return { kind: "none" };
-  }
-
-  const ranked = options
-    .map((option) => {
-      const candidates = [option.value, ...option.aliases];
-      const bestScore = Math.max(
-        ...candidates.map((candidate) =>
-          scoreVoiceBookingCandidate(params.userInput, candidate)
-        )
-      );
-
-      return {
-        value: option.value,
-        score: bestScore,
-      };
-    })
-    .filter((item) => item.score >= 60)
-    .sort((a, b) => b.score - a.score);
-
-  if (!ranked.length) {
-    return { kind: "none" };
-  }
-
-  const top = ranked[0];
-  const second = ranked[1];
-
-  if (top.score >= 85 && (!second || top.score - second.score >= 15)) {
-    return {
-      kind: "resolved_single",
-      value: top.value,
-    };
-  }
-
-  const ambiguousOptions = ranked.slice(0, 4).map((item) => item.value);
-
-  if (ambiguousOptions.length === 1) {
-    return {
-      kind: "resolved_single",
-      value: ambiguousOptions[0],
-    };
-  }
-
-  return {
-    kind: "ambiguous",
-    options: ambiguousOptions,
-  };
 }
 
 router.post('/lang', async (req: Request, res: Response) => {
@@ -1095,56 +797,6 @@ router.post('/lang', async (req: Request, res: Response) => {
   vr.redirect('/webhook/voice-response?lang=en');
   return res.type('text/xml').send(vr.toString());
 });
-
-type PhoneResolutionResult =
-  | { ok: true; value: string }
-  | { ok: false };
-
-function resolvePhoneFromVoiceInput(params: {
-  userInput: string;
-  digits: string;
-  callerE164: string | null;
-  step: any;
-}): PhoneResolutionResult {
-  const raw = (params.userInput || params.digits || "").trim();
-  const config = params.step?.validation_config || {};
-  const mode = typeof config.mode === "string" ? config.mode : "free_input";
-  const useInboundCaller = !!config.use_inbound_caller;
-
-  const spoken = wordsToDigits(raw || "");
-  const digitsOnly = extractDigits(spoken || raw || "");
-
-  if (digitsOnly) {
-    const normalized = normalizarNumero(`+${digitsOnly}`);
-    if (isValidE164(normalized)) {
-      return { ok: true, value: normalized };
-    }
-  }
-
-  // ✅ Si el flujo permite usar el número entrante y ya tenemos uno válido,
-  // úsalo automáticamente como valor del slot.
-  if (
-    useInboundCaller &&
-    params.callerE164 &&
-    isValidE164(params.callerE164) &&
-    (mode === "confirm_or_replace" || mode === "inbound_caller")
-  ) {
-    return { ok: true, value: params.callerE164 };
-  }
-
-  // ✅ Mantén compatibilidad con confirmación explícita por voz/dtmf
-  if (
-    mode === "confirm_or_replace" &&
-    useInboundCaller &&
-    params.callerE164 &&
-    isValidE164(params.callerE164) &&
-    (saidYes(raw) || params.digits === "1")
-  ) {
-    return { ok: true, value: params.callerE164 };
-  }
-
-  return { ok: false };
-}
 
 //  Handler
 router.post('/', async (req: Request, res: Response) => {
@@ -1483,66 +1135,33 @@ router.post('/', async (req: Request, res: Response) => {
       // Si estamos dentro de un booking, NO vuelvas a la bienvenida.
       // Repite el step actual del booking.
       if (typeof state.bookingStepIndex === "number") {
-        const flow = await getBookingFlow(tenant.id);
-        const currentStep = flow[state.bookingStepIndex];
+        const bookingTurnResult = await handleVoiceBookingTurn({
+          vr: new twiml.VoiceResponse(),
+          tenant,
+          cfg,
+          callSid,
+          didNumber,
+          callerE164,
+          currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
+          voiceName,
+          state,
+          userInput: "",
+          effectiveUserInput: "",
+          digits: "",
+          logBotSay,
+        });
 
-        if (currentStep) {
-          const vrBookingSilence = new twiml.VoiceResponse();
-
-          const basePrompt = currentStep.retry_prompt || currentStep.prompt || "";
-
-          let prompt = await resolveBookingFlowSpeech({
-            baseText: basePrompt,
-            locale: currentLocale,
-            bookingData: state.bookingData || {},
-            callerE164,
-          });
-
-          prompt = twoSentencesMax(prompt);
-
-          const isPhoneStep = currentStep.expected_type === "phone";
-          const isConfirmationStep = currentStep.expected_type === "confirmation";
-
-          const gather = vrBookingSilence.gather({
-            input: isPhoneStep || isConfirmationStep ? ['speech', 'dtmf'] as any : ['speech'] as any,
-            numDigits: isPhoneStep ? 15 : isConfirmationStep ? 1 : undefined,
-            action: '/webhook/voice-response',
-            method: 'POST',
-            language: currentLocale as any,
-            speechTimeout: 'auto',
-            timeout: 7,
-            actionOnEmptyResult: true,
-            bargeIn: true,
-          });
-
-          gather.say(
-            { language: currentLocale as any, voice: voiceName },
-            prompt
-          );
-
-          logBotSay({
-            callSid,
-            to: didNumber || 'ivr',
-            text: prompt,
-            lang: currentLocale,
-            context: `booking_retry:${currentStep.step_key}`,
-          });
-
-          return res.type('text/xml').send(vrBookingSilence.toString());
+        if (bookingTurnResult.handled) {
+          return res.type("text/xml").send(bookingTurnResult.twiml);
         }
       }
 
       // Si no hay booking activo, mantén el contexto repitiendo el último mensaje real del bot
       const vrSilence = new twiml.VoiceResponse();
 
-      const lastAssistantMessage = await getLastAssistantVoiceMessage({
-        tenantId: tenant.id,
-        didNumber: didNumber || 'sistema',
-      });
-
       const retryText = twoSentencesMax(
         sanitizeForSay(
-          lastAssistantMessage || (cfg?.welcome_message || '').trim()
+          (cfg?.welcome_message || '').trim()
         )
       );
 
@@ -1850,26 +1469,8 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type('text/xml').send(vr.toString());
     }
 
-    // Caso B: último turno marcó <SMS_PENDING:...> y ahora dijo “sí/1”
-    if (!earlySmsType) {
-      const { rows: lastAssistantRows } = await pool.query(
-        `SELECT content
-          FROM messages
-          WHERE tenant_id = $1
-            AND canal = $2
-            AND role = 'assistant'
-            AND from_number = $3
-          ORDER BY timestamp DESC
-          LIMIT 1`,
-        [tenant?.id, CHANNEL_KEY, didNumber || 'sistema']
-      );
-
-      const lastAssistantText: string = lastAssistantRows?.[0]?.content || '';
-      const pendingMatch = lastAssistantText.match(/<SMS_PENDING:(reservar|comprar|soporte|web)>/i);
-
-      if (pendingMatch && (saidYes(effectiveUserInput) || digits === '1')) {
-        earlySmsType = pendingMatch[1].toLowerCase() as LinkType;
-      }
+    if (!earlySmsType && state.awaiting && state.pendingType && (saidYes(effectiveUserInput) || digits === "1")) {
+      earlySmsType = state.pendingType as LinkType;
     }
 
     if (earlySmsType) {
@@ -1994,567 +1595,27 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ——— FAST INTENT: si el usuario pidió algo directo (sin DTMF), lee desde prompt y luego ofrece SMS ———
     if (effectiveUserInput) {
-      const resolvedVoiceIntent = resolveVoiceIntentFromUtterance(effectiveUserInput);
-      const wantsBooking = resolvedVoiceIntent === "booking";
+      const bookingTurnResult = await handleVoiceBookingTurn({
+        vr,
+        tenant,
+        cfg,
+        callSid,
+        didNumber,
+        callerE164,
+        currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
+        voiceName,
+        state,
+        userInput,
+        effectiveUserInput,
+        digits,
+        logBotSay,
+      });
 
-      if (wantsBooking && typeof state.bookingStepIndex !== "number") {
-        const flow = await getBookingFlow(tenant.id);
-
-        console.log("[VOICE][BOOKING_FLOW_LOADED]", {
-          callSid,
-          tenantId: tenant.id,
-          steps: flow.map((s) => ({
-            key: s.step_key,
-            order: s.step_order,
-            type: s.expected_type,
-            enabled: s.enabled,
-            slot:
-              typeof s.validation_config?.slot === "string"
-                ? s.validation_config.slot
-                : null,
-            validation_config: s.validation_config || null,
-          })),
-        });
-
-        if (!flow.length) {
-          throw new Error("BOOKING_FLOW_NOT_CONFIGURED");
-        }
-
-        const firstStep = flow[0];
-
-        state = {
-          ...state,
-          bookingStepIndex: 0,
-          bookingData: {},
-        };
-
-        await upsertVoiceCallState({
-          callSid,
-          tenantId: tenant.id,
-          lang: state.lang ?? currentLocale,
-          turn: state.turn ?? 0,
-          awaiting: state.awaiting ?? false,
-          pendingType: state.pendingType ?? null,
-          awaitingNumber: state.awaitingNumber ?? false,
-          altDest: state.altDest ?? null,
-          smsSent: state.smsSent ?? false,
-          bookingStepIndex: 0,
-          bookingData: {},
-        });
-
-        const ask = twoSentencesMax(firstStep.prompt);
-
-        const gather = vr.gather({
-          input: ['speech'] as any,
-          action: '/webhook/voice-response',
-          method: 'POST',
-          language: currentLocale as any,
-          speechTimeout: 'auto',
-          timeout: 7,
-          actionOnEmptyResult: true,
-          bargeIn: true,
-        });
-
-        gather.say({ language: currentLocale as any, voice: voiceName }, ask);
-
-        return res.type('text/xml').send(vr.toString());
+      if (bookingTurnResult.handled) {
+        return res.type("text/xml").send(bookingTurnResult.twiml);
       }
 
-      if (typeof state.bookingStepIndex === "number") {
-        const flow = await getBookingFlow(tenant.id);
-        const currentIndex = state.bookingStepIndex;
-        const currentStep = flow[currentIndex];
-
-        if (!currentStep) {
-          await deleteVoiceCallState(callSid);
-          throw new Error("BOOKING_STEP_NOT_FOUND");
-        }
-
-        if (currentStep.expected_type === "confirmation") {
-          if (saidYes(userInput) || digits === "1") {
-            try {
-              const { rows: settingsRows } = await pool.query(
-                `
-                SELECT
-                  default_duration_min,
-                  buffer_min,
-                  min_lead_minutes,
-                  timezone,
-                  enabled
-                FROM appointment_settings
-                WHERE tenant_id = $1
-                LIMIT 1
-                `,
-                [tenant.id]
-              );
-
-              const appointmentSettings = settingsRows[0] || {
-                default_duration_min: 30,
-                buffer_min: 10,
-                min_lead_minutes: 60,
-                timezone: "America/New_York",
-                enabled: true,
-              };
-
-              const answersBySlot = buildAnswersBySlot({
-                flow,
-                bookingData: state.bookingData || {},
-              });
-
-              console.log("[VOICE][BOOKING_DATA_RESOLVED]", {
-                callSid,
-                bookingData: state.bookingData || {},
-                answersBySlot,
-              });
-
-              const appointment = await createAppointmentFromVoice({
-                tenantId: tenant.id,
-                answersBySlot,
-                idempotencyKey: `voice:${callSid}`,
-                settings: appointmentSettings,
-              });
-
-              console.log("[VOICE][APPOINTMENT_CREATED]", {
-                callSid,
-                appointmentId: appointment.id,
-                tenantId: tenant.id,
-              });
-
-              const successStep = resolveBookingSuccessStep({ flow });
-
-              if (!successStep) {
-                throw new Error("BOOKING_SUCCESS_STEP_NOT_CONFIGURED");
-              }
-
-              const successPrompt = renderBookingTemplate(
-                successStep.prompt,
-                buildBookingPromptVariables({
-                  bookingData: state.bookingData || {},
-                  callerE164,
-                })
-              );
-
-              const gather = vr.gather({
-                input: ['speech','dtmf'] as any,
-                numDigits: 1,
-                action: '/webhook/voice-response',
-                method: 'POST',
-                language: currentLocale as any,
-                speechTimeout: 'auto',
-                timeout: 7,
-                actionOnEmptyResult: true,
-                bargeIn: true,
-              });
-
-              gather.say(
-                { language: currentLocale as any, voice: voiceName },
-                twoSentencesMax(successPrompt)
-              );
-
-              await upsertVoiceCallState({
-                callSid,
-                tenantId: tenant.id,
-                lang: state.lang ?? currentLocale,
-                turn: state.turn ?? 0,
-                awaiting: false,
-                pendingType: null,
-                awaitingNumber: false,
-                altDest: state.altDest ?? null,
-                smsSent: false,
-                bookingStepIndex: null,
-                bookingData: {},
-              });
-
-              return res.type('text/xml').send(vr.toString());
-            } catch (err) {
-              console.error("❌ Error creando cita:", err);
-
-              const failRaw = cfg?.booking_error_message || "Hubo un problema al agendar la cita.";
-              vr.say({ language: currentLocale as any, voice: voiceName }, twoSentencesMax(failRaw));
-              vr.hangup();
-
-              return res.type('text/xml').send(vr.toString());
-            }
-          }
-
-          if (saidNo(userInput) || digits === "2") {
-            await deleteVoiceCallState(callSid);
-
-            const cancelRaw = cfg?.booking_cancel_message || "No se agendó la cita.";
-            const gather = vr.gather({
-              input: ['speech','dtmf'] as any,
-              numDigits: 1,
-              action: '/webhook/voice-response',
-              method: 'POST',
-              language: currentLocale as any,
-            });
-
-            gather.say({ language: currentLocale as any, voice: voiceName }, twoSentencesMax(cancelRaw));
-            return res.type('text/xml').send(vr.toString());
-          }
-
-          const retry = twoSentencesMax(
-            await resolveBookingFlowSpeech({
-              baseText: currentStep.prompt || "",
-              locale: currentLocale,
-              bookingData: state.bookingData || {},
-              callerE164,
-            })
-          );
-
-          const gather = vr.gather({
-            input: ['speech','dtmf'] as any,
-            numDigits: 1,
-            action: '/webhook/voice-response',
-            method: 'POST',
-            language: currentLocale as any,
-          });
-
-          gather.say({ language: currentLocale as any, voice: voiceName }, retry);
-          return res.type('text/xml').send(vr.toString());
-        }
-
-        if (currentStep.expected_type === "phone") {
-          const phoneResolution = resolvePhoneFromVoiceInput({
-            userInput: effectiveUserInput,
-            digits,
-            callerE164,
-            step: currentStep,
-          });
-
-          if (!phoneResolution.ok) {
-            const gather = vr.gather({
-              input: ['speech','dtmf'] as any,
-              numDigits: 1,
-              action: '/webhook/voice-response',
-              method: 'POST',
-              language: currentLocale as any,
-              speechTimeout: 'auto',
-              timeout: 7,
-              actionOnEmptyResult: true,
-              bargeIn: true,
-            });
-
-            const retryPrompt = await resolveBookingFlowSpeech({
-              baseText: currentStep.retry_prompt || currentStep.prompt || "",
-              locale: currentLocale,
-              bookingData: state.bookingData || {},
-              callerE164,
-            });
-
-            gather.say(
-              { language: currentLocale as any, voice: voiceName },
-              twoSentencesMax(retryPrompt)
-            );
-
-            return res.type('text/xml').send(vr.toString());
-          }
-
-          const nextData: Record<string, string> = {
-            ...(state.bookingData || {}),
-            [currentStep.step_key]: phoneResolution.value,
-          };
-
-          const nextIndex = currentIndex + 1;
-          const nextStep = flow[nextIndex];
-
-          if (!nextStep) {
-            await deleteVoiceCallState(callSid);
-            throw new Error("BOOKING_CONFIRM_STEP_MISSING");
-          }
-
-          const prompt = await resolveBookingFlowSpeech({
-            baseText: nextStep.prompt || "",
-            locale: currentLocale,
-            bookingData: nextData,
-            callerE164,
-          });
-
-          state = {
-            ...state,
-            bookingStepIndex: nextIndex,
-            bookingData: nextData,
-          };
-
-          await upsertVoiceCallState({
-            callSid,
-            tenantId: tenant.id,
-            lang: state.lang ?? currentLocale,
-            turn: state.turn ?? 0,
-            awaiting: state.awaiting ?? false,
-            pendingType: state.pendingType ?? null,
-            awaitingNumber: state.awaitingNumber ?? false,
-            altDest: state.altDest ?? null,
-            smsSent: state.smsSent ?? false,
-            bookingStepIndex: nextIndex,
-            bookingData: nextData,
-          });
-
-          const isPhoneStep = nextStep.expected_type === "phone";
-          const isConfirmationStep = nextStep.expected_type === "confirmation";
-
-          const gather = vr.gather({
-            input: isPhoneStep || isConfirmationStep ? ['speech', 'dtmf'] as any : ['speech'] as any,
-            numDigits: isPhoneStep ? 15 : isConfirmationStep ? 1 : undefined,
-            action: '/webhook/voice-response',
-            method: 'POST',
-            language: currentLocale as any,
-            speechTimeout: 'auto',
-            timeout: 7,
-            actionOnEmptyResult: true,
-            bargeIn: true,
-          });
-
-          gather.say(
-            { language: currentLocale as any, voice: voiceName },
-            twoSentencesMax(prompt)
-          );
-
-          return res.type('text/xml').send(vr.toString());
-        }
-
-        let resolvedStepValue = effectiveUserInput;
-
-        const rawSlot =
-          typeof currentStep.validation_config?.slot === "string"
-            ? currentStep.validation_config.slot.trim()
-            : "";
-
-        const isServiceStep =
-          currentStep.step_key === "service" || rawSlot === "service";
-
-        if (isServiceStep) {
-          const serviceResolution = resolveVoiceBookingService({
-            userInput: effectiveUserInput,
-            rawConfig: cfg?.booking_services_text || "",
-          });
-
-          if (serviceResolution.kind === "none") {
-            const retryPrompt = await resolveBookingFlowSpeech({
-              baseText:
-                currentStep.retry_prompt ||
-                "I didn’t clearly catch the service you want to book. Which service would you like to book?",
-              locale: currentLocale,
-              bookingData: state.bookingData || {},
-              callerE164,
-            });
-
-            const gather = vr.gather({
-              input: ['speech'] as any,
-              action: '/webhook/voice-response',
-              method: 'POST',
-              language: currentLocale as any,
-              speechTimeout: 'auto',
-              timeout: 7,
-              actionOnEmptyResult: true,
-              bargeIn: true,
-            });
-
-            gather.say(
-              { language: currentLocale as any, voice: voiceName },
-              twoSentencesMax(retryPrompt)
-            );
-
-            return res.type('text/xml').send(vr.toString());
-          }
-
-          if (serviceResolution.kind === "ambiguous") {
-            const optionsText = serviceResolution.options.join(", ");
-
-            const ambiguousPrompt = await resolveBookingFlowSpeech({
-              baseText:
-                "I found several similar options: ${optionsText}. Please say the full service name you want to book.",
-              locale: currentLocale,
-              bookingData: {
-                ...(state.bookingData || {}),
-                available_options: optionsText,
-              },
-              callerE164,
-            });
-
-            const gather = vr.gather({
-              input: ['speech'] as any,
-              action: '/webhook/voice-response',
-              method: 'POST',
-              language: currentLocale as any,
-              speechTimeout: 'auto',
-              timeout: 7,
-              actionOnEmptyResult: true,
-              bargeIn: true,
-            });
-
-            gather.say(
-              { language: currentLocale as any, voice: voiceName },
-              twoSentencesMax(ambiguousPrompt)
-            );
-
-            return res.type('text/xml').send(vr.toString());
-          }
-
-          resolvedStepValue = serviceResolution.value;
-        }
-
-        const isDatetimeStep =
-          currentStep.step_key === "datetime" || rawSlot === "datetime";
-
-        if (isDatetimeStep) {
-          const currentBookingData = {
-            ...(state.bookingData || {}),
-            [currentStep.step_key]: resolvedStepValue,
-          };
-
-          const serviceName = String(
-            currentBookingData.service || currentBookingData["service"] || ""
-          ).trim();
-
-          const rawDatetime = String(resolvedStepValue || "").trim();
-
-          if (serviceName && rawDatetime) {
-            const scheduleValidation = await resolveVoiceScheduleValidation({
-              tenantId: tenant.id,
-              serviceName,
-              rawDatetime,
-              channel: "voice",
-            });
-
-            if (!scheduleValidation.ok) {
-              state = {
-                ...state,
-                bookingStepIndex: currentIndex,
-                bookingData: currentBookingData,
-              };
-
-              await upsertVoiceCallState({
-                callSid,
-                tenantId: tenant.id,
-                lang: state.lang ?? currentLocale,
-                turn: state.turn ?? 0,
-                awaiting: false,
-                pendingType: null,
-                awaitingNumber: false,
-                altDest: state.altDest ?? null,
-                smsSent: state.smsSent ?? false,
-                bookingStepIndex: currentIndex,
-                bookingData: currentBookingData,
-              });
-
-              const unavailablePrompt =
-                typeof currentStep.validation_config?.unavailable_prompt === "string"
-                  ? currentStep.validation_config.unavailable_prompt.trim()
-                  : "";
-
-              const availableTimes =
-                scheduleValidation.reason === "schedule_not_available"
-                  ? scheduleValidation.availableTimes.join(", ")
-                  : "";
-
-              const promptTemplate =
-                scheduleValidation.reason === "schedule_not_available" && unavailablePrompt
-                  ? unavailablePrompt
-                  : (currentStep.retry_prompt || currentStep.prompt);
-
-              const retryPrompt = twoSentencesMax(
-                await resolveBookingFlowSpeech({
-                  baseText: promptTemplate,
-                  locale: currentLocale,
-                  bookingData: {
-                    ...currentBookingData,
-                    requested_service: String(currentBookingData.service || "").trim(),
-                    requested_datetime: rawDatetime,
-                    available_times: availableTimes,
-                  },
-                  callerE164,
-                })
-              );
-
-              const gather = vr.gather({
-                input: ['speech'] as any,
-                action: '/webhook/voice-response',
-                method: 'POST',
-                language: currentLocale as any,
-                speechTimeout: 'auto',
-                timeout: 7,
-                actionOnEmptyResult: true,
-                bargeIn: true,
-              });
-
-              gather.say(
-                { language: currentLocale as any, voice: voiceName },
-                retryPrompt
-              );
-
-              logBotSay({
-                callSid,
-                to: didNumber || 'ivr',
-                text: retryPrompt,
-                lang: currentLocale,
-                context: `booking_retry:${currentStep.step_key}`,
-              });
-
-              return res.type('text/xml').send(vr.toString());
-            }
-          }
-        }
-
-        const nextData = {
-          ...(state.bookingData || {}),
-          [currentStep.step_key]: resolvedStepValue,
-        };
-
-        const nextIndex = currentIndex + 1;
-        const nextStep = flow[nextIndex];
-
-        if (!nextStep) {
-          await deleteVoiceCallState(callSid);
-          throw new Error("BOOKING_CONFIRM_STEP_MISSING");
-        }
-
-        const prompt = await resolveBookingFlowSpeech({
-          baseText: nextStep.prompt || "",
-          locale: currentLocale,
-          bookingData: nextData,
-          callerE164,
-        });
-
-        state = {
-          ...state,
-          bookingStepIndex: nextIndex,
-          bookingData: nextData,
-        };
-
-        await upsertVoiceCallState({
-          callSid,
-          tenantId: tenant.id,
-          lang: state.lang ?? currentLocale,
-          turn: state.turn ?? 0,
-          awaiting: state.awaiting ?? false,
-          pendingType: state.pendingType ?? null,
-          awaitingNumber: state.awaitingNumber ?? false,
-          altDest: state.altDest ?? null,
-          smsSent: state.smsSent ?? false,
-          bookingStepIndex: nextIndex,
-          bookingData: nextData,
-        });
-
-        const isPhoneStep = nextStep.expected_type === "phone";
-        const isConfirmationStep = nextStep.expected_type === "confirmation";
-
-        const gather = vr.gather({
-          input: isPhoneStep || isConfirmationStep ? ['speech', 'dtmf'] as any : ['speech'] as any,
-          numDigits: isPhoneStep ? 15 : isConfirmationStep ? 1 : undefined,
-          action: '/webhook/voice-response',
-          method: 'POST',
-          language: currentLocale as any,
-          speechTimeout: 'auto',
-          timeout: 7,
-          actionOnEmptyResult: true,
-          bargeIn: true,
-        });
-
-        gather.say({ language: currentLocale as any, voice: voiceName }, twoSentencesMax(prompt));
-
-        return res.type('text/xml').send(vr.toString());
-      }
+      state = bookingTurnResult.state;
 
       const s = effectiveUserInput.toLowerCase();
 
@@ -2563,22 +1624,40 @@ router.post('/', async (req: Request, res: Response) => {
       const wantsLocation = /(ubicaci[oó]n|direcci[oó]n|d[oó]nde|address|location|mapa|maps)/i.test(s);
       const wantsPayments = /(pago|pagar|checkout|buy|pay|payment)/i.test(s);
 
-      const sayAndOffer = async (topic: 'precios'|'horarios'|'ubicacion'|'pagos', tipoLink: LinkType) => {
-      const spokenRaw = await snippetFromPrompt({ topic, cfg, locale: currentLocale as any, brand });
-      const spoken = sanitizeForSay(
-        normalizeSpeechOutput(twoSentencesMax(spokenRaw), currentLocale as any)
-      );
-      vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
+      const sayAndOffer = async (
+        topic: "precios" | "horarios" | "ubicacion" | "pagos",
+        tipoLink: LinkType
+      ) => {
+        const spokenRaw = await snippetFromPrompt({
+          topic,
+          cfg,
+          locale: currentLocale as any,
+          brand,
+        });
 
-      await offerSms(vr, currentLocale as any, voiceName, callSid, state, tipoLink, tenant.id);
+        const spoken = sanitizeForSay(
+          normalizeSpeechOutput(twoSentencesMax(spokenRaw), currentLocale as any)
+        );
 
-      return res.type('text/xml').send(vr.toString());
-    };
+        vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
 
-      if (wantsPrices)   return await sayAndOffer('precios',   'comprar');
-      if (wantsHours)    return await sayAndOffer('horarios',  'web');
-      if (wantsLocation) return await sayAndOffer('ubicacion', 'web');
-      if (wantsPayments) return await sayAndOffer('pagos',     'comprar');
+        await offerSms(
+          vr,
+          currentLocale as any,
+          voiceName,
+          callSid,
+          state,
+          tipoLink,
+          tenant.id
+        );
+
+        return res.type("text/xml").send(vr.toString());
+      };
+
+      if (wantsPrices) return await sayAndOffer("precios", "comprar");
+      if (wantsHours) return await sayAndOffer("horarios", "web");
+      if (wantsLocation) return await sayAndOffer("ubicacion", "web");
+      if (wantsPayments) return await sayAndOffer("pagos", "comprar");
     }
 
     // ——— OpenAI ———
@@ -2633,21 +1712,6 @@ router.post('/', async (req: Request, res: Response) => {
     } catch (e) {
       console.warn('⚠️ OpenAI falló, usando fallback:', e);
     }
-
-        // ¿El turno anterior dejó un SMS pendiente?
-        const { rows: lastAssistantRows } = await pool.query(
-          `SELECT content
-            FROM messages
-            WHERE tenant_id = $1
-              AND canal = $2
-              AND role = 'assistant'
-              AND from_number = $3
-            ORDER BY timestamp DESC
-            LIMIT 1`,
-          [tenant.id, CHANNEL_KEY, didNumber || 'sistema']
-        );
-        const lastAssistantText: string = lastAssistantRows?.[0]?.content || '';
-        const pendingMatch = lastAssistantText.match(/<SMS_PENDING:(reservar|comprar|soporte|web)>/i);
 
     // ——— Decidir si hay que ENVIAR SMS con link útil ———
     const tagMatch = respuesta.match(/\[\[SMS:(reservar|comprar|soporte|web)\]\]/i);
@@ -2750,7 +1814,7 @@ router.post('/', async (req: Request, res: Response) => {
       saidYes: saidYes(effectiveUserInput),
       saidNo: saidNo(effectiveUserInput),
       tagMatch: !!tagMatch,
-      pendingMatch: !!pendingMatch,
+      pendingMatch: !!state.pendingType,
       askedForSms: askedForSms(effectiveUserInput),
       smsType,
     });
@@ -3050,7 +2114,7 @@ router.post('/', async (req: Request, res: Response) => {
   const errText = errLocale.startsWith('es')
     ? 'Perdón, hubo un problema. ¿Quieres que te envíe la información por SMS? Di sí o pulsa 1.'
     : 'Sorry, there was a problem. Do you want me to text you the info? Say yes or press 1.';
-  vrErr.say({ language: errLocale as any, voice: resolveVoice('es-ES') as any }, errText);
+  vrErr.say({ language: errLocale as any, voice: resolveVoice(errLocale) as any }, errText);
   vrErr.gather({
     input: ['speech','dtmf'] as any,
     numDigits: 1,
