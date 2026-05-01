@@ -75,6 +75,8 @@ export async function createAppointmentFromVoice(args: Args) {
     tenantId: args.tenantId,
     summary: serviceName,
     description: [
+      `Agendado por: Aamy`,
+      `Servicio: ${serviceName}`,
       `Canal: voice`,
       `Cliente: ${customerName}`,
       customerPhone ? `Teléfono: ${customerPhone}` : null,

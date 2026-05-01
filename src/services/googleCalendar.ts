@@ -1,5 +1,4 @@
 //src/services/googleCalendar.ts
-import pool from "../lib/db";
 import crypto from "crypto";
 import {
   getBookingProviderSecrets,

@@ -1043,6 +1043,18 @@ function resolvePhoneFromVoiceInput(params: {
     }
   }
 
+  // ✅ Si el flujo permite usar el número entrante y ya tenemos uno válido,
+  // úsalo automáticamente como valor del slot.
+  if (
+    useInboundCaller &&
+    params.callerE164 &&
+    isValidE164(params.callerE164) &&
+    (mode === "confirm_or_replace" || mode === "inbound_caller")
+  ) {
+    return { ok: true, value: params.callerE164 };
+  }
+
+  // ✅ Mantén compatibilidad con confirmación explícita por voz/dtmf
   if (
     mode === "confirm_or_replace" &&
     useInboundCaller &&
