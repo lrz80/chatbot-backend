@@ -2324,13 +2324,33 @@ router.post('/', async (req: Request, res: Response) => {
                 bookingData: currentBookingData,
               });
 
+              const unavailablePrompt =
+                typeof currentStep.validation_config?.unavailable_prompt === "string"
+                  ? currentStep.validation_config.unavailable_prompt.trim()
+                  : "";
+
+              const availableTimes =
+                scheduleValidation.reason === "schedule_not_available"
+                  ? scheduleValidation.availableTimes.join(", ")
+                  : "";
+
+              const promptTemplate =
+                scheduleValidation.reason === "schedule_not_available" && unavailablePrompt
+                  ? unavailablePrompt
+                  : (currentStep.retry_prompt || currentStep.prompt);
+
               const retryPrompt = twoSentencesMax(
                 renderBookingTemplate(
-                  currentStep.retry_prompt || currentStep.prompt,
-                  buildBookingPromptVariables({
-                    bookingData: currentBookingData,
-                    callerE164,
-                  })
+                  promptTemplate,
+                  {
+                    ...buildBookingPromptVariables({
+                      bookingData: currentBookingData,
+                      callerE164,
+                    }),
+                    requested_service: String(currentBookingData.service || "").trim(),
+                    requested_datetime: String(currentBookingData.datetime || "").trim(),
+                    available_times: availableTimes,
+                  }
                 )
               );
 
