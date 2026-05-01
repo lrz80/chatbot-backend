@@ -15,6 +15,7 @@ type ParseVoiceRequestedDateResult =
     };
 
 const WEEKDAY_MAP: Record<string, number> = {
+  // español
   domingo: 0,
   lunes: 1,
   martes: 2,
@@ -24,6 +25,15 @@ const WEEKDAY_MAP: Record<string, number> = {
   viernes: 5,
   sabado: 6,
   sábado: 6,
+
+  // inglés
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
 };
 
 type TimeZoneDateParts = {
@@ -38,7 +48,7 @@ function normalizeText(value: string): string {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{N}\s:]/gu, " ")
+    .replace(/[^\p{L}\p{N}\s:.]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -93,11 +103,11 @@ function resolveTargetDateParts(
   const normalized = normalizeText(text);
   const baseParts = getDatePartsInTimeZone(baseDate, timeZone);
 
-  if (normalized.includes("hoy")) {
+  if (normalized.includes("hoy") || normalized.includes("today")) {
     return baseParts;
   }
 
-  if (normalized.includes("manana")) {
+  if (normalized.includes("manana") || normalized.includes("tomorrow")) {
     return addDaysToParts(baseParts, 1, timeZone);
   }
 
@@ -151,15 +161,19 @@ function parseHourMinute(text: string): { hour: number; minute: number } | null 
 
   if (hour === null) return null;
 
+  const compact = normalized
+    .replace(/\ba\s*\.?\s*m\s*\.?\b/g, "am")
+    .replace(/\bp\s*\.?\s*m\s*\.?\b/g, "pm");
+
   const isPM =
-    normalized.includes("pm") ||
-    normalized.includes("de la tarde") ||
-    normalized.includes("de la noche");
+    compact.includes("pm") ||
+    compact.includes("de la tarde") ||
+    compact.includes("de la noche");
 
   const isAM =
-    normalized.includes("am") ||
-    normalized.includes("de la manana") ||
-    normalized.includes("de la mañana");
+    compact.includes("am") ||
+    compact.includes("de la manana") ||
+    compact.includes("de la mañana");
 
   if (isPM && hour < 12) {
     hour += 12;
