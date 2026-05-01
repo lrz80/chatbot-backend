@@ -58,7 +58,7 @@ export class GoogleCalendarProvider implements BookingProviderAdapter {
       timeZone: input.timeZone,
     });
 
-    if (!event?.id || !event?.htmlLink) {
+    if (!event?.id) {
       return {
         ok: false,
         provider: this.provider,
