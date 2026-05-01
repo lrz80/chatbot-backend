@@ -40,23 +40,35 @@ export async function validateServiceSchedule(
 
   const requestedTime = normalizeHHMM(params.timeHHMM);
 
-  const serviceSchedules = schedules.filter(
+  const sameDaySchedules = schedules.filter(
     (row) =>
       row.enabled === true &&
       row.service_name === params.serviceName &&
       row.day_of_week === params.dayOfWeek
-  );
+    );
 
-  const availableTimes = serviceSchedules.map((row) =>
-    String(row.start_time).slice(0, 5)
-  );
+    const availableTimesSameDay = sameDaySchedules.map((row) =>
+      String(row.start_time).slice(0, 5)
+    );
 
-  const exists = availableTimes.includes(requestedTime);
+    const exists = availableTimesSameDay.includes(requestedTime);
 
-  if (!exists) {
+    if (!exists) {
+      const fallbackTimes = schedules
+        .filter(
+          (row) =>
+            row.enabled === true &&
+            row.service_name === params.serviceName
+        )
+        .map((row) => String(row.start_time).slice(0, 5));
+
+    const uniqueTimes = Array.from(new Set(
+      availableTimesSameDay.length ? availableTimesSameDay : fallbackTimes
+    ));
+
     return {
       ok: false,
-      availableTimes,
+      availableTimes: uniqueTimes,
     };
   }
 

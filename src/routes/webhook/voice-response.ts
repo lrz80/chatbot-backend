@@ -1224,7 +1224,13 @@ router.post('/', async (req: Request, res: Response) => {
     console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
 
     // ——— Menú inicial si aún no hay input ni confirmaciones pendientes ———
-    if (!userInput && !digits && !state.awaiting && !state.awaitingNumber) {
+    if (
+      !userInput &&
+      !digits &&
+      !state.awaiting &&
+      !state.awaitingNumber &&
+      typeof state.bookingStepIndex !== "number"
+    ) {
       const brandForMenu = await getTenantBrand(tenant.id);
 
       const fallbackWelcome = currentLocale.startsWith('es')
