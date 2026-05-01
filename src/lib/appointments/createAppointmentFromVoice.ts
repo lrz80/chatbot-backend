@@ -2,6 +2,7 @@
 import pool from "../db";
 import { resolveVoiceScheduleValidation } from "./resolveVoiceScheduleValidation";
 import { BookingProviderOrchestrator } from "./booking/providers/orchestrator";
+import { resolveAppointmentServiceId } from "./resolveAppointmentServiceId";
 
 type AppointmentSettings = {
   default_duration_min: number;
@@ -119,6 +120,11 @@ export async function createAppointmentFromVoice(args: Args) {
       ? externalBooking.htmlLink
       : null;
 
+  const resolvedServiceId = await resolveAppointmentServiceId({
+    tenantId: args.tenantId,
+    serviceName,
+  });
+
   const { rows } = await pool.query(
     `
     INSERT INTO appointments (
@@ -141,18 +147,18 @@ export async function createAppointmentFromVoice(args: Args) {
     )
     VALUES (
       $1,
-      NULL,
-      'voice',
       $2,
+      'voice',
       $3,
       $4,
       $5,
       $6,
-      'confirmed',
       $7,
+      'confirmed',
       $8,
       $9,
       $10,
+      $11,
       NULL,
       NOW(),
       NOW()
@@ -164,6 +170,7 @@ export async function createAppointmentFromVoice(args: Args) {
     `,
     [
       args.tenantId,
+      resolvedServiceId,
       customerName,
       customerPhone,
       customerEmail,

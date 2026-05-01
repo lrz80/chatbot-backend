@@ -1,6 +1,13 @@
 //src/lib/appointments/booking/providers/googleCalendarProvider.ts
-import { googleCreateEvent, googleFreeBusy } from "../../../../services/googleCalendar";
+import {
+  googleCreateEvent,
+  googleFreeBusy,
+} from "../../../../services/googleCalendar";
 import { extractBusyBlocks } from "../freebusy";
+import {
+  getEffectiveServiceBookingRule,
+  countConfirmedAppointmentsForSlot,
+} from "../../serviceBookingRules";
 import type {
   BookingProviderAdapter,
   CreateExternalBookingInput,
@@ -13,6 +20,11 @@ export class GoogleCalendarProvider implements BookingProviderAdapter {
   async createExternalBooking(
     input: CreateExternalBookingInput
   ): Promise<CreateExternalBookingResult> {
+    const effectiveRule = await getEffectiveServiceBookingRule({
+      tenantId: input.tenantId,
+      serviceName: input.summary,
+    });
+
     const timeMin = new Date(
       new Date(input.startISO).getTime() - input.bufferMin * 60 * 1000
     ).toISOString();
@@ -21,31 +33,57 @@ export class GoogleCalendarProvider implements BookingProviderAdapter {
       new Date(input.endISO).getTime() + input.bufferMin * 60 * 1000
     ).toISOString();
 
-    const fb = await googleFreeBusy({
-      tenantId: input.tenantId,
-      timeMin,
-      timeMax,
-      calendarIds: input.calendarId ? [input.calendarId, "primary"] : ["primary"],
-    });
+    // ✅ Servicios exclusivos: se siguen validando con freeBusy
+    if (effectiveRule.booking_mode === "exclusive") {
+      const fb = await googleFreeBusy({
+        tenantId: input.tenantId,
+        timeMin,
+        timeMax,
+        calendarIds: input.calendarId ? [input.calendarId, "primary"] : ["primary"],
+      });
 
-    if ((fb as any)?.degraded) {
-      return {
-        ok: false,
-        provider: this.provider,
-        error: "FREEBUSY_DEGRADED",
-        busy: [],
-      };
+      if ((fb as any)?.degraded) {
+        return {
+          ok: false,
+          provider: this.provider,
+          error: "FREEBUSY_DEGRADED",
+          busy: [],
+        };
+      }
+
+      const busy = extractBusyBlocks(fb);
+
+      if (busy.length > 0) {
+        return {
+          ok: false,
+          provider: this.provider,
+          error: "SLOT_BUSY",
+          busy,
+        };
+      }
     }
 
-    const busy = extractBusyBlocks(fb);
+    // ✅ Servicios compartidos: validar por capacidad en DB
+    if (effectiveRule.booking_mode === "shared") {
+      const confirmedCount = await countConfirmedAppointmentsForSlot({
+        tenantId: input.tenantId,
+        serviceName: input.summary,
+        startISO: input.startISO,
+      });
 
-    if (busy.length > 0) {
-      return {
-        ok: false,
-        provider: this.provider,
-        error: "SLOT_BUSY",
-        busy,
-      };
+      if (confirmedCount >= effectiveRule.slot_capacity) {
+        return {
+          ok: false,
+          provider: this.provider,
+          error: "SLOT_BUSY",
+          busy: [
+            {
+              start: input.startISO,
+              end: input.endISO,
+            },
+          ],
+        };
+      }
     }
 
     const event = await googleCreateEvent({
