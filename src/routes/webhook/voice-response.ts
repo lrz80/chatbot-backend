@@ -14,6 +14,7 @@ import { getVoiceCallState } from "../../lib/voice/getVoiceCallState";
 import { upsertVoiceCallState } from "../../lib/voice/upsertVoiceCallState";
 import { deleteVoiceCallState } from "../../lib/voice/deleteVoiceCallState";
 import { resolveVoiceIntentFromUtterance } from "../../lib/voice/resolveVoiceIntentFromUtterance";
+import { traducirTexto } from "../../lib/traducirTexto";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -833,6 +834,29 @@ function buildBookingPromptVariables(params: {
   };
 }
 
+async function resolveBookingFlowSpeech(params: {
+  baseText: string;
+  locale: string;
+  bookingData: Record<string, string>;
+  callerE164: string | null;
+}) {
+  const rendered = renderBookingTemplate(
+    params.baseText,
+    buildBookingPromptVariables({
+      bookingData: params.bookingData || {},
+      callerE164: params.callerE164,
+    })
+  ).trim();
+
+  if (!rendered) return "";
+
+  if ((params.locale || "").toLowerCase().startsWith("es")) {
+    return rendered;
+  }
+
+  return (await traducirTexto(rendered, params.locale)).trim();
+}
+
 function resolveBookingSuccessStep(params: {
   flow: Awaited<ReturnType<typeof getBookingFlow>>;
 }) {
@@ -1378,46 +1402,14 @@ router.post('/', async (req: Request, res: Response) => {
         if (currentStep) {
           const vrBookingSilence = new twiml.VoiceResponse();
 
-          let prompt = renderBookingTemplate(
-            currentStep.retry_prompt || currentStep.prompt,
-            buildBookingPromptVariables({
-              bookingData: state.bookingData || {},
-              callerE164,
-            })
-          );
+          const basePrompt = currentStep.retry_prompt || currentStep.prompt || "";
 
-          // ✅ Si la llamada está en inglés, no leas tal cual el prompt de DB en español.
-          // Reescríbelo en el idioma correcto usando el generador.
-          if (currentLocale === "en-US") {
-            if (currentStep.step_key === "service") {
-              prompt = await generateVoiceReply({
-                tenantName: brand,
-                userInput,
-                step: "service",
-                locale: currentLocale,
-                bookingData: state.bookingData || {},
-                cfg,
-              });
-            } else if (currentStep.step_key === "datetime") {
-              prompt = await generateVoiceReply({
-                tenantName: brand,
-                userInput,
-                step: "datetime",
-                locale: currentLocale,
-                bookingData: state.bookingData || {},
-                cfg,
-              });
-            } else if (currentStep.step_key === "confirm") {
-              prompt = await generateVoiceReply({
-                tenantName: brand,
-                userInput,
-                step: "confirm",
-                locale: currentLocale,
-                bookingData: state.bookingData || {},
-                cfg,
-              });
-            }
-          }
+          let prompt = await resolveBookingFlowSpeech({
+            baseText: basePrompt,
+            locale: currentLocale,
+            bookingData: state.bookingData || {},
+            callerE164,
+          });
 
           prompt = twoSentencesMax(prompt);
 
@@ -2139,9 +2131,16 @@ router.post('/', async (req: Request, res: Response) => {
               bargeIn: true,
             });
 
+            const retryPrompt = await resolveBookingFlowSpeech({
+              baseText: currentStep.retry_prompt || currentStep.prompt || "",
+              locale: currentLocale,
+              bookingData: state.bookingData || {},
+              callerE164,
+            });
+
             gather.say(
               { language: currentLocale as any, voice: voiceName },
-              twoSentencesMax(currentStep.retry_prompt || currentStep.prompt)
+              twoSentencesMax(retryPrompt)
             );
 
             return res.type('text/xml').send(vr.toString());
@@ -2160,13 +2159,12 @@ router.post('/', async (req: Request, res: Response) => {
             throw new Error("BOOKING_CONFIRM_STEP_MISSING");
           }
 
-          const prompt = renderBookingTemplate(
-            nextStep.prompt,
-            buildBookingPromptVariables({
-              bookingData: nextData,
-              callerE164,
-            })
-          );
+          const prompt = await resolveBookingFlowSpeech({
+            baseText: nextStep.prompt || "",
+            locale: currentLocale,
+            bookingData: nextData,
+            callerE164,
+          });
 
           state = {
             ...state,
@@ -2228,11 +2226,14 @@ router.post('/', async (req: Request, res: Response) => {
           });
 
           if (serviceResolution.kind === "none") {
-            const retryPrompt =
-              currentStep.retry_prompt ||
-              (currentLocale.startsWith("es")
-                ? "No entendí bien el servicio que deseas agendar. ¿Cuál servicio quieres reservar?"
-                : "I didn’t clearly catch the service you want to book. Which service would you like to book?");
+            const retryPrompt = await resolveBookingFlowSpeech({
+              baseText:
+                currentStep.retry_prompt ||
+                "I didn’t clearly catch the service you want to book. Which service would you like to book?",
+              locale: currentLocale,
+              bookingData: state.bookingData || {},
+              callerE164,
+            });
 
             const gather = vr.gather({
               input: ['speech'] as any,
@@ -2398,13 +2399,12 @@ router.post('/', async (req: Request, res: Response) => {
           throw new Error("BOOKING_CONFIRM_STEP_MISSING");
         }
 
-        const prompt = renderBookingTemplate(
-          nextStep.prompt,
-          buildBookingPromptVariables({
-            bookingData: nextData,
-            callerE164,
-          })
-        );
+        const prompt = await resolveBookingFlowSpeech({
+          baseText: nextStep.prompt || "",
+          locale: currentLocale,
+          bookingData: nextData,
+          callerE164,
+        });
 
         state = {
           ...state,

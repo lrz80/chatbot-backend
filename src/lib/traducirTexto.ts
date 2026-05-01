@@ -4,7 +4,22 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 // Cache simple en memoria
 const cache = new Map<string, string>();
-const CACHE_VERSION = "v4_catalog_labels";
+const CACHE_VERSION = "v5_booking_flow_safe";
+
+function normalizeTargetLanguage(idioma: string): string {
+  const raw = String(idioma || "").trim().toLowerCase();
+
+  if (!raw) return "es";
+
+  if (raw.startsWith("en")) return "en";
+  if (raw.startsWith("es")) return "es";
+  if (raw.startsWith("pt")) return "pt";
+  if (raw.startsWith("fr")) return "fr";
+  if (raw.startsWith("it")) return "it";
+  if (raw.startsWith("de")) return "de";
+
+  return raw;
+}
 
 export async function traducirTexto(
   texto: string,
@@ -13,21 +28,34 @@ export async function traducirTexto(
 ): Promise<string> {
   if (!texto) return "";
 
-  const key = `${CACHE_VERSION}::${mode}::${texto}::${idioma}`;
+  const targetLanguage = normalizeTargetLanguage(idioma);
+
+  // Evita traducir si ya está en español y ese es el destino base más común.
+  // Si quieres, luego esto se puede hacer mejor usando detectarIdioma.
+  if (targetLanguage === "es") {
+    return texto;
+  }
+
+  const key = `${CACHE_VERSION}::${mode}::${texto}::${targetLanguage}`;
   if (cache.has(key)) return cache.get(key)!;
 
-  // ===============================
-  // 🔒 PROTEGER TOKENS
-  // ===============================
   const protectedTokens: string[] = [];
+
   const freeze = (match: string) => {
     const token = `__KEEP_${protectedTokens.length}__`;
     protectedTokens.push(match);
     return token;
   };
 
+  let protectedText = texto;
+
+  // ===============================
+  // 🔒 PROTEGER PLACEHOLDERS
+  // ===============================
+  protectedText = protectedText.replace(/\{[a-zA-Z0-9_]+\}/g, freeze);
+
   // URLs
-  let protectedText = texto.replace(/https?:\/\/\S+/gi, freeze);
+  protectedText = protectedText.replace(/https?:\/\/\S+/gi, freeze);
 
   // Emails
   protectedText = protectedText.replace(
@@ -41,7 +69,13 @@ export async function traducirTexto(
     freeze
   );
 
-  // Números
+  // Teléfonos
+  protectedText = protectedText.replace(
+    /\+?\d[\d\s\-().]{6,}\d/g,
+    freeze
+  );
+
+  // Horas y números
   protectedText = protectedText.replace(
     /\b\d+(?:[.,]\d+)?(?:%|\/\d+)?(?::\d{2})?\b/g,
     freeze
@@ -55,13 +89,20 @@ REGLAS EXTRA DE CATÁLOGO:
 - NO hagas traducción literal palabra por palabra si produce frases poco naturales.
 - Conserva exactamente números, precios, símbolos y tokens __KEEP_X__.
 `
-      : "";
+      : `
+REGLAS EXTRA DE FLUJO:
+- Esto puede ser un mensaje de voz o interfaz conversacional.
+- Mantén un tono natural y claro.
+- Conserva exactamente placeholders, números, símbolos y tokens __KEEP_X__.
+- NO agregues información nueva.
+`;
 
   const prompt = `
-Traduce el siguiente texto al idioma "${idioma}".
+Traduce el siguiente texto al idioma "${targetLanguage}".
 
 REGLAS OBLIGATORIAS:
 - NO cambies ningún número, símbolo ($), moneda, porcentaje ni tokens __KEEP_X__.
+- NO traduzcas ni alteres placeholders como __KEEP_X__.
 - NO reordenes líneas. Mantén EXACTAMENTE el mismo orden.
 - NO cambies el formato de viñetas ni los saltos de línea.
 - Solo traduce palabras.
@@ -78,9 +119,6 @@ ${protectedText}
 
   let translated = response.output_text.trim();
 
-  // ===============================
-  // 🔓 RESTAURAR TOKENS
-  // ===============================
   protectedTokens.forEach((val, i) => {
     const token = `__KEEP_${i}__`;
     translated = translated.split(token).join(val);
