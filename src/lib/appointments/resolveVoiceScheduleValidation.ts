@@ -8,6 +8,7 @@ type ResolveVoiceScheduleValidationParams = {
   rawDatetime: string;
   channel?: string;
   baseDate?: Date;
+  timeZone?: string;
 };
 
 export type ResolveVoiceScheduleValidationResult =
@@ -29,9 +30,12 @@ export type ResolveVoiceScheduleValidationResult =
 export async function resolveVoiceScheduleValidation(
   params: ResolveVoiceScheduleValidationParams
 ): Promise<ResolveVoiceScheduleValidationResult> {
+  const timeZone = params.timeZone || "America/New_York";
+
   const parsed = parseVoiceRequestedDate({
     raw: params.rawDatetime,
     baseDate: params.baseDate,
+    timeZone,
   });
 
   if (!parsed.ok) {
@@ -47,7 +51,7 @@ export async function resolveVoiceScheduleValidation(
     serviceName: params.serviceName,
     requestedAt: parsed.requestedAt,
     channel: params.channel || "voice",
-    timeZone: "America/New_York",
+    timeZone,
   });
 
   if (!scheduleValidation.ok) {

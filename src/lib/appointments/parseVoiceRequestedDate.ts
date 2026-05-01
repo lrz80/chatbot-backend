@@ -2,6 +2,7 @@
 type ParseVoiceRequestedDateParams = {
   raw: string;
   baseDate?: Date;
+  timeZone?: string;
 };
 
 type ParseVoiceRequestedDateResult =
@@ -25,6 +26,13 @@ const WEEKDAY_MAP: Record<string, number> = {
   sábado: 6,
 };
 
+type TimeZoneDateParts = {
+  year: number;
+  month: number;
+  day: number;
+  weekday: number;
+};
+
 function normalizeText(value: string): string {
   return (value || "")
     .toLowerCase()
@@ -35,34 +43,70 @@ function normalizeText(value: string): string {
     .trim();
 }
 
-function cloneDate(date: Date): Date {
-  return new Date(date.getTime());
+function getDatePartsInTimeZone(date: Date, timeZone: string): TimeZoneDateParts {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  }).formatToParts(date);
+
+  const year = Number(parts.find((p) => p.type === "year")?.value || "0");
+  const month = Number(parts.find((p) => p.type === "month")?.value || "0");
+  const day = Number(parts.find((p) => p.type === "day")?.value || "0");
+  const weekdayShort = parts.find((p) => p.type === "weekday")?.value || "";
+
+  const weekdayMap: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+
+  return {
+    year,
+    month,
+    day,
+    weekday: weekdayMap[weekdayShort],
+  };
 }
 
-function addDays(date: Date, days: number): Date {
-  const d = cloneDate(date);
-  d.setDate(d.getDate() + days);
-  return d;
+function addDaysToParts(
+  parts: TimeZoneDateParts,
+  days: number,
+  timeZone: string
+): TimeZoneDateParts {
+  const utcBase = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12, 0, 0));
+  utcBase.setUTCDate(utcBase.getUTCDate() + days);
+  return getDatePartsInTimeZone(utcBase, timeZone);
 }
 
-function resolveTargetDate(text: string, baseDate: Date): Date | null {
+function resolveTargetDateParts(
+  text: string,
+  baseDate: Date,
+  timeZone: string
+): TimeZoneDateParts | null {
   const normalized = normalizeText(text);
+  const baseParts = getDatePartsInTimeZone(baseDate, timeZone);
 
   if (normalized.includes("hoy")) {
-    return cloneDate(baseDate);
+    return baseParts;
   }
 
   if (normalized.includes("manana")) {
-    return addDays(baseDate, 1);
+    return addDaysToParts(baseParts, 1, timeZone);
   }
 
   for (const [label, weekday] of Object.entries(WEEKDAY_MAP)) {
     if (normalized.includes(label)) {
-      const currentWeekday = baseDate.getDay();
-      let diff = weekday - currentWeekday;
+      let diff = weekday - baseParts.weekday;
       if (diff < 0) diff += 7;
       if (diff === 0) diff = 7;
-      return addDays(baseDate, diff);
+      return addDaysToParts(baseParts, diff, timeZone);
     }
   }
 
@@ -132,27 +176,73 @@ function parseHourMinute(text: string): { hour: number; minute: number } | null 
   return { hour, minute };
 }
 
+function buildDateInTimeZone(params: {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  timeZone: string;
+}): Date {
+  const { year, month, day, hour, minute, timeZone } = params;
+
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
+
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+
+  const parts = formatter.formatToParts(utcGuess);
+
+  const tzYear = Number(parts.find((p) => p.type === "year")?.value || "0");
+  const tzMonth = Number(parts.find((p) => p.type === "month")?.value || "0");
+  const tzDay = Number(parts.find((p) => p.type === "day")?.value || "0");
+  const tzHour = Number(parts.find((p) => p.type === "hour")?.value || "0");
+  const tzMinute = Number(parts.find((p) => p.type === "minute")?.value || "0");
+
+  const desiredUtcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const observedUtcMs = Date.UTC(tzYear, tzMonth - 1, tzDay, tzHour, tzMinute, 0, 0);
+
+  const diffMs = desiredUtcMs - observedUtcMs;
+
+  return new Date(utcGuess.getTime() + diffMs);
+}
+
 export function parseVoiceRequestedDate(
   params: ParseVoiceRequestedDateParams
 ): ParseVoiceRequestedDateResult {
   const baseDate = params.baseDate ? new Date(params.baseDate) : new Date();
   const raw = String(params.raw || "").trim();
+  const timeZone = params.timeZone || "America/New_York";
 
   if (!raw) {
     return { ok: false };
   }
 
-  const targetDate = resolveTargetDate(raw, baseDate);
+  const targetDateParts = resolveTargetDateParts(raw, baseDate, timeZone);
   const time = parseHourMinute(raw);
 
-  if (!targetDate || !time) {
+  if (!targetDateParts || !time) {
     return { ok: false };
   }
 
-  targetDate.setHours(time.hour, time.minute, 0, 0);
+  const requestedAt = buildDateInTimeZone({
+    year: targetDateParts.year,
+    month: targetDateParts.month,
+    day: targetDateParts.day,
+    hour: time.hour,
+    minute: time.minute,
+    timeZone,
+  });
 
   return {
     ok: true,
-    requestedAt: targetDate,
+    requestedAt,
   };
 }
