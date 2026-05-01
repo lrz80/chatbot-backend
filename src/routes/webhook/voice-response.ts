@@ -1025,6 +1025,19 @@ router.post('/lang', async (req: Request, res: Response) => {
     bodyKeys: Object.keys(req.body || {})
   }));
 
+  const callSid = (req.body.CallSid || '').toString();
+  const to = (req.body.To || '').toString().replace(/^tel:/, '');
+
+  const tRes = await pool.query(
+    `SELECT id
+       FROM tenants
+      WHERE twilio_voice_number = $1
+      LIMIT 1`,
+    [to]
+  );
+
+  const tenant = tRes.rows[0];
+
   let chosen: 'en' | 'es' = 'en';
   if (rawDigits === '2') {
     chosen = 'es';
@@ -1032,15 +1045,54 @@ router.post('/lang', async (req: Request, res: Response) => {
     chosen = 'es';
   }
 
-  const vr = new twiml.VoiceResponse();
-  if (chosen === 'es') {
-    vr.say({ language: 'es-ES', voice: resolveVoice('es-ES') as any }, 'Has seleccionado español.');
-    vr.redirect('/webhook/voice-response?lang=es');
-  } else {
-    vr.say({ language: 'en-US', voice: resolveVoice('en-US') as any }, 'Continuing in English.');
-    vr.redirect('/webhook/voice-response?lang=en');
+  const explicitSpanish =
+    rawDigits === '2' ||
+    /(spanish|espanol|español|castellano|\b2\b|dos)/i.test(speech);
+
+  const hasRealUtterance =
+    !!speechRaw &&
+    !explicitSpanish &&
+    rawDigits !== '2';
+
+  if (tenant && callSid) {
+    await upsertVoiceCallState({
+      callSid,
+      tenantId: tenant.id,
+      lang: explicitSpanish ? 'es-ES' : 'en-US',
+      turn: 0,
+      awaiting: false,
+      pendingType: null,
+      awaitingNumber: false,
+      altDest: null,
+      smsSent: false,
+      bookingStepIndex: null,
+      bookingData: hasRealUtterance
+        ? { __pending_utterance: speechRaw.trim() }
+        : {},
+    });
   }
 
+  const vr = new twiml.VoiceResponse();
+
+  if (explicitSpanish) {
+    vr.say(
+      { language: 'es-ES', voice: resolveVoice('es-ES') as any },
+      'Has seleccionado español.'
+    );
+    vr.redirect('/webhook/voice-response?lang=es');
+    return res.type('text/xml').send(vr.toString());
+  }
+
+  if (hasRealUtterance) {
+    vr.redirect('/webhook/voice-response?lang=en');
+    return res.type('text/xml').send(vr.toString());
+  }
+
+  vr.say(
+    { language: 'en-US', voice: resolveVoice('en-US') as any },
+    'Continuing in English.'
+  );
+  vr.redirect('/webhook/voice-response?lang=en');
   return res.type('text/xml').send(vr.toString());
 });
 
@@ -1108,15 +1160,6 @@ router.post('/', async (req: Request, res: Response) => {
 
   let digits = (req.body.Digits || '').toString().trim();
 
-  const resolvedInitialVoiceIntent = userInput
-    ? resolveVoiceIntentFromUtterance(userInput)
-    : null;
-
-  if (!digits && userInput && resolvedInitialVoiceIntent !== "booking") {
-    const coerced = coerceSpeechToDigit(userInput);
-    if (coerced) digits = coerced;
-  }
-
   // UNA SOLA instancia de VoiceResponse
   const vr = new twiml.VoiceResponse();
 
@@ -1140,6 +1183,25 @@ router.post('/', async (req: Request, res: Response) => {
       }
     : {};
 
+  const pendingUtterance =
+    typeof state.bookingData?.__pending_utterance === "string"
+      ? state.bookingData.__pending_utterance.trim()
+      : "";
+
+  const effectiveUserInput = userInput || pendingUtterance;
+
+  const consumedPendingUtterance =
+    !userInput && !!pendingUtterance;
+
+  const resolvedInitialVoiceIntent = effectiveUserInput
+    ? resolveVoiceIntentFromUtterance(effectiveUserInput)
+    : null;
+
+  if (!digits && effectiveUserInput && resolvedInitialVoiceIntent !== "booking") {
+    const coerced = coerceSpeechToDigit(effectiveUserInput);
+    if (coerced) digits = coerced;
+  }
+
   const langParam = typeof req.query.lang === 'string' ? (req.query.lang as string) : undefined;
 
   // ⬇️ LOG — lo que dijo el cliente
@@ -1147,7 +1209,7 @@ router.post('/', async (req: Request, res: Response) => {
     callSid,
     from: callerE164 || callerRaw,
     digits,
-    userInput,
+    userInput: effectiveUserInput,
     lang: (state.lang as any) || (typeof req.query.lang === 'string' ? (req.query.lang === 'es' ? 'es-ES' : 'en-US') : undefined),
     // rawBody: req.body, // <- útil para debug profundo, comenta si es muy ruidoso
   });
@@ -1175,6 +1237,12 @@ router.post('/', async (req: Request, res: Response) => {
       state = {
         ...state,
         lang: chosen,
+        bookingData: consumedPendingUtterance
+          ? {
+              ...(state.bookingData || {}),
+              __pending_utterance_consumed: "1",
+            }
+          : state.bookingData || {},
       };
 
       await upsertVoiceCallState({
@@ -1188,8 +1256,26 @@ router.post('/', async (req: Request, res: Response) => {
         altDest: state.altDest ?? null,
         smsSent: state.smsSent ?? false,
         bookingStepIndex: state.bookingStepIndex ?? null,
-        bookingData: state.bookingData ?? {},
+        bookingData:
+          consumedPendingUtterance
+            ? Object.fromEntries(
+                Object.entries(state.bookingData || {}).filter(
+                  ([key]) => key !== "__pending_utterance"
+                )
+              )
+            : state.bookingData ?? {},
       });
+    }
+
+    if (consumedPendingUtterance) {
+      state = {
+        ...state,
+        bookingData: Object.fromEntries(
+          Object.entries(state.bookingData || {}).filter(
+            ([key]) => key !== "__pending_utterance"
+          )
+        ),
+      };
     }
 
     // Nombre de marca del tenant (para hablar en la intro)
@@ -1325,7 +1411,8 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ——— Menú inicial si aún no hay input ni confirmaciones pendientes ———
     if (
-      !userInput &&
+      turn === 1 &&
+      !effectiveUserInput &&
       !digits &&
       !state.awaiting &&
       !state.awaitingNumber &&
@@ -1652,8 +1739,13 @@ router.post('/', async (req: Request, res: Response) => {
 
     // Si estábamos esperando confirmación de SMS, pero el usuario hizo una nueva pregunta,
     // cancelamos el SMS pendiente y seguimos procesando esa intención en el mismo turno.
-    if (state.awaiting && userInput && !saidYes(userInput) && !saidNo(userInput)) {
-      const nextDigit = coerceSpeechToDigit(userInput);
+    if (
+      state.awaiting &&
+      effectiveUserInput &&
+      !saidYes(effectiveUserInput) &&
+      !saidNo(effectiveUserInput)
+    ) {
+      const nextDigit = coerceSpeechToDigit(effectiveUserInput);
 
       state = {
         ...state,
@@ -1681,8 +1773,8 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // Caso A: venías esperando confirmación por estado y dijo “sí/1”
-    if (state.awaiting && (saidYes(userInput) || digits === '1')) {
-      earlySmsType = (state.pendingType || guessType(userInput)) as LinkType;
+    if (state.awaiting && (saidYes(effectiveUserInput) || digits === '1')) {
+      earlySmsType = (state.pendingType || guessType(effectiveUserInput)) as LinkType;
 
       state = {
         ...state,
@@ -1705,7 +1797,7 @@ router.post('/', async (req: Request, res: Response) => {
       });
     }
 
-    if (state.awaiting && (saidNo(userInput) || digits === '2')) {
+    if (state.awaiting && (saidNo(effectiveUserInput) || digits === '2')) {
       state = {
         ...state,
         awaiting: false,
@@ -1729,13 +1821,17 @@ router.post('/', async (req: Request, res: Response) => {
       // 👉 RESPUESTA CON LLM (no hardcode)
       const replyRaw = await generateVoiceReply({
         tenantName: brand,
-        userInput,
+        userInput: effectiveUserInput,
         step: 'fallback',
         locale: currentLocale,
         cfg,
       });
 
-      const reply = twoSentencesMax(replyRaw);
+      const localizedReply = currentLocale.startsWith('es')
+        ? replyRaw
+        : await traducirTexto(replyRaw, currentLocale);
+
+      const reply = twoSentencesMax(localizedReply);
 
       const gather = vr.gather({
         input: ['speech','dtmf'] as any,
@@ -1771,7 +1867,7 @@ router.post('/', async (req: Request, res: Response) => {
       const lastAssistantText: string = lastAssistantRows?.[0]?.content || '';
       const pendingMatch = lastAssistantText.match(/<SMS_PENDING:(reservar|comprar|soporte|web)>/i);
 
-      if (pendingMatch && (saidYes(userInput) || digits === '1')) {
+      if (pendingMatch && (saidYes(effectiveUserInput) || digits === '1')) {
         earlySmsType = pendingMatch[1].toLowerCase() as LinkType;
       }
     }
@@ -1805,7 +1901,7 @@ router.post('/', async (req: Request, res: Response) => {
       await pool.query(
         `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
         VALUES ($1, 'user', $2, NOW(), $3, $4)`,
-        [tenant.id, userInput, CHANNEL_KEY, callerE164 || 'anónimo']
+        [tenant.id, effectiveUserInput, CHANNEL_KEY, callerE164 || 'anónimo']
       );
 
       await pool.query(
@@ -1825,8 +1921,8 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // ===== IVR simple por dígito (1/2/3/4) =====
-    const resolvedVoiceIntentForTurn = userInput
-      ? resolveVoiceIntentFromUtterance(userInput)
+    const resolvedVoiceIntentForTurn = effectiveUserInput
+      ? resolveVoiceIntentFromUtterance(effectiveUserInput)
       : null;
 
     if (
@@ -1897,8 +1993,8 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // ——— FAST INTENT: si el usuario pidió algo directo (sin DTMF), lee desde prompt y luego ofrece SMS ———
-    if (userInput) {
-      const resolvedVoiceIntent = resolveVoiceIntentFromUtterance(userInput);
+    if (effectiveUserInput) {
+      const resolvedVoiceIntent = resolveVoiceIntentFromUtterance(effectiveUserInput);
       const wantsBooking = resolvedVoiceIntent === "booking";
 
       if (wantsBooking && typeof state.bookingStepIndex !== "number") {
@@ -2120,7 +2216,7 @@ router.post('/', async (req: Request, res: Response) => {
 
         if (currentStep.expected_type === "phone") {
           const phoneResolution = resolvePhoneFromVoiceInput({
-            userInput,
+            userInput: effectiveUserInput,
             digits,
             callerE164,
             step: currentStep,
@@ -2217,7 +2313,7 @@ router.post('/', async (req: Request, res: Response) => {
           return res.type('text/xml').send(vr.toString());
         }
 
-        let resolvedStepValue = userInput;
+        let resolvedStepValue = effectiveUserInput;
 
         const rawSlot =
           typeof currentStep.validation_config?.slot === "string"
@@ -2229,7 +2325,7 @@ router.post('/', async (req: Request, res: Response) => {
 
         if (isServiceStep) {
           const serviceResolution = resolveVoiceBookingService({
-            userInput,
+            userInput: effectiveUserInput,
             rawConfig: cfg?.booking_services_text || "",
           });
 
@@ -2460,7 +2556,7 @@ router.post('/', async (req: Request, res: Response) => {
         return res.type('text/xml').send(vr.toString());
       }
 
-      const s = userInput.toLowerCase();
+      const s = effectiveUserInput.toLowerCase();
 
       const wantsPrices   = /(precio|precios|tarifa|tarifas|cost|price)/i.test(s);
       const wantsHours    = /(horario|horarios|abren|cierran|hours|open|close)/i.test(s);
@@ -2510,7 +2606,7 @@ router.post('/', async (req: Request, res: Response) => {
               - Jamás leas URL en voz. 
               - Responde breve y natural.`
           },
-          { role: 'user', content: userInput },
+          { role: 'user', content: effectiveUserInput },
         ],
       }, { signal: controller.signal as any });
       clearTimeout(timer);
@@ -2561,8 +2657,8 @@ router.post('/', async (req: Request, res: Response) => {
     if (tagMatch) respuesta = respuesta.replace(tagMatch[0], '').trim();
 
     // Confirmación diferida: si había pendiente y el usuario dijo "sí"
-    if (!smsType && state.awaiting && (saidYes(userInput) || digits === '1')) {
-      smsType = (state.pendingType || guessType(userInput)) as LinkType;
+    if (!smsType && state.awaiting && (saidYes(effectiveUserInput) || digits === '1')) {
+      smsType = (state.pendingType || guessType(effectiveUserInput)) as LinkType;
       console.log('[VOICE/SMS] Confirmación por estado → tipo =', smsType);
 
       state = {
@@ -2587,7 +2683,7 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // Si rechazó, no enviamos
-    if (!smsType && state.awaiting && (saidNo(userInput) || digits === '2')) {
+    if (!smsType && state.awaiting && (saidNo(effectiveUserInput) || digits === '2')) {
       console.log('[VOICE/SMS] Usuario rechazó el SMS (estado).');
 
       state = {
@@ -2611,20 +2707,20 @@ router.post('/', async (req: Request, res: Response) => {
       });
     }
 
-    if (!smsType && askedForSms(userInput)) {
-      smsType = guessType(userInput);
+    if (!smsType && askedForSms(effectiveUserInput)) {
+      smsType = guessType(effectiveUserInput);
       console.log('[VOICE/SMS] Usuario solicitó SMS → tipo inferido =', smsType);
     }
 
     // Si el asistente "prometió" enviar SMS:
     if (!smsType && didAssistantPromiseSms(respuesta)) {
-      const pendingType = guessType(`${userInput} ${respuesta}`);
+      const pendingType = guessType(`${effectiveUserInput} ${respuesta}`);
 
       // Caso inmediato: usuario ya dijo "sí" o pulsó 1
-      if (saidYes(userInput) || digits === '1') {
+      if (saidYes(effectiveUserInput) || digits === '1') {
         smsType = pendingType as LinkType;
         console.log('[VOICE/SMS] Promesa + "sí/1" inmediato → tipo =', smsType);
-      } else if (!saidNo(userInput) && digits !== '2') {
+      } else if (!saidNo(effectiveUserInput) && digits !== '2') {
         // Pedimos confirmación y guardamos estado para el próximo turno
         const ask = currentLocale.startsWith('es')
           ? '¿Quieres que te lo envíe por SMS? Di "sí" o pulsa 1 para enviarlo.'
@@ -2651,11 +2747,11 @@ router.post('/', async (req: Request, res: Response) => {
       awaiting: state.awaiting,
       pendingType: state.pendingType,
       digits,
-      saidYes: saidYes(userInput),
-      saidNo: saidNo(userInput),
+      saidYes: saidYes(effectiveUserInput),
+      saidNo: saidNo(effectiveUserInput),
       tagMatch: !!tagMatch,
       pendingMatch: !!pendingMatch,
-      askedForSms: askedForSms(userInput),
+      askedForSms: askedForSms(effectiveUserInput),
       smsType,
     });
 
@@ -2665,7 +2761,7 @@ router.post('/', async (req: Request, res: Response) => {
       const preferred = (state.altDest && isValidE164(state.altDest)) ? state.altDest : callerE164;
 
       // si el usuario ya dijo explícitamente "sí" o pulsó 1 en este turno, no bloqueamos
-      const thisTurnYes = saidYes(userInput) || digits === '1';
+      const thisTurnYes = saidYes(effectiveUserInput) || digits === '1';
 
       if (!thisTurnYes) {
         if (!isValidE164(preferred)) {
@@ -2865,7 +2961,7 @@ router.post('/', async (req: Request, res: Response) => {
       console.log(
         '[VOICE/SMS] No se detectó condición para enviar SMS.',
         'userInput=',
-        short(userInput),
+        short(effectiveUserInput),
         'respuesta=',
         short(respuesta)
       );
@@ -2891,7 +2987,7 @@ router.post('/', async (req: Request, res: Response) => {
     await incrementarUsoPorNumero(didNumber);
 
     // ——— ¿Terminamos? ———
-    const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
+    const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(effectiveUserInput);
 
     // ✅ recorte a 2 frases y normalización de horas antes de locutar
     const speakOut = sanitizeForSay(
