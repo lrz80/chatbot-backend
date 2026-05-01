@@ -1,5 +1,6 @@
 import pool from "../../../../lib/db";
 import type { BookingProvider } from "./types";
+import { encryptToken, decryptToken } from "../../../../services/googleCrypto";
 
 export type BookingProviderConnection = {
   id: string;
@@ -14,6 +15,12 @@ export type BookingProviderConnection = {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+};
+
+export type BookingProviderSecrets = {
+  accessToken: string | null;
+  refreshToken: string | null;
+  tokenExpiresAt: string | null;
 };
 
 export type UpsertBookingProviderConnectionInput = {
@@ -62,9 +69,51 @@ export async function getBookingProviderConnection(
   return mapRow(rows[0]);
 }
 
+export async function getBookingProviderSecrets(
+  tenantId: string,
+  provider: BookingProvider
+): Promise<BookingProviderSecrets | null> {
+  const { rows } = await pool.query(
+    `
+      SELECT
+        access_token,
+        refresh_token,
+        token_expires_at
+      FROM booking_provider_connections
+      WHERE tenant_id = $1
+        AND provider = $2
+      LIMIT 1
+    `,
+    [tenantId, provider]
+  );
+
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    accessToken: row.access_token ? decryptToken(String(row.access_token)) : null,
+    refreshToken: row.refresh_token ? decryptToken(String(row.refresh_token)) : null,
+    tokenExpiresAt: row.token_expires_at
+      ? new Date(row.token_expires_at).toISOString()
+      : null,
+  };
+}
+
 export async function upsertBookingProviderConnection(
   input: UpsertBookingProviderConnectionInput
 ): Promise<BookingProviderConnection> {
+  const encryptedAccessToken =
+    typeof input.accessToken === "string" && input.accessToken.trim()
+      ? encryptToken(input.accessToken)
+      : null;
+
+  const encryptedRefreshToken =
+    typeof input.refreshToken === "string" && input.refreshToken.trim()
+      ? encryptToken(input.refreshToken)
+      : null;
+
   const { rows } = await pool.query(
     `
       INSERT INTO booking_provider_connections (
@@ -88,8 +137,8 @@ export async function upsertBookingProviderConnection(
         status = EXCLUDED.status,
         external_account_id = EXCLUDED.external_account_id,
         external_location_id = EXCLUDED.external_location_id,
-        access_token = EXCLUDED.access_token,
-        refresh_token = EXCLUDED.refresh_token,
+        access_token = COALESCE(EXCLUDED.access_token, booking_provider_connections.access_token),
+        refresh_token = COALESCE(EXCLUDED.refresh_token, booking_provider_connections.refresh_token),
         token_expires_at = EXCLUDED.token_expires_at,
         metadata = EXCLUDED.metadata,
         updated_at = NOW()
@@ -113,8 +162,8 @@ export async function upsertBookingProviderConnection(
       input.status,
       input.externalAccountId ?? null,
       input.externalLocationId ?? null,
-      input.accessToken ?? null,
-      input.refreshToken ?? null,
+      encryptedAccessToken,
+      encryptedRefreshToken,
       input.tokenExpiresAt ?? null,
       JSON.stringify(input.metadata ?? {}),
     ]

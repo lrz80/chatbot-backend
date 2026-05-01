@@ -4,9 +4,10 @@ import { authenticateUser } from "../../middleware/auth";
 import pool from "../../lib/db";
 import { canUseChannel } from "../../lib/features";
 import fetch from "node-fetch"; // si estás en Node 18 y TS lo permite, puedes usar fetch global sin importar
-import { encryptToken, decryptToken } from "../../services/googleCrypto";
+
 import crypto from "crypto";
 import { googleFreeBusy, googleCreateEvent, googleDeleteEvent } from "../../services/googleCalendar";
+import { upsertBookingProviderConnection } from "../../lib/appointments/booking/providers/providerConnections.repo";
 
 const router = Router();
 
@@ -64,22 +65,39 @@ router.get("/status", authenticateUser, async (req, res) => {
     // Si está apagado, igual devolvemos si está conectado, pero marcamos enabled=false
     const { rows } = await pool.query(
       `
-      SELECT connected_email, calendar_id, status, created_at, updated_at
-      FROM calendar_integrations
-      WHERE tenant_id = $1 AND provider = 'google'
+      SELECT
+        external_account_id,
+        external_location_id,
+        status,
+        metadata,
+        created_at,
+        updated_at
+      FROM booking_provider_connections
+      WHERE tenant_id = $1
+        AND provider = 'google_calendar'
       LIMIT 1
       `,
       [tenantId]
     );
 
     const r = rows[0];
+    const metadata =
+      r?.metadata && typeof r.metadata === "object" ? r.metadata : {};
+    const connectedEmail =
+      typeof metadata?.connected_email === "string"
+        ? metadata.connected_email
+        : r?.external_account_id || null;
+    const calendarId =
+      typeof metadata?.calendar_id === "string"
+        ? metadata.calendar_id
+        : r?.external_location_id || "primary";
 
     return res.json({
-      enabled: gate.settings_enabled,         // el switch
-      blocked: !gate.settings_enabled,        // para UI
-      connected: !!r && r.status === "connected",
-      connected_email: r?.connected_email || null,
-      calendar_id: r?.calendar_id || "primary",
+      enabled: gate.settings_enabled,
+      blocked: !gate.settings_enabled,
+      connected: !!r && r.status === "active",
+      connected_email: connectedEmail,
+      calendar_id: calendarId,
       integration_status: r?.status || "none",
       connected_at: r?.created_at || null,
       updated_at: r?.updated_at || null,
@@ -188,18 +206,17 @@ router.post("/disconnect", authenticateUser, async (req, res) => {
     }
 
     // Marcar integración como desconectada (no borramos la fila para historial)
-    await pool.query(
-      `
-      UPDATE calendar_integrations
-      SET
-        status = 'revoked',
-        connected_email = NULL,
-        updated_at = NOW()
-      WHERE tenant_id = $1
-        AND provider = 'google'
-      `,
-      [tenantId]
-    );
+    await upsertBookingProviderConnection({
+      tenantId,
+      provider: "google_calendar",
+      status: "inactive",
+      externalAccountId: null,
+      externalLocationId: null,
+      accessToken: null,
+      refreshToken: null,
+      tokenExpiresAt: null,
+      metadata: {},
+    });
 
     return res.json({ ok: true, connected: false, connected_email: null, calendar_id: null });
   } catch (err) {
@@ -211,17 +228,21 @@ router.post("/disconnect", authenticateUser, async (req, res) => {
   }
 });
 
-async function getExistingRefreshEnc(tenantId: string): Promise<string | null> {
+async function getExistingProviderRefreshToken(
+  tenantId: string
+): Promise<string | null> {
   const { rows } = await pool.query(
     `
-    SELECT refresh_token_enc
-    FROM calendar_integrations
-    WHERE tenant_id = $1 AND provider = 'google'
+    SELECT refresh_token
+    FROM booking_provider_connections
+    WHERE tenant_id = $1
+      AND provider = 'google_calendar'
     LIMIT 1
     `,
     [tenantId]
   );
-  return rows[0]?.refresh_token_enc || null;
+
+  return rows[0]?.refresh_token ?? null;
 }
 
 router.get("/callback", async (req: Request, res: Response) => {
@@ -258,19 +279,16 @@ router.get("/callback", async (req: Request, res: Response) => {
     const refreshToken = tokenJson.refresh_token; // puede venir undefined
     const accessToken = tokenJson.access_token;
 
-    let refreshEncToStore: string | null = null;
+    let refreshTokenToStore: string | null = null;
 
     const calendarIdReal = "primary";
 
     if (refreshToken) {
-      refreshEncToStore = encryptToken(String(refreshToken));
+      refreshTokenToStore = String(refreshToken);
     } else {
-      // ✅ Google no siempre re-entrega refresh_token.
-      // Si ya tenemos uno guardado, lo conservamos.
-      refreshEncToStore = await getExistingRefreshEnc(tenantId);
+      refreshTokenToStore = await getExistingProviderRefreshToken(tenantId);
 
-      // Si no hay uno previo, entonces sí no podemos seguir
-      if (!refreshEncToStore) {
+      if (!refreshTokenToStore) {
         return res
           .status(400)
           .send("No refresh_token returned and no existing token on file. Revoke access and try again.");
@@ -287,22 +305,23 @@ router.get("/callback", async (req: Request, res: Response) => {
       connectedEmail = infoJson?.email || null;
     } catch (_) {}
 
-    await pool.query(
-      `
-      INSERT INTO calendar_integrations
-        (tenant_id, provider, refresh_token_enc, connected_email, calendar_id, status, updated_at)
-      VALUES
-        ($1, 'google', $2, $3, $4, 'connected', now())
-      ON CONFLICT (tenant_id, provider)
-      DO UPDATE SET
-        refresh_token_enc = COALESCE(EXCLUDED.refresh_token_enc, calendar_integrations.refresh_token_enc),
-        connected_email   = EXCLUDED.connected_email,
-        calendar_id       = EXCLUDED.calendar_id,
-        status            = 'connected',
-        updated_at        = now()
-      `,
-      [tenantId, refreshEncToStore, connectedEmail, calendarIdReal]
-    );
+    await upsertBookingProviderConnection({
+      tenantId,
+      provider: "google_calendar",
+      status: "active",
+      externalAccountId: connectedEmail,
+      externalLocationId: calendarIdReal,
+      accessToken: accessToken ?? null,
+      refreshToken: refreshTokenToStore,
+      tokenExpiresAt: tokenJson?.expires_in
+        ? new Date(Date.now() + Number(tokenJson.expires_in) * 1000).toISOString()
+        : null,
+      metadata: {
+        connected_email: connectedEmail,
+        calendar_id: calendarIdReal,
+        source: "google_oauth_callback",
+      },
+    });
 
     // Redirige al dashboard donde muestras el status
     return res.redirect("https://www.aamy.ai/dashboard/appointments?google=connected");

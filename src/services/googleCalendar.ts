@@ -1,7 +1,10 @@
 //src/services/googleCalendar.ts
 import pool from "../lib/db";
-import { decryptToken } from "./googleCrypto";
 import crypto from "crypto";
+import {
+  getBookingProviderSecrets,
+  upsertBookingProviderConnection,
+} from "../lib/appointments/booking/providers/providerConnections.repo";
 
 export type GoogleBusyBlock = { start: string; end: string };
 
@@ -13,60 +16,57 @@ function emptyFreeBusy(calendarIds: string[] = ["primary"], degraded = true) {
   const calendars: Record<string, { busy: GoogleBusyBlock[] }> = {};
 
   for (const id of calendarIds) calendars[id] = { busy: [] };
-
-  // clave virtual adicional
   calendars["combined"] = { busy: [] };
 
   return { calendars, degraded };
 }
 
-type GoogleTokens = { access_token: string; expires_in?: number; token_type?: string };
+type GoogleTokens = {
+  access_token: string;
+  expires_in?: number;
+  token_type?: string;
+  error?: string;
+  error_description?: string;
+};
 
 async function markGoogleDisconnected(tenantId: string, reason: string) {
   try {
-    await pool.query(
-      `
-      UPDATE calendar_integrations
-         SET status = 'disconnected',
-             last_error = $2,
-             updated_at = NOW()
-       WHERE tenant_id = $1
-         AND provider = 'google'
-      `,
-      [tenantId, reason]
-    );
+    await upsertBookingProviderConnection({
+      tenantId,
+      provider: "google_calendar",
+      status: "error",
+      accessToken: null,
+      refreshToken: null,
+      tokenExpiresAt: null,
+      metadata: {
+        last_error: reason,
+        disconnected_at: new Date().toISOString(),
+      },
+    });
   } catch (e) {
-    // Nunca dejes que esto tumbe el flujo
     console.error("markGoogleDisconnected failed:", e);
   }
 }
 
-async function getRefreshTokenEnc(tenantId: string): Promise<string> {
-  const { rows } = await pool.query(
-    `
-    SELECT refresh_token_enc
-    FROM calendar_integrations
-    WHERE tenant_id = $1
-      AND provider = 'google'
-      AND status = 'connected'
-    LIMIT 1
-    `,
-    [tenantId]
-  );
+async function getGoogleProviderRefreshToken(tenantId: string): Promise<string> {
+  const secrets = await getBookingProviderSecrets(tenantId, "google_calendar");
 
-  const enc = rows[0]?.refresh_token_enc;
-  if (!enc) throw new Error("google_not_connected");
-  return enc;
+  if (!secrets?.refreshToken) {
+    throw new Error("google_not_connected");
+  }
+
+  return secrets.refreshToken;
 }
 
 export async function getGoogleAccessToken(tenantId: string): Promise<string> {
-  const enc = await getRefreshTokenEnc(tenantId);
-  const refresh_token = decryptToken(enc);
-  if (!refresh_token) throw new Error("google_refresh_token_invalid");
+  const refreshToken = await getGoogleProviderRefreshToken(tenantId);
 
   const client_id = process.env.GOOGLE_CLIENT_ID;
   const client_secret = process.env.GOOGLE_CLIENT_SECRET;
-  if (!client_id || !client_secret) throw new Error("google_oauth_not_configured");
+
+  if (!client_id || !client_secret) {
+    throw new Error("google_oauth_not_configured");
+  }
 
   const resp = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -74,44 +74,61 @@ export async function getGoogleAccessToken(tenantId: string): Promise<string> {
     body: new URLSearchParams({
       client_id,
       client_secret,
-      refresh_token,
+      refresh_token: refreshToken,
       grant_type: "refresh_token",
     }).toString(),
   });
 
-  const json = (await resp.json()) as GoogleTokens & { error?: string; error_description?: string };
+  const json = (await resp.json()) as GoogleTokens;
 
   if (!resp.ok || !json.access_token) {
     console.error("Google refresh failed:", resp.status, json);
 
-    // ✅ Caso típico: invalid_grant (revocado/expirado)
     if (json?.error === "invalid_grant") {
       await markGoogleDisconnected(tenantId, "invalid_grant");
-      throw new Error("google_not_connected"); // fuerza UI a reconectar
+      throw new Error("google_not_connected");
     }
 
-    await pool.query(
-      `
-      UPDATE calendar_integrations
-        SET last_error = $2,
-            updated_at = NOW()
-      WHERE tenant_id = $1 AND provider='google'
-      `,
-      [tenantId, `refresh_${resp.status}_${json?.error || "unknown"}`]
-    );
+    await upsertBookingProviderConnection({
+      tenantId,
+      provider: "google_calendar",
+      status: "error",
+      accessToken: null,
+      refreshToken: refreshToken,
+      tokenExpiresAt: null,
+      metadata: {
+        last_error: `refresh_${resp.status}_${json?.error || "unknown"}`,
+        updated_at_source: "google_refresh_failed",
+      },
+    });
+
     throw new Error("google_refresh_failed");
   }
+
+  await upsertBookingProviderConnection({
+    tenantId,
+    provider: "google_calendar",
+    status: "active",
+    accessToken: json.access_token,
+    refreshToken: refreshToken,
+    tokenExpiresAt: json.expires_in
+      ? new Date(Date.now() + Number(json.expires_in) * 1000).toISOString()
+      : null,
+    metadata: {
+      updated_at_source: "google_refresh_success",
+    },
+  });
 
   return json.access_token;
 }
 
 export async function googleFreeBusy(params: {
   tenantId: string;
-  timeMin: string; // ISO
-  timeMax: string; // ISO
+  timeMin: string;
+  timeMax: string;
   calendarIds?: string[];
 }): Promise<GoogleFreeBusyResponse & { degraded?: boolean }> {
-  console.log("🧬 GCAL MODULE LOADED v2026-01-31-B");
+  console.log("🧬 GCAL MODULE LOADED v2026-05-01-provider-connections");
 
   let accessToken: string;
 
@@ -120,27 +137,31 @@ export async function googleFreeBusy(params: {
   } catch (e: any) {
     const msg = String(e?.message || "");
 
-    // ✅ Si no hay conexión o refresh murió, degradar: sin busy blocks
     if (
       msg === "google_not_connected" ||
       msg === "google_refresh_failed" ||
-      msg === "google_refresh_token_invalid" ||
       msg === "google_oauth_not_configured"
     ) {
-      const calendarIds = (params.calendarIds && params.calendarIds.length > 0)
-        ? params.calendarIds
-        : ["primary"];
+      const calendarIds =
+        params.calendarIds && params.calendarIds.length > 0
+          ? params.calendarIds
+          : ["primary"];
 
-      console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarIds });
+      console.log("🟡 freeBusy degraded:", {
+        tenantId: params.tenantId,
+        calendarIds,
+      });
+
       return emptyFreeBusy(calendarIds, true);
-
     }
+
     throw e;
   }
 
-  const calendarIds = (params.calendarIds && params.calendarIds.length > 0)
-  ? params.calendarIds
-  : ["primary"];
+  const calendarIds =
+    params.calendarIds && params.calendarIds.length > 0
+      ? params.calendarIds
+      : ["primary"];
 
   const resp = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
     method: "POST",
@@ -155,25 +176,32 @@ export async function googleFreeBusy(params: {
     }),
   });
 
-    const json = (await resp.json()) as GoogleFreeBusyResponse & { error?: any };
+  const json = (await resp.json()) as GoogleFreeBusyResponse & { error?: any };
 
   if (!resp.ok) {
     console.error("Google freebusy failed:", json);
 
     if (resp.status === 401 || resp.status === 403) {
       await markGoogleDisconnected(params.tenantId, `freebusy_${resp.status}`);
-      console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarIds, status: resp.status });
+      console.log("🟡 freeBusy degraded:", {
+        tenantId: params.tenantId,
+        calendarIds,
+        status: resp.status,
+      });
       return emptyFreeBusy(calendarIds, true);
     }
 
-    console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarIds, status: resp.status });
+    console.log("🟡 freeBusy degraded:", {
+      tenantId: params.tenantId,
+      calendarIds,
+      status: resp.status,
+    });
     return emptyFreeBusy(calendarIds, true);
   }
 
   const calendars = json?.calendars || {};
   const keys = Object.keys(calendars);
 
-  // 🔥 LOG REAL
   console.log("🧪 freeBusy raw keys:", {
     tenantId: params.tenantId,
     requestedCalendarIds: calendarIds,
@@ -190,7 +218,6 @@ export async function googleFreeBusy(params: {
     for (const b of busy) allBusy.push(b);
   }
 
-  // ✅ Agrega "combined" SIN destruir el json original
   (calendars as any)["combined"] = { busy: allBusy };
 
   console.log("🗓️ freeBusy combined:", {
@@ -204,25 +231,27 @@ export async function googleFreeBusy(params: {
 
   return { ...json, calendars, degraded: false };
 }
+
 export async function googleCreateEvent(params: {
   tenantId: string;
-  calendarId?: string; // default primary
+  calendarId?: string;
   summary: string;
   description?: string;
   startISO: string;
   endISO: string;
   timeZone: string;
 }) {
-    let accessToken: string;
-    try {
-      accessToken = await getGoogleAccessToken(params.tenantId);
-    } catch (e: any) {
-      const msg = String(e?.message || "");
-      if (msg === "google_not_connected" || msg === "google_refresh_failed") {
-        throw new Error("google_not_connected");
-      }
-      throw e;
+  let accessToken: string;
+
+  try {
+    accessToken = await getGoogleAccessToken(params.tenantId);
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    if (msg === "google_not_connected" || msg === "google_refresh_failed") {
+      throw new Error("google_not_connected");
     }
+    throw e;
+  }
 
   const calendarId = encodeURIComponent(params.calendarId || "primary");
 
@@ -239,8 +268,6 @@ export async function googleCreateEvent(params: {
         description: params.description || "",
         start: { dateTime: params.startISO, timeZone: params.timeZone },
         end: { dateTime: params.endISO, timeZone: params.timeZone },
-
-        // ✅ Crea Google Meet automáticamente
         conferenceData: {
           createRequest: {
             requestId: crypto.randomUUID(),
@@ -290,7 +317,12 @@ export async function googleCreateEvent(params: {
     json?.conferenceData?.entryPoints?.find((e: any) => e?.entryPointType === "video")?.uri ||
     null;
 
-  if (json && meetLink && typeof json.description === "string" && !json.description.includes(meetLink)) {
+  if (
+    json &&
+    meetLink &&
+    typeof json.description === "string" &&
+    !json.description.includes(meetLink)
+  ) {
     json.description = `${json.description}\n\nGoogle Meet: ${meetLink}`.trim();
   }
 
@@ -339,7 +371,6 @@ export async function googleCreateEvent(params: {
     icaluid_get: verified?.iCalUID || null,
   });
 
-  // ✅ Devuelve SIEMPRE el evento verificado si existe
   const finalEvent = verified || json;
 
   if (!finalEvent?.id) {
@@ -359,7 +390,7 @@ export async function googleCreateEvent(params: {
 
 async function googleGetEvent(args: {
   accessToken: string;
-  calendarId: string; // ya URL-encoded
+  calendarId: string;
   eventId: string;
 }) {
   const r = await fetch(
@@ -385,8 +416,8 @@ async function googleGetEvent(args: {
 
 export async function googleDeleteEvent(params: {
   tenantId: string;
-  calendarId?: string; // default primary
-  eventId: string;     // google event id (NO iCalUID)
+  calendarId?: string;
+  eventId: string;
 }) {
   let accessToken: string;
 
@@ -397,7 +428,6 @@ export async function googleDeleteEvent(params: {
     if (
       msg === "google_not_connected" ||
       msg === "google_refresh_failed" ||
-      msg === "google_refresh_token_invalid" ||
       msg === "google_oauth_not_configured"
     ) {
       throw new Error("google_not_connected");
@@ -421,12 +451,10 @@ export async function googleDeleteEvent(params: {
     }
   );
 
-  // Google DELETE normalmente devuelve 204 No Content
   if (resp.status === 204) {
     return { ok: true };
   }
 
-  // A veces devuelve JSON en errores
   const body = await resp.json().catch(() => ({} as any));
 
   if (resp.status === 401 || resp.status === 403) {
@@ -434,7 +462,6 @@ export async function googleDeleteEvent(params: {
     throw new Error("google_not_connected");
   }
 
-  // Si el evento no existe ya, lo tratamos como "ya cancelado" (idempotente)
   if (resp.status === 404) {
     return { ok: true, already_missing: true };
   }
@@ -445,8 +472,8 @@ export async function googleDeleteEvent(params: {
 
 export async function googleUpdateEvent(params: {
   tenantId: string;
-  calendarId?: string; // default primary
-  eventId: string;     // google event id
+  calendarId?: string;
+  eventId: string;
   summary: string;
   description?: string;
   startISO: string;
@@ -462,7 +489,6 @@ export async function googleUpdateEvent(params: {
     if (
       msg === "google_not_connected" ||
       msg === "google_refresh_failed" ||
-      msg === "google_refresh_token_invalid" ||
       msg === "google_oauth_not_configured"
     ) {
       throw new Error("google_not_connected");
@@ -519,14 +545,13 @@ export async function googleUpdateEvent(params: {
     throw new Error("google_update_event_failed");
   }
 
-  const verified =
-    params.eventId
-      ? await googleGetEvent({
-          accessToken,
-          calendarId,
-          eventId: String(params.eventId || "").trim(),
-        })
-      : null;
+  const verified = params.eventId
+    ? await googleGetEvent({
+        accessToken,
+        calendarId,
+        eventId: String(params.eventId || "").trim(),
+      })
+    : null;
 
   console.log("🟣 [GCAL UPDATE]", {
     tenantId: params.tenantId,
