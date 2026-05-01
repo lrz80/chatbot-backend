@@ -54,21 +54,9 @@ export async function validateServiceSchedule(
     const exists = availableTimesSameDay.includes(requestedTime);
 
     if (!exists) {
-      const fallbackTimes = schedules
-        .filter(
-          (row) =>
-            row.enabled === true &&
-            row.service_name === params.serviceName
-        )
-        .map((row) => String(row.start_time).slice(0, 5));
-
-    const uniqueTimes = Array.from(new Set(
-      availableTimesSameDay.length ? availableTimesSameDay : fallbackTimes
-    ));
-
-    return {
-      ok: false,
-      availableTimes: uniqueTimes,
+      return {
+        ok: false,
+        availableTimes: availableTimesSameDay,
     };
   }
 

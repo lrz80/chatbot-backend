@@ -72,11 +72,40 @@ function resolveTargetDate(text: string, baseDate: Date): Date | null {
 function parseHourMinute(text: string): { hour: number; minute: number } | null {
   const normalized = normalizeText(text);
 
-  const explicit = normalized.match(/\b(\d{1,2})(?::(\d{2}))?\b/);
-  if (!explicit) return null;
+  let hour: number | null = null;
+  let minute = 0;
 
-  let hour = Number(explicit[1]);
-  let minute = explicit[2] ? Number(explicit[2]) : 0;
+  const hhmmColon = normalized.match(/\b(\d{1,2}):(\d{2})\b/);
+  if (hhmmColon) {
+    hour = Number(hhmmColon[1]);
+    minute = Number(hhmmColon[2]);
+  }
+
+  if (hour === null) {
+    const hhmmWithY = normalized.match(/\b(\d{1,2})\s+y\s+(\d{1,2})\b/);
+    if (hhmmWithY) {
+      hour = Number(hhmmWithY[1]);
+      minute = Number(hhmmWithY[2]);
+    }
+  }
+
+  if (hour === null) {
+    const hhmmLoose = normalized.match(/\b(\d{1,2})\s+(\d{2})\b/);
+    if (hhmmLoose) {
+      hour = Number(hhmmLoose[1]);
+      minute = Number(hhmmLoose[2]);
+    }
+  }
+
+  if (hour === null) {
+    const onlyHour = normalized.match(/\b(\d{1,2})\b/);
+    if (onlyHour) {
+      hour = Number(onlyHour[1]);
+      minute = 0;
+    }
+  }
+
+  if (hour === null) return null;
 
   const isPM =
     normalized.includes("pm") ||
