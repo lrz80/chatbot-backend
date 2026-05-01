@@ -163,9 +163,18 @@ export async function createAppointmentFromVoice(args: Args) {
       NOW(),
       NOW()
     )
-    ON CONFLICT (idempotency_key)
+    ON CONFLICT (tenant_id, channel, customer_phone, start_time)
     DO UPDATE SET
-      updated_at = NOW()
+      updated_at = NOW(),
+      customer_name = EXCLUDED.customer_name,
+      customer_email = EXCLUDED.customer_email,
+      end_time = EXCLUDED.end_time,
+      status = EXCLUDED.status,
+      external_calendar_event_id = EXCLUDED.external_calendar_event_id,
+      google_event_id = EXCLUDED.google_event_id,
+      google_event_link = EXCLUDED.google_event_link,
+      idempotency_key = EXCLUDED.idempotency_key,
+      error_reason = NULL
     RETURNING *
     `,
     [
