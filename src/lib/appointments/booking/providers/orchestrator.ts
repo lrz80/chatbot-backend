@@ -21,8 +21,8 @@ export class BookingProviderOrchestrator {
     if (!provider) {
       return {
         ok: false,
-        provider: "google_calendar",
-        error: "CREATE_EVENT_FAILED",
+        provider: "system",
+        error: "PROVIDER_NOT_CONFIGURED",
         busy: [],
       };
     }

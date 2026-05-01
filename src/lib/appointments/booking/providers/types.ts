@@ -5,6 +5,8 @@ export type BookingProvider =
   | "glofox"
   | "booksy";
 
+export type BookingProviderResultSource = BookingProvider | "system";
+
 export type CreateExternalBookingInput = {
   tenantId: string;
   summary: string;
@@ -22,6 +24,13 @@ export type CreateExternalBookingInput = {
   calendarId?: string | null;
 };
 
+export type CreateExternalBookingError =
+  | "INVALID_DATETIME"
+  | "FREEBUSY_DEGRADED"
+  | "SLOT_BUSY"
+  | "CREATE_EVENT_FAILED"
+  | "PROVIDER_NOT_CONFIGURED";
+
 export type CreateExternalBookingResult =
   | {
       ok: true;
@@ -32,12 +41,8 @@ export type CreateExternalBookingResult =
     }
   | {
       ok: false;
-      provider: BookingProvider;
-      error:
-        | "INVALID_DATETIME"
-        | "FREEBUSY_DEGRADED"
-        | "SLOT_BUSY"
-        | "CREATE_EVENT_FAILED";
+      provider: BookingProviderResultSource;
+      error: CreateExternalBookingError;
       busy: Array<{ start: string; end: string }>;
     };
 

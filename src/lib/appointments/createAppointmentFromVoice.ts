@@ -26,158 +26,6 @@ type Args = {
   settings: AppointmentSettings;
 };
 
-function getTimeZoneParts(date: Date, timeZone: string) {
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-
-  const parts = formatter.formatToParts(date);
-
-  const map = Object.fromEntries(
-    parts
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value])
-  ) as Record<string, string>;
-
-  return {
-    year: Number(map.year),
-    month: Number(map.month),
-    day: Number(map.day),
-    hour: Number(map.hour),
-    minute: Number(map.minute),
-    second: Number(map.second),
-  };
-}
-
-function getTimeZoneOffsetMs(date: Date, timeZone: string) {
-  const parts = getTimeZoneParts(date, timeZone);
-
-  const asIfUtc = Date.UTC(
-    parts.year,
-    parts.month - 1,
-    parts.day,
-    parts.hour,
-    parts.minute,
-    parts.second
-  );
-
-  return asIfUtc - date.getTime();
-}
-
-function zonedLocalDateTimeToUtcDate(params: {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-  second?: number;
-  timeZone: string;
-}) {
-  const {
-    year,
-    month,
-    day,
-    hour,
-    minute,
-    second = 0,
-    timeZone,
-  } = params;
-
-  const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second);
-  const firstGuessDate = new Date(utcGuess);
-
-  const firstOffset = getTimeZoneOffsetMs(firstGuessDate, timeZone);
-  let correctedTs = utcGuess - firstOffset;
-
-  const correctedDate = new Date(correctedTs);
-  const secondOffset = getTimeZoneOffsetMs(correctedDate, timeZone);
-
-  if (secondOffset !== firstOffset) {
-    correctedTs = utcGuess - secondOffset;
-  }
-
-  return new Date(correctedTs);
-}
-
-function addDaysToYmd(
-  year: number,
-  month: number,
-  day: number,
-  daysToAdd: number
-) {
-  const base = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  base.setUTCDate(base.getUTCDate() + daysToAdd);
-
-  return {
-    year: base.getUTCFullYear(),
-    month: base.getUTCMonth() + 1,
-    day: base.getUTCDate(),
-  };
-}
-
-function parseVoiceDatetime(input: string, timeZone: string): Date | null {
-  const raw = (input || "").trim().toLowerCase();
-  if (!raw) return null;
-
-  const nowInTz = getTimeZoneParts(new Date(), timeZone);
-
-  let targetDate = {
-    year: nowInTz.year,
-    month: nowInTz.month,
-    day: nowInTz.day,
-  };
-
-  if (raw.includes("mañana") || raw.includes("tomorrow")) {
-    targetDate = addDaysToYmd(
-      targetDate.year,
-      targetDate.month,
-      targetDate.day,
-      1
-    );
-  }
-
-  const hourMatch = raw.match(/\b(\d{1,2})(?::(\d{2}))?\b/);
-  if (!hourMatch) return null;
-
-  let hour = Number(hourMatch[1]);
-  const minute = hourMatch[2] ? Number(hourMatch[2]) : 0;
-
-  const isMorning =
-    raw.includes("am") ||
-    raw.includes("a.m") ||
-    /\bpor la mañana\b/.test(raw);
-
-  const isAfternoon =
-    raw.includes("pm") ||
-    raw.includes("p.m") ||
-    raw.includes("tarde") ||
-    raw.includes("noche");
-
-  if (isAfternoon && hour < 12) hour += 12;
-  if (isMorning && hour === 12) hour = 0;
-
-  if (hour > 23 || minute > 59) return null;
-
-  const utcDate = zonedLocalDateTimeToUtcDate({
-    year: targetDate.year,
-    month: targetDate.month,
-    day: targetDate.day,
-    hour,
-    minute,
-    second: 0,
-    timeZone,
-  });
-
-  return Number.isNaN(utcDate.getTime()) ? null : utcDate;
-}
-
 export async function createAppointmentFromVoice(args: Args) {
   const serviceName = String(args.answersBySlot.service || "").trim();
   const datetimeText = args.answersBySlot.datetime || "";
@@ -214,11 +62,6 @@ export async function createAppointmentFromVoice(args: Args) {
 
   const start = scheduleValidation.requestedAt;
 
-  const reparsedStart = parseVoiceDatetime(datetimeText, timeZone);
-  if (!reparsedStart) {
-    throw new Error(`INVALID_VOICE_DATETIME: ${datetimeText}`);
-  }
-
   const duration = args.settings.default_duration_min;
   const end = new Date(start.getTime() + duration * 60 * 1000);
 
@@ -248,17 +91,21 @@ export async function createAppointmentFromVoice(args: Args) {
 
   if (!externalBooking.ok) {
     if (externalBooking.error === "SLOT_BUSY") {
-      throw new Error(
+       throw new Error(
         `VOICE_SCHEDULE_NOT_AVAILABLE:${serviceName}:${externalBooking.busy
           .map((item) => item.start)
           .join(",")}`
-      );
+        );
+    }
+
+    if (externalBooking.error === "PROVIDER_NOT_CONFIGURED") {
+      throw new Error("BOOKING_PROVIDER_NOT_CONFIGURED");
     }
 
     throw new Error(
       `EXTERNAL_BOOKING_FAILED:${externalBooking.provider}:${externalBooking.error}`
     );
-  }
+    }
 
   const externalCalendarEventId = externalBooking.event_id;
   const googleEventId =
