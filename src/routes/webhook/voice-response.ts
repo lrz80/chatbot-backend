@@ -1378,13 +1378,48 @@ router.post('/', async (req: Request, res: Response) => {
         if (currentStep) {
           const vrBookingSilence = new twiml.VoiceResponse();
 
-          const prompt = renderBookingTemplate(
+          let prompt = renderBookingTemplate(
             currentStep.retry_prompt || currentStep.prompt,
             buildBookingPromptVariables({
               bookingData: state.bookingData || {},
               callerE164,
             })
           );
+
+          // ✅ Si la llamada está en inglés, no leas tal cual el prompt de DB en español.
+          // Reescríbelo en el idioma correcto usando el generador.
+          if (currentLocale === "en-US") {
+            if (currentStep.step_key === "service") {
+              prompt = await generateVoiceReply({
+                tenantName: brand,
+                userInput,
+                step: "service",
+                locale: currentLocale,
+                bookingData: state.bookingData || {},
+                cfg,
+              });
+            } else if (currentStep.step_key === "datetime") {
+              prompt = await generateVoiceReply({
+                tenantName: brand,
+                userInput,
+                step: "datetime",
+                locale: currentLocale,
+                bookingData: state.bookingData || {},
+                cfg,
+              });
+            } else if (currentStep.step_key === "confirm") {
+              prompt = await generateVoiceReply({
+                tenantName: brand,
+                userInput,
+                step: "confirm",
+                locale: currentLocale,
+                bookingData: state.bookingData || {},
+                cfg,
+              });
+            }
+          }
+
+          prompt = twoSentencesMax(prompt);
 
           const isPhoneStep = currentStep.expected_type === "phone";
           const isConfirmationStep = currentStep.expected_type === "confirmation";
@@ -1403,13 +1438,13 @@ router.post('/', async (req: Request, res: Response) => {
 
           gather.say(
             { language: currentLocale as any, voice: voiceName },
-            twoSentencesMax(prompt)
+            prompt
           );
 
           logBotSay({
             callSid,
             to: didNumber || 'ivr',
-            text: twoSentencesMax(prompt),
+            text: prompt,
             lang: currentLocale,
             context: `booking_retry:${currentStep.step_key}`,
           });
