@@ -1,3 +1,4 @@
+//src/lib/appointments/booking/providers/googleCalendarProvider.ts
 import { googleCreateEvent, googleFreeBusy } from "../../../../services/googleCalendar";
 import { extractBusyBlocks } from "../freebusy";
 import type {

@@ -1328,7 +1328,13 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // ✅ handler de silencio (cuando Twilio devuelve sin SpeechResult/Digits en turnos posteriores)
-    if (!userInput && !digits && Object.prototype.hasOwnProperty.call(req.body, 'SpeechResult')) {
+    const noUserTurnInput =
+      !userInput &&
+      !digits &&
+      !String(req.body.SpeechResult || "").trim() &&
+      !String(req.body.Digits || "").trim();
+
+    if (noUserTurnInput) {
       // Si estamos esperando confirmación del SMS, re-pregunta esa confirmación
       if (state.awaiting && state.pendingType) {
         const vrAsk = new twiml.VoiceResponse();
@@ -1952,141 +1958,12 @@ router.post('/', async (req: Request, res: Response) => {
                 answersBySlot,
               });
 
-              let appointment;
-
-              try {
-                appointment = await createAppointmentFromVoice({
-                  tenantId: tenant.id,
-                  answersBySlot,
-                  idempotencyKey: `voice:${callSid}`,
-                  settings: appointmentSettings,
-                });
-              } catch (error: any) {
-                const errorMessage = String(error?.message || "");
-
-                const isInvalidDatetime =
-                  errorMessage.startsWith("INVALID_VOICE_DATETIME:");
-
-                const isScheduleUnavailable =
-                  errorMessage.startsWith("VOICE_SCHEDULE_NOT_AVAILABLE:");
-
-                if (!isInvalidDatetime && !isScheduleUnavailable) {
-                  throw error;
-                }
-
-                const datetimeStepIndex = flow.findIndex((step) => {
-                  const slot =
-                    typeof step.validation_config?.slot === "string"
-                      ? step.validation_config.slot.trim()
-                      : "";
-
-                  return step.step_key === "datetime" || slot === "datetime";
-                });
-
-                if (datetimeStepIndex < 0) {
-                  throw error;
-                }
-
-                const datetimeStep = flow[datetimeStepIndex];
-
-                state = {
-                  ...state,
-                  bookingStepIndex: datetimeStepIndex,
-                  bookingData: state.bookingData || {},
-                };
-
-                await upsertVoiceCallState({
-                  callSid,
-                  tenantId: tenant.id,
-                  lang: state.lang ?? currentLocale,
-                  turn: state.turn ?? 0,
-                  awaiting: false,
-                  pendingType: null,
-                  awaitingNumber: false,
-                  altDest: state.altDest ?? null,
-                  smsSent: false,
-                  bookingStepIndex: datetimeStepIndex,
-                  bookingData: state.bookingData || {},
-                });
-
-                const baseRetryPrompt = twoSentencesMax(
-                  renderBookingTemplate(
-                    datetimeStep.retry_prompt || datetimeStep.prompt,
-                    buildBookingPromptVariables({
-                      bookingData: state.bookingData || {},
-                      callerE164,
-                    })
-                  )
-                );
-
-                const validationConfig =
-                  currentStep.validation_config && typeof currentStep.validation_config === "object"
-                    ? currentStep.validation_config
-                    : {};
-
-                const unavailablePromptTemplate =
-                  typeof validationConfig.unavailable_prompt === "string"
-                    ? validationConfig.unavailable_prompt.trim()
-                    : "";
-
-                const availableTimes =
-                  isScheduleUnavailable
-                    ? errorMessage
-                        .split(":")
-                        .slice(2)
-                        .join(":")
-                        .split(",")
-                        .map((item) => item.trim())
-                        .filter(Boolean)
-                        .join(", ")
-                    : "";
-
-                const promptTemplate =
-                  isScheduleUnavailable && unavailablePromptTemplate
-                    ? unavailablePromptTemplate
-                    : (datetimeStep.retry_prompt || datetimeStep.prompt);
-
-                const retryPrompt = twoSentencesMax(
-                  renderBookingTemplate(
-                    promptTemplate,
-                    {
-                      ...buildBookingPromptVariables({
-                        bookingData: state.bookingData || {},
-                        callerE164,
-                      }),
-                      available_times: availableTimes,
-                      requested_service: String(answersBySlot.service || "").trim(),
-                      requested_datetime: String(answersBySlot.datetime || "").trim(),
-                    }
-                  )
-                );
-
-                const gather = vr.gather({
-                  input: ['speech'] as any,
-                  action: '/webhook/voice-response',
-                  method: 'POST',
-                  language: currentLocale as any,
-                  speechTimeout: 'auto',
-                  timeout: 7,
-                  actionOnEmptyResult: true,
-                  bargeIn: true,
-                });
-
-                gather.say(
-                  { language: currentLocale as any, voice: voiceName },
-                  retryPrompt
-                );
-
-                logBotSay({
-                  callSid,
-                  to: didNumber || 'ivr',
-                  text: retryPrompt,
-                  lang: currentLocale,
-                  context: `booking_retry:${datetimeStep.step_key}`,
-                });
-
-                return res.type('text/xml').send(vr.toString());
-              }
+              const appointment = await createAppointmentFromVoice({
+                tenantId: tenant.id,
+                answersBySlot,
+                idempotencyKey: `voice:${callSid}`,
+                settings: appointmentSettings,
+              });
 
               console.log("[VOICE][APPOINTMENT_CREATED]", {
                 callSid,
@@ -2412,7 +2289,7 @@ router.post('/', async (req: Request, res: Response) => {
                       callerE164,
                     }),
                     requested_service: String(currentBookingData.service || "").trim(),
-                    requested_datetime: String(currentBookingData.datetime || "").trim(),
+                    requested_datetime: rawDatetime,
                     available_times: availableTimes,
                   }
                 )
