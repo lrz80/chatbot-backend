@@ -2097,7 +2097,15 @@ router.post('/', async (req: Request, res: Response) => {
             return res.type('text/xml').send(vr.toString());
           }
 
-          const retry = twoSentencesMax(currentStep.prompt);
+          const retry = twoSentencesMax(
+            await resolveBookingFlowSpeech({
+              baseText: currentStep.prompt || "",
+              locale: currentLocale,
+              bookingData: state.bookingData || {},
+              callerE164,
+            })
+          );
+
           const gather = vr.gather({
             input: ['speech','dtmf'] as any,
             numDigits: 1,
@@ -2257,9 +2265,16 @@ router.post('/', async (req: Request, res: Response) => {
           if (serviceResolution.kind === "ambiguous") {
             const optionsText = serviceResolution.options.join(", ");
 
-            const ambiguousPrompt = currentLocale.startsWith("es")
-              ? `Encontré varias opciones parecidas: ${optionsText}. Dime el nombre completo del servicio que quieres agendar.`
-              : `I found several similar options: ${optionsText}. Please say the full service name you want to book.`;
+            const ambiguousPrompt = await resolveBookingFlowSpeech({
+              baseText:
+                "I found several similar options: ${optionsText}. Please say the full service name you want to book.",
+              locale: currentLocale,
+              bookingData: {
+                ...(state.bookingData || {}),
+                available_options: optionsText,
+              },
+              callerE164,
+            });
 
             const gather = vr.gather({
               input: ['speech'] as any,
@@ -2343,18 +2358,17 @@ router.post('/', async (req: Request, res: Response) => {
                   : (currentStep.retry_prompt || currentStep.prompt);
 
               const retryPrompt = twoSentencesMax(
-                renderBookingTemplate(
-                  promptTemplate,
-                  {
-                    ...buildBookingPromptVariables({
-                      bookingData: currentBookingData,
-                      callerE164,
-                    }),
+                await resolveBookingFlowSpeech({
+                  baseText: promptTemplate,
+                  locale: currentLocale,
+                  bookingData: {
+                    ...currentBookingData,
                     requested_service: String(currentBookingData.service || "").trim(),
                     requested_datetime: rawDatetime,
                     available_times: availableTimes,
-                  }
-                )
+                  },
+                  callerE164,
+                })
               );
 
               const gather = vr.gather({
