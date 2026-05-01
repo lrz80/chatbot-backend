@@ -1900,11 +1900,13 @@ router.post('/', async (req: Request, res: Response) => {
               } catch (error: any) {
                 const errorMessage = String(error?.message || "");
 
-                const mustRetryDatetime =
-                  errorMessage.startsWith("INVALID_VOICE_DATETIME:") ||
+                const isInvalidDatetime =
+                  errorMessage.startsWith("INVALID_VOICE_DATETIME:");
+
+                const isScheduleUnavailable =
                   errorMessage.startsWith("VOICE_SCHEDULE_NOT_AVAILABLE:");
 
-                if (!mustRetryDatetime) {
+                if (!isInvalidDatetime && !isScheduleUnavailable) {
                   throw error;
                 }
 
@@ -1943,13 +1945,55 @@ router.post('/', async (req: Request, res: Response) => {
                   bookingData: state.bookingData || {},
                 });
 
-                const retryPrompt = twoSentencesMax(
+                const baseRetryPrompt = twoSentencesMax(
                   renderBookingTemplate(
                     datetimeStep.retry_prompt || datetimeStep.prompt,
                     buildBookingPromptVariables({
                       bookingData: state.bookingData || {},
                       callerE164,
                     })
+                  )
+                );
+
+                const validationConfig =
+                  currentStep.validation_config && typeof currentStep.validation_config === "object"
+                    ? currentStep.validation_config
+                    : {};
+
+                const unavailablePromptTemplate =
+                  typeof validationConfig.unavailable_prompt === "string"
+                    ? validationConfig.unavailable_prompt.trim()
+                    : "";
+
+                const availableTimes =
+                  isScheduleUnavailable
+                    ? errorMessage
+                        .split(":")
+                        .slice(2)
+                        .join(":")
+                        .split(",")
+                        .map((item) => item.trim())
+                        .filter(Boolean)
+                        .join(", ")
+                    : "";
+
+                const promptTemplate =
+                  isScheduleUnavailable && unavailablePromptTemplate
+                    ? unavailablePromptTemplate
+                    : (datetimeStep.retry_prompt || datetimeStep.prompt);
+
+                const retryPrompt = twoSentencesMax(
+                  renderBookingTemplate(
+                    promptTemplate,
+                    {
+                      ...buildBookingPromptVariables({
+                        bookingData: state.bookingData || {},
+                        callerE164,
+                      }),
+                      available_times: availableTimes,
+                      requested_service: String(answersBySlot.service || "").trim(),
+                      requested_datetime: String(answersBySlot.datetime || "").trim(),
+                    }
                   )
                 );
 
