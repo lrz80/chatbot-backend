@@ -25,6 +25,22 @@ function twoSentencesMax(s: string) {
   return parts.slice(0, 2).join(" ").trim();
 }
 
+function assertNonEmptyBookingSpeech(input: {
+  text: string;
+  stepKey: string;
+  field: "prompt" | "retry_prompt" | "unavailable_prompt";
+}) {
+  const value = (input.text || "").trim();
+
+  if (!value) {
+    throw new Error(
+      `BOOKING_FLOW_EMPTY_SPEECH:${input.stepKey}:${input.field}`
+    );
+  }
+
+  return value;
+}
+
 function saidYes(t: string) {
   const s = (t || "")
     .normalize("NFD")
@@ -99,11 +115,6 @@ export async function handleVoiceBookingTurn(
 
   let state = params.state;
 
-  const wantsBookingFromIntent =
-    !!effectiveUserInput &&
-    !state.bookingStepIndex &&
-    false;
-
   const flow = await getBookingFlow(tenant.id);
 
   if (!effectiveUserInput && typeof state.bookingStepIndex !== "number") {
@@ -151,7 +162,21 @@ export async function handleVoiceBookingTurn(
       bookingData: {},
     });
 
-    const ask = twoSentencesMax(firstStep.prompt || "");
+    const askResolved = await resolveBookingFlowSpeech({
+      baseText: firstStep.prompt || "",
+      locale: currentLocale,
+      bookingData: state.bookingData || {},
+      callerE164,
+    });
+
+    const ask = twoSentencesMax(
+      assertNonEmptyBookingSpeech({
+        text: askResolved,
+        stepKey: firstStep.step_key,
+        field: "prompt",
+      })
+    );
+
     const gather = vr.gather({
       input: ["speech"] as any,
       action: "/webhook/voice-response",
@@ -379,16 +404,24 @@ export async function handleVoiceBookingTurn(
         bargeIn: true,
       });
 
-      const retryPrompt = await resolveBookingFlowSpeech({
+      const retryPromptResolved = await resolveBookingFlowSpeech({
         baseText: currentStep.retry_prompt || currentStep.prompt || "",
         locale: currentLocale,
         bookingData: state.bookingData || {},
         callerE164,
       });
 
+      const retryPrompt = twoSentencesMax(
+        assertNonEmptyBookingSpeech({
+          text: retryPromptResolved,
+          stepKey: currentStep.step_key,
+          field: currentStep.retry_prompt ? "retry_prompt" : "prompt",
+        })
+      );
+
       gather.say(
         { language: currentLocale as any, voice: voiceName },
-        twoSentencesMax(retryPrompt)
+        retryPrompt
       );
 
       return {
@@ -411,12 +444,14 @@ export async function handleVoiceBookingTurn(
       throw new Error("BOOKING_CONFIRM_STEP_MISSING");
     }
 
-    const prompt = await resolveBookingFlowSpeech({
-      baseText: nextStep.prompt || "",
-      locale: currentLocale,
-      bookingData: nextData,
-      callerE164,
-    });
+    const prompt = twoSentencesMax(
+      await resolveBookingFlowSpeech({
+        baseText: nextStep.prompt || "",
+        locale: currentLocale,
+        bookingData: nextData,
+        callerE164,
+      })
+    );
 
     state = {
       ...state,
@@ -458,7 +493,7 @@ export async function handleVoiceBookingTurn(
 
     gather.say(
       { language: currentLocale as any, voice: voiceName },
-      twoSentencesMax(prompt)
+      prompt
     );
 
     return {
@@ -485,14 +520,20 @@ export async function handleVoiceBookingTurn(
     });
 
     if (serviceResolution.kind === "none") {
-      const retryPrompt = await resolveBookingFlowSpeech({
-        baseText:
-          currentStep.retry_prompt ||
-          "I didn’t clearly catch the service you want to book. Which service would you like to book?",
+      const retryPromptResolved = await resolveBookingFlowSpeech({
+        baseText: currentStep.retry_prompt || currentStep.prompt || "",
         locale: currentLocale,
         bookingData: state.bookingData || {},
         callerE164,
       });
+
+      const retryPrompt = twoSentencesMax(
+        assertNonEmptyBookingSpeech({
+          text: retryPromptResolved,
+          stepKey: currentStep.step_key,
+          field: currentStep.retry_prompt ? "retry_prompt" : "prompt",
+        })
+      );
 
       const gather = vr.gather({
         input: ["speech"] as any,
@@ -507,7 +548,7 @@ export async function handleVoiceBookingTurn(
 
       gather.say(
         { language: currentLocale as any, voice: voiceName },
-        twoSentencesMax(retryPrompt)
+        retryPrompt
       );
 
       return {
@@ -618,19 +659,30 @@ export async function handleVoiceBookingTurn(
             ? unavailablePrompt
             : currentStep.retry_prompt || currentStep.prompt;
 
+        const retryPromptResolved = await resolveBookingFlowSpeech({
+          baseText: promptTemplate,
+          locale: currentLocale,
+          bookingData: {
+            ...currentBookingData,
+            requested_service: String(
+            currentBookingData.service || ""
+            ).trim(),
+            requested_datetime: rawDatetime,
+            available_times: availableTimes,
+          },
+          callerE164,
+        });
+
         const retryPrompt = twoSentencesMax(
-          await resolveBookingFlowSpeech({
-            baseText: promptTemplate,
-            locale: currentLocale,
-            bookingData: {
-              ...currentBookingData,
-              requested_service: String(
-                currentBookingData.service || ""
-              ).trim(),
-              requested_datetime: rawDatetime,
-              available_times: availableTimes,
-            },
-            callerE164,
+          assertNonEmptyBookingSpeech({
+            text: retryPromptResolved,
+            stepKey: currentStep.step_key,
+            field:
+              scheduleValidation.reason === "schedule_not_available" && unavailablePrompt
+                ? "unavailable_prompt"
+                : currentStep.retry_prompt
+                  ? "retry_prompt"
+                  : "prompt",
           })
         );
 
@@ -680,12 +732,20 @@ export async function handleVoiceBookingTurn(
     throw new Error("BOOKING_CONFIRM_STEP_MISSING");
   }
 
-  const prompt = await resolveBookingFlowSpeech({
+  const promptResolved = await resolveBookingFlowSpeech({
     baseText: nextStep.prompt || "",
     locale: currentLocale,
     bookingData: nextData,
     callerE164,
   });
+
+  const prompt = twoSentencesMax(
+    assertNonEmptyBookingSpeech({
+      text: promptResolved,
+      stepKey: nextStep.step_key,
+      field: "prompt",
+    })
+  );
 
   state = {
     ...state,
@@ -727,7 +787,7 @@ export async function handleVoiceBookingTurn(
 
   gather.say(
     { language: currentLocale as any, voice: voiceName },
-    twoSentencesMax(prompt)
+    prompt
   );
 
   return {
