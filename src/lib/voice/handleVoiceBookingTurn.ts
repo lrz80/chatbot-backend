@@ -26,6 +26,60 @@ function twoSentencesMax(s: string) {
   return parts.slice(0, 2).join(" ").trim();
 }
 
+function formatSuggestedStartForVoice(dateISO: string, locale: VoiceLocale) {
+  const date = new Date(dateISO);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  if (locale.startsWith("es")) {
+    return new Intl.DateTimeFormat("es-US", {
+      weekday: "long",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: "America/New_York",
+    }).format(date);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/New_York",
+  }).format(date);
+}
+
+function buildBusyAlternativesPrompt(params: {
+  locale: VoiceLocale;
+  suggestedStarts: string[];
+}) {
+  const formatted = params.suggestedStarts
+    .map((iso) => formatSuggestedStartForVoice(iso, params.locale))
+    .filter(Boolean)
+    .slice(0, 3);
+
+  if (params.locale.startsWith("es")) {
+    if (!formatted.length) {
+      return "Ese horario ya no está disponible. ¿Qué otra hora te gustaría?";
+    }
+
+    return `Ese horario ya no está disponible. Tengo cerca de esa hora: ${formatted.join(
+      ", "
+    )}. ¿Cuál prefieres?`;
+  }
+
+  if (!formatted.length) {
+    return "That time is no longer available. What other time would you prefer?";
+  }
+
+  return `That time is no longer available. I have these nearby times available: ${formatted.join(
+    ", "
+  )}. Which one do you prefer?`;
+}
+
 function assertNonEmptyBookingSpeech(input: {
   text: string;
   stepKey: string;
@@ -338,8 +392,55 @@ export async function handleVoiceBookingTurn(
           state,
           twiml: vr.toString(),
         };
-      } catch (err) {
+      } catch (err: any) {
         console.error("❌ Error creando cita:", err);
+
+        const providerError =
+          err?.error ||
+          err?.code ||
+          err?.providerError ||
+          null;
+
+        const suggestedStarts: string[] = Array.isArray(err?.suggestedStarts)
+          ? err.suggestedStarts
+          : [];
+
+        if (providerError === "SLOT_BUSY") {
+          const busyPrompt = buildBusyAlternativesPrompt({
+            locale: currentLocale,
+            suggestedStarts,
+          });
+
+          const gather = vr.gather({
+            input: ["speech"] as any,
+            action: "/webhook/voice-response",
+            method: "POST",
+            language: currentLocale as any,
+            speechTimeout: "auto",
+            timeout: 7,
+            actionOnEmptyResult: true,
+            bargeIn: true,
+          });
+
+          gather.say(
+            { language: currentLocale as any, voice: voiceName },
+            twoSentencesMax(busyPrompt)
+          );
+
+          logBotSay({
+            callSid,
+            to: didNumber || "ivr",
+            text: busyPrompt,
+            lang: currentLocale,
+            context: "booking_busy_alternatives",
+          });
+
+          return {
+            handled: true,
+            state,
+            twiml: vr.toString(),
+          };
+        }
 
         const failRaw =
           cfg?.booking_error_message || "Hubo un problema al agendar la cita.";

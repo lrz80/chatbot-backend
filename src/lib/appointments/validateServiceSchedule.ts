@@ -31,19 +31,30 @@ function normalizeHHMM(value: string): string {
   return `${hh}:${mm}`;
 }
 
+function hhmmToMinutes(value: string): number | null {
+  const normalized = normalizeHHMM(value);
+  if (!normalized) return null;
+
+  const [hh, mm] = normalized.split(":").map(Number);
+
+  if (
+    Number.isNaN(hh) ||
+    Number.isNaN(mm) ||
+    hh < 0 ||
+    hh > 23 ||
+    mm < 0 ||
+    mm > 59
+  ) {
+    return null;
+  }
+
+  return hh * 60 + mm;
+}
+
 export async function validateServiceSchedule(
   params: ValidateServiceScheduleParams
 ): Promise<ValidateServiceScheduleResult> {
   const requestedTime = normalizeHHMM(params.timeHHMM);
-
-  console.log("[VOICE][VALIDATE_SERVICE_SCHEDULE][INPUT]", {
-    tenantId: params.tenantId,
-    serviceName: params.serviceName,
-    dayOfWeek: params.dayOfWeek,
-    timeHHMM: params.timeHHMM,
-    requestedTime,
-    channel: params.channel || "voice",
-  });
 
   const schedules = await getServiceSchedules({
     tenantId: params.tenantId,
@@ -64,18 +75,10 @@ export async function validateServiceSchedule(
     String(row.start_time).slice(0, 5)
   );
 
-  console.log("[VOICE][VALIDATE_SERVICE_SCHEDULE][SERVICE_SCHEDULES]", {
-    enabledSchedulesCount: enabledSchedules.length,
-    sameDaySchedulesCount: sameDaySchedules.length,
-    availableTimesSameDay,
-    requestedTime,
-  });
-
   if (availableTimesSameDay.includes(requestedTime)) {
     return { ok: true };
   }
 
-  // Si el tenant sí configuró horarios por servicio, se respetan.
   if (tenantHasAnyVoiceServiceSchedules) {
     return {
       ok: false,
@@ -83,32 +86,42 @@ export async function validateServiceSchedule(
     };
   }
 
-  console.log("[VOICE][VALIDATE_SERVICE_SCHEDULE][FALLBACK_TRIGGER]", {
-    tenantHasAnyVoiceServiceSchedules,
-    requestedTime,
-    tenantId: params.tenantId,
-    dayOfWeek: params.dayOfWeek,
-  });
-
-  // Si NO hay horarios por servicio, caer al horario general del negocio.
   const businessFallback = await getBusinessHoursFallback({
     tenantId: params.tenantId,
     dayOfWeek: params.dayOfWeek,
   });
 
-  console.log("[VOICE][VALIDATE_SERVICE_SCHEDULE][BUSINESS_FALLBACK]", {
-    tenantId: params.tenantId,
-    dayOfWeek: params.dayOfWeek,
-    requestedTime,
-    availableBusinessTimes: businessFallback.availableTimes,
-  });
+  if (!businessFallback.start || !businessFallback.end) {
+    return {
+      ok: false,
+      availableTimes: [],
+    };
+  }
 
-  if (businessFallback.availableTimes.includes(requestedTime)) {
+  const requestedMinutes = hhmmToMinutes(requestedTime);
+  const startMinutes = hhmmToMinutes(businessFallback.start);
+  const endMinutes = hhmmToMinutes(businessFallback.end);
+
+  if (
+    requestedMinutes === null ||
+    startMinutes === null ||
+    endMinutes === null
+  ) {
+    return {
+      ok: false,
+      availableTimes: [],
+    };
+  }
+
+  const isWithinBusinessRange =
+    requestedMinutes >= startMinutes && requestedMinutes < endMinutes;
+
+  if (isWithinBusinessRange) {
     return { ok: true };
   }
 
   return {
     ok: false,
-    availableTimes: businessFallback.availableTimes,
+    availableTimes: [businessFallback.start, businessFallback.end],
   };
 }

@@ -44,6 +44,7 @@ export type CreateExternalBookingResult =
       provider: BookingProviderResultSource;
       error: CreateExternalBookingError;
       busy: Array<{ start: string; end: string }>;
+      suggestedStarts?: string[];
     };
 
 export interface BookingProviderAdapter {
