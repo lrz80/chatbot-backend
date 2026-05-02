@@ -2068,31 +2068,22 @@ router.post('/', async (req: Request, res: Response) => {
     });
 
     if (!fin) {
-  const contGather = vr.gather({
-    input: ['speech','dtmf'] as any,
-    numDigits: 1,
-    action: '/webhook/voice-response',
-    method: 'POST',
-    language: currentLocale as any,
-    speechTimeout: 'auto',
-    timeout: 7,
-    actionOnEmptyResult: true,
-    bargeIn: true,
-  });
+      const contGather = vr.gather({
+        input: ['speech','dtmf'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: currentLocale as any,
+        speechTimeout: 'auto',
+        timeout: 7,
+        actionOnEmptyResult: true,
+        bargeIn: true,
+      });
 
-  contGather.say(
-    { language: currentLocale as any, voice: voiceName },
-    speakOut
-  );
-
-  const tailHelp = currentLocale.startsWith('es')
-    ? 'Puedo ayudarte con precios, horarios o ubicación. Solo dime qué necesitas.'
-    : 'I can help with prices, hours, or location. Just tell me what you need.';
-
-  contGather.say(
-    { language: currentLocale as any, voice: voiceName },
-    tailHelp
-  );
+      contGather.say(
+        { language: currentLocale as any, voice: voiceName },
+        speakOut
+      );
     } else {
       await deleteVoiceCallState(callSid);
 
