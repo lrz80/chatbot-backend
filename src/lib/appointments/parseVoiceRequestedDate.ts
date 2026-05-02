@@ -103,11 +103,17 @@ function resolveTargetDateParts(
   const normalized = normalizeText(text);
   const baseParts = getDatePartsInTimeZone(baseDate, timeZone);
 
-  if (/\b(hoy|today)\b/.test(normalized)) {
+  if (/\b(hoy|today)\b/u.test(normalized)) {
     return baseParts;
   }
 
-  if (/\b(manana|tomorrow)\b/.test(normalized)) {
+  // "mañana" como día relativo, pero NO cuando aparece dentro de "de la mañana"
+  const hasRelativeTomorrow =
+    /\b(tomorrow)\b/u.test(normalized) ||
+    /^(manana)\b/u.test(normalized) ||
+    /\bmanana\b(?!\s*$|(\s+de\s+la\s+manana\b))/u.test(normalized);
+
+  if (hasRelativeTomorrow) {
     return addDaysToParts(baseParts, 1, timeZone);
   }
 
