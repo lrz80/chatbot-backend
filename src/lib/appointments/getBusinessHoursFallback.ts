@@ -9,7 +9,6 @@ type GetBusinessHoursFallbackParams = {
 type AppointmentSettingsRow = {
   default_duration_min: number | null;
   buffer_min: number | null;
-  timezone: string | null;
 };
 
 type HorarioDia = {
@@ -94,6 +93,7 @@ function buildSlotsByRange(params: {
   }
 
   const step = durationMin + Math.max(bufferMin, 0);
+
   if (step <= 0) {
     return [];
   }
@@ -155,7 +155,7 @@ export async function getBusinessHoursFallback(
 
   const settingsResult = await pool.query(
     `
-    SELECT default_duration_min, buffer_min, timezone
+    SELECT default_duration_min, buffer_min
     FROM appointment_settings
     WHERE tenant_id = $1
     LIMIT 1

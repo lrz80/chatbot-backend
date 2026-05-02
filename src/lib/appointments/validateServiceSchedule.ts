@@ -59,7 +59,7 @@ export async function validateServiceSchedule(
     return { ok: true };
   }
 
-  // Si el tenant configuró horarios por servicio, se respetan.
+  // Si el tenant sí configuró horarios por servicio, se respetan.
   if (tenantHasAnyVoiceServiceSchedules) {
     return {
       ok: false,
@@ -67,7 +67,7 @@ export async function validateServiceSchedule(
     };
   }
 
-  // Fallback al horario general del negocio.
+  // Si NO hay horarios por servicio, caer al horario general del negocio.
   const businessFallback = await getBusinessHoursFallback({
     tenantId: params.tenantId,
     dayOfWeek: params.dayOfWeek,
