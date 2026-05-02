@@ -258,11 +258,18 @@ export async function handleVoiceBookingTurn(
           throw new Error("BOOKING_SUCCESS_STEP_NOT_CONFIGURED");
         }
 
-        const successPrompt = renderBookingTemplate(
-          successStep.prompt,
-          buildBookingPromptVariables({
-            bookingData: state.bookingData || {},
-            callerE164,
+        const successPromptResolved = await resolveBookingFlowSpeech({
+          baseText: successStep.prompt || "",
+          locale: currentLocale,
+          bookingData: state.bookingData || {},
+          callerE164,
+        });
+
+        const successPrompt = twoSentencesMax(
+          assertNonEmptyBookingSpeech({
+            text: successPromptResolved,
+            stepKey: successStep.step_key,
+            field: "prompt",
           })
         );
 
@@ -280,8 +287,16 @@ export async function handleVoiceBookingTurn(
 
         gather.say(
           { language: currentLocale as any, voice: voiceName },
-          twoSentencesMax(successPrompt)
+          successPrompt
         );
+
+        logBotSay({
+          callSid,
+          to: didNumber || "ivr",
+          text: successPrompt,
+          lang: currentLocale,
+          context: "booking_success",
+        });
 
         state = {
           ...state,
