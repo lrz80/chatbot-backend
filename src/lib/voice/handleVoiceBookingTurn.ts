@@ -258,10 +258,22 @@ export async function handleVoiceBookingTurn(
           throw new Error("BOOKING_SUCCESS_STEP_NOT_CONFIGURED");
         }
 
+        const bookingSpeechData = {
+          ...(state.bookingData || {}),
+          service:
+            state.bookingData?.service_display ||
+            state.bookingData?.service ||
+            "",
+          datetime:
+            state.bookingData?.datetime_display ||
+            state.bookingData?.datetime ||
+            "",
+          };
+
         const successPromptResolved = await resolveBookingFlowSpeech({
           baseText: successStep.prompt || "",
           locale: currentLocale,
-          bookingData: state.bookingData || {},
+          bookingData: bookingSpeechData,
           callerE164,
         });
 
@@ -612,6 +624,21 @@ export async function handleVoiceBookingTurn(
     }
 
     resolvedStepValue = serviceResolution.value;
+
+    const localizedServiceDisplay = await resolveBookingFlowSpeech({
+      baseText: serviceResolution.value,
+      locale: currentLocale,
+      bookingData: state.bookingData || {},
+      callerE164,
+    });
+
+    state = {
+      ...state,
+      bookingData: {
+        ...(state.bookingData || {}),
+        service_display: localizedServiceDisplay || serviceResolution.value,
+      },
+    };
   }
 
   const isDatetimeStep =
@@ -737,6 +764,17 @@ export async function handleVoiceBookingTurn(
   const nextData = {
     ...(state.bookingData || {}),
     [currentStep.step_key]: resolvedStepValue,
+    ...(isServiceStep
+      ? {
+        service_display:
+          state.bookingData?.service_display || resolvedStepValue,
+        }
+      : {}),
+    ...(isDatetimeStep
+      ? {
+        datetime_display: String(resolvedStepValue || "").trim(),
+        }
+      : {}),
   };
 
   const nextIndex = currentIndex + 1;

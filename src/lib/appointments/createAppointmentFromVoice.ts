@@ -72,6 +72,17 @@ export async function createAppointmentFromVoice(args: Args) {
 
   const orchestrator = new BookingProviderOrchestrator();
 
+  const bookedAt = new Date();
+
+  const bookedAtLabel = new Intl.DateTimeFormat("es-ES", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(bookedAt);
+
   const externalBooking = await orchestrator.createExternalBooking({
     tenantId: args.tenantId,
     summary: serviceName,
@@ -82,6 +93,7 @@ export async function createAppointmentFromVoice(args: Args) {
       `Cliente: ${customerName}`,
       customerPhone ? `Teléfono: ${customerPhone}` : null,
       customerEmail ? `Email: ${customerEmail}` : null,
+      `Booking creado: ${bookedAtLabel}`,
     ]
       .filter(Boolean)
       .join("\n"),
