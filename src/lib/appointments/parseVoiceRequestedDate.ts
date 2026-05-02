@@ -103,21 +103,28 @@ function resolveTargetDateParts(
   const normalized = normalizeText(text);
   const baseParts = getDatePartsInTimeZone(baseDate, timeZone);
 
-  if (normalized.includes("hoy") || normalized.includes("today")) {
+  if (/\b(hoy|today)\b/.test(normalized)) {
     return baseParts;
   }
 
-  if (normalized.includes("manana") || normalized.includes("tomorrow")) {
+  if (/\b(manana|tomorrow)\b/.test(normalized)) {
     return addDaysToParts(baseParts, 1, timeZone);
   }
 
   for (const [label, weekday] of Object.entries(WEEKDAY_MAP)) {
-    if (normalized.includes(label)) {
-      let diff = weekday - baseParts.weekday;
-      if (diff < 0) diff += 7;
-      if (diff === 0) diff = 7;
-      return addDaysToParts(baseParts, diff, timeZone);
+    const matchesWeekday = new RegExp(`\\b${label}\\b`, "u").test(normalized);
+
+    if (!matchesWeekday) {
+      continue;
     }
+
+    let diff = weekday - baseParts.weekday;
+
+    if (diff <= 0) {
+      diff += 7;
+    }
+
+    return addDaysToParts(baseParts, diff, timeZone);
   }
 
   return null;
@@ -240,6 +247,14 @@ export function parseVoiceRequestedDate(
   }
 
   const targetDateParts = resolveTargetDateParts(raw, baseDate, timeZone);
+
+  console.log("[VOICE][TARGET_DATE_PARTS]", {
+    raw,
+    baseDate: baseDate.toISOString(),
+    timeZone,
+    targetDateParts,
+  });
+
   const time = parseHourMinute(raw);
 
   if (!targetDateParts || !time) {
