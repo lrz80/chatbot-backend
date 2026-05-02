@@ -6,6 +6,7 @@ import { createAppointmentFromVoice } from "../appointments/createAppointmentFro
 import { resolveVoiceScheduleValidation } from "../appointments/resolveVoiceScheduleValidation";
 import { upsertVoiceCallState } from "./upsertVoiceCallState";
 import { deleteVoiceCallState } from "./deleteVoiceCallState";
+import { resolveVoiceIntentFromUtterance } from "./resolveVoiceIntentFromUtterance";
 import { CallState, VoiceLocale } from "./types";
 import {
   buildAnswersBySlot,
@@ -121,15 +122,13 @@ export async function handleVoiceBookingTurn(
     return { handled: false, state };
   }
 
+  const resolvedIntent = effectiveUserInput
+    ? resolveVoiceIntentFromUtterance(effectiveUserInput)
+    : null;
+
   const wantsBooking =
     typeof state.bookingStepIndex === "number" ||
-    (effectiveUserInput &&
-      cfg &&
-      typeof effectiveUserInput === "string" &&
-      (() => {
-        const s = effectiveUserInput.toLowerCase();
-        return /(reserv|agend|cita|appointment|book|booking)/i.test(s);
-      })());
+    resolvedIntent === "booking";
 
   if (!wantsBooking) {
     return { handled: false, state };
