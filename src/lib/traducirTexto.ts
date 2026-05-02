@@ -30,12 +30,6 @@ export async function traducirTexto(
 
   const targetLanguage = normalizeTargetLanguage(idioma);
 
-  // Evita traducir si ya está en español y ese es el destino base más común.
-  // Si quieres, luego esto se puede hacer mejor usando detectarIdioma.
-  if (targetLanguage === "es") {
-    return texto;
-  }
-
   const key = `${CACHE_VERSION}::${mode}::${texto}::${targetLanguage}`;
   if (cache.has(key)) return cache.get(key)!;
 
