@@ -36,6 +36,15 @@ export async function validateServiceSchedule(
 ): Promise<ValidateServiceScheduleResult> {
   const requestedTime = normalizeHHMM(params.timeHHMM);
 
+  console.log("[VOICE][VALIDATE_SERVICE_SCHEDULE][INPUT]", {
+    tenantId: params.tenantId,
+    serviceName: params.serviceName,
+    dayOfWeek: params.dayOfWeek,
+    timeHHMM: params.timeHHMM,
+    requestedTime,
+    channel: params.channel || "voice",
+  });
+
   const schedules = await getServiceSchedules({
     tenantId: params.tenantId,
     channel: params.channel || "voice",
@@ -55,6 +64,13 @@ export async function validateServiceSchedule(
     String(row.start_time).slice(0, 5)
   );
 
+  console.log("[VOICE][VALIDATE_SERVICE_SCHEDULE][SERVICE_SCHEDULES]", {
+    enabledSchedulesCount: enabledSchedules.length,
+    sameDaySchedulesCount: sameDaySchedules.length,
+    availableTimesSameDay,
+    requestedTime,
+  });
+
   if (availableTimesSameDay.includes(requestedTime)) {
     return { ok: true };
   }
@@ -67,10 +83,24 @@ export async function validateServiceSchedule(
     };
   }
 
+  console.log("[VOICE][VALIDATE_SERVICE_SCHEDULE][FALLBACK_TRIGGER]", {
+    tenantHasAnyVoiceServiceSchedules,
+    requestedTime,
+    tenantId: params.tenantId,
+    dayOfWeek: params.dayOfWeek,
+  });
+
   // Si NO hay horarios por servicio, caer al horario general del negocio.
   const businessFallback = await getBusinessHoursFallback({
     tenantId: params.tenantId,
     dayOfWeek: params.dayOfWeek,
+  });
+
+  console.log("[VOICE][VALIDATE_SERVICE_SCHEDULE][BUSINESS_FALLBACK]", {
+    tenantId: params.tenantId,
+    dayOfWeek: params.dayOfWeek,
+    requestedTime,
+    availableBusinessTimes: businessFallback.availableTimes,
   });
 
   if (businessFallback.availableTimes.includes(requestedTime)) {

@@ -130,6 +130,11 @@ export async function getBusinessHoursFallback(
     [params.tenantId]
   );
 
+  console.log("[VOICE][BUSINESS_HOURS_FALLBACK][TENANT_ROW]", {
+    tenantId: params.tenantId,
+    horarioAtencion: tenantResult.rows[0]?.horario_atencion,
+  });
+
   const horarioAtencion = tenantResult.rows[0]?.horario_atencion as HorarioAtencion | null;
 
   if (!horarioAtencion || typeof horarioAtencion !== "object") {
@@ -137,6 +142,13 @@ export async function getBusinessHoursFallback(
   }
 
   const dayConfig = horarioAtencion[dayKey];
+
+  console.log("[VOICE][BUSINESS_HOURS_FALLBACK][DAY_CONFIG]", {
+    tenantId: params.tenantId,
+    dayOfWeek: params.dayOfWeek,
+    dayKey,
+    dayConfig,
+  });
 
   if (!dayConfig || typeof dayConfig !== "object") {
     return { availableTimes: [] };
@@ -180,6 +192,16 @@ export async function getBusinessHoursFallback(
     end,
     durationMin,
     bufferMin,
+  });
+
+  console.log("[VOICE][BUSINESS_HOURS_FALLBACK][SLOTS]", {
+    tenantId: params.tenantId,
+    dayKey,
+    start,
+    end,
+    durationMin,
+    bufferMin,
+    availableTimes,
   });
 
   return { availableTimes };

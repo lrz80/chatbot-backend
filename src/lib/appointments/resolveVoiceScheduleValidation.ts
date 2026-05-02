@@ -38,6 +38,14 @@ export async function resolveVoiceScheduleValidation(
     timeZone,
   });
 
+  console.log("[VOICE][DATETIME_PARSE]", {
+    tenantId: params.tenantId,
+    serviceName: params.serviceName,
+    rawDatetime: params.rawDatetime,
+    timeZone,
+    parsed,
+  });
+
   if (!parsed.ok) {
     return {
       ok: false,
@@ -52,6 +60,15 @@ export async function resolveVoiceScheduleValidation(
     requestedAt: parsed.requestedAt,
     channel: params.channel || "voice",
     timeZone,
+  });
+
+  console.log("[VOICE][SCHEDULE_CHECK]", {
+    tenantId: params.tenantId,
+    serviceName: params.serviceName,
+    requestedAt: parsed.requestedAt.toISOString(),
+    channel: params.channel || "voice",
+    timeZone,
+    scheduleValidation,
   });
 
   if (!scheduleValidation.ok) {
