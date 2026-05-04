@@ -12,7 +12,39 @@ export type BookingStep = {
   validation_config: Record<string, unknown> | null;
 };
 
-export async function getBookingFlow(tenantId: string) {
+type BookingFlowCacheEntry = {
+  expiresAt: number;
+  steps: BookingStep[];
+};
+
+const BOOKING_FLOW_TTL_MS = 30_000;
+const bookingFlowCache = new Map<string, BookingFlowCacheEntry>();
+
+function buildBookingFlowCacheKey(tenantId: string, channel: string) {
+  return `${tenantId}:${channel}`;
+}
+
+export function clearBookingFlowCache(tenantId?: string, channel = "voice") {
+  if (!tenantId) {
+    bookingFlowCache.clear();
+    return;
+  }
+
+  bookingFlowCache.delete(buildBookingFlowCacheKey(tenantId, channel));
+}
+
+export async function getBookingFlow(
+  tenantId: string,
+  channel = "voice"
+): Promise<BookingStep[]> {
+  const cacheKey = buildBookingFlowCacheKey(tenantId, channel);
+  const now = Date.now();
+  const cached = bookingFlowCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > now) {
+    return cached.steps;
+  }
+
   const { rows } = await pool.query(
     `
     SELECT
@@ -26,11 +58,18 @@ export async function getBookingFlow(tenantId: string) {
       validation_config
     FROM appointment_booking_flows
     WHERE tenant_id = $1
-      AND channel = 'voice'
+      AND channel = $2
     ORDER BY step_order ASC
     `,
-    [tenantId]
+    [tenantId, channel]
   );
 
-  return rows as BookingStep[];
+  const steps = rows as BookingStep[];
+
+  bookingFlowCache.set(cacheKey, {
+    expiresAt: now + BOOKING_FLOW_TTL_MS,
+    steps,
+  });
+
+  return steps;
 }
