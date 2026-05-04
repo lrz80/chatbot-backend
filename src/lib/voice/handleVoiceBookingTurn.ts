@@ -18,6 +18,7 @@ import {
   resolveVoiceBookingService,
 } from "./voiceBookingHelpers";
 import { resolveVoiceMetaSignal } from "./resolveVoiceMetaSignal";
+import { buildVoiceContinuationPrompt } from "./buildVoiceContinuationPrompt";
 
 function twoSentencesMax(s: string) {
   const parts = (s || "")
@@ -466,9 +467,56 @@ export async function handleVoiceBookingTurn(
     }
 
     if (confirmationMetaSignal.intent === "reject" || digits === "2") {
-      await deleteVoiceCallState(callSid);
+      const cancelMessageResolved = await resolveBookingFlowSpeech({
+        baseText: cfg?.booking_cancel_message || "",
+        locale: currentLocale,
+        bookingData: state.bookingData || {},
+        callerE164,
+      });
 
-      const cancelRaw = cfg?.booking_cancel_message || "No se agendó la cita.";
+      const followupMessageResolved = await resolveBookingFlowSpeech({
+        baseText: cfg?.welcome_message || "",
+        locale: currentLocale,
+        bookingData: state.bookingData || {},
+        callerE164,
+      });
+
+      const cancelPrompt = twoSentencesMax(
+        buildVoiceContinuationPrompt({
+          primaryText: cancelMessageResolved,
+          followupText: followupMessageResolved,
+        })
+      );
+
+      const spokenPrompt = assertNonEmptyBookingSpeech({
+        text: cancelPrompt,
+        stepKey: currentStep.step_key,
+        field: "prompt",
+      });
+
+      state = {
+        ...state,
+        awaiting: false,
+        pendingType: null,
+        awaitingNumber: false,
+        smsSent: false,
+        bookingStepIndex: undefined,
+        bookingData: {},
+      };
+
+      await upsertVoiceCallState({
+        callSid,
+        tenantId: tenant.id,
+        lang: state.lang ?? currentLocale,
+        turn: state.turn ?? 0,
+        awaiting: false,
+        pendingType: null,
+        awaitingNumber: false,
+        altDest: state.altDest ?? null,
+        smsSent: false,
+        bookingStepIndex: null,
+        bookingData: {},
+      });
 
       const gather = vr.gather({
         input: ["speech", "dtmf"] as any,
@@ -476,16 +524,28 @@ export async function handleVoiceBookingTurn(
         action: "/webhook/voice-response",
         method: "POST",
         language: currentLocale as any,
+        speechTimeout: "auto",
+        timeout: 7,
+        actionOnEmptyResult: true,
+        bargeIn: true,
       });
 
       gather.say(
         { language: currentLocale as any, voice: voiceName },
-        twoSentencesMax(cancelRaw)
+        spokenPrompt
       );
+
+      logBotSay({
+        callSid,
+        to: didNumber || "ivr",
+        text: spokenPrompt,
+        lang: currentLocale,
+        context: "booking_cancel_followup",
+      });
 
       return {
         handled: true,
-        state: {},
+        state,
         twiml: vr.toString(),
       };
     }
