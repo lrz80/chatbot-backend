@@ -32,10 +32,11 @@ const normRowForUI = (row: any = {}) => {
   };
   return {
     ...row,
-    funciones_asistente:  norm(row.funciones_asistente),
-    info_clave:           norm(row.info_clave),
-    voice_hints:          norm(row.voice_hints),
+    funciones_asistente:   norm(row.funciones_asistente),
+    info_clave:            norm(row.info_clave),
+    voice_hints:           norm(row.voice_hints),
     booking_services_text: norm(row.booking_services_text),
+    main_menu_prompt:      norm(row.main_menu_prompt),
   };
 };
 
@@ -89,6 +90,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
     voice_name,
     system_prompt,
     welcome_message,
+    main_menu_prompt,
     voice_hints,
     canal = "voice",
     funciones_asistente,
@@ -102,6 +104,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
   voice_name = toText(voice_name) || "alice";
   system_prompt = toText(system_prompt);
   welcome_message = toText(welcome_message);
+  main_menu_prompt = toText(main_menu_prompt);
   voice_hints = toText(voice_hints);
   canal = toText(canal) || "voice";
   funciones_asistente = toText(funciones_asistente);
@@ -135,23 +138,24 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
     await pool.query(
       `
       INSERT INTO voice_configs (
-        tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
+        tenant_id, idioma, voice_name, system_prompt, welcome_message, main_menu_prompt, voice_hints,
         canal, funciones_asistente, info_clave, booking_services_text, audio_demo_url, representante_number,
         created_at, updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW(), NOW())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, NOW(), NOW())
       ON CONFLICT (tenant_id, idioma, canal)
       DO UPDATE SET
-        voice_name           = COALESCE(NULLIF(EXCLUDED.voice_name, ''), voice_configs.voice_name),
-        system_prompt        = EXCLUDED.system_prompt,
-        welcome_message      = EXCLUDED.welcome_message,
-        voice_hints          = EXCLUDED.voice_hints,
-        funciones_asistente  = EXCLUDED.funciones_asistente,
-        info_clave           = EXCLUDED.info_clave,
+        voice_name            = COALESCE(NULLIF(EXCLUDED.voice_name, ''), voice_configs.voice_name),
+        system_prompt         = EXCLUDED.system_prompt,
+        welcome_message       = EXCLUDED.welcome_message,
+        main_menu_prompt      = EXCLUDED.main_menu_prompt,
+        voice_hints           = EXCLUDED.voice_hints,
+        funciones_asistente   = EXCLUDED.funciones_asistente,
+        info_clave            = EXCLUDED.info_clave,
         booking_services_text = EXCLUDED.booking_services_text,
-        audio_demo_url       = EXCLUDED.audio_demo_url,
-        representante_number = EXCLUDED.representante_number,
-        updated_at           = NOW()
+        audio_demo_url        = EXCLUDED.audio_demo_url,
+        representante_number  = EXCLUDED.representante_number,
+        updated_at            = NOW()
       `,
       [
         tenant_id,
@@ -159,6 +163,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
         voice_name,
         system_prompt,
         welcome_message,
+        main_menu_prompt || "",
         voice_hints || "",
         canal,
         funciones_asistente || "",
