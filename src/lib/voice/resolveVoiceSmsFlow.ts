@@ -1,12 +1,9 @@
 // src/lib/voice/resolveVoiceSmsFlow.ts
 
 import { LinkType } from "./types";
-import {
-  askedForSms,
-  didAssistantPromiseSms,
-  guessLinkType,
-} from "./resolveVoiceTurnSignals";
 import { resolveVoiceMetaSignal } from "./resolveVoiceMetaSignal";
+import { resolveVoiceSmsIntent } from "./resolveVoiceSmsIntent";
+import { resolveVoiceLinkType } from "./resolveVoiceLinkType";
 
 export type ResolveVoiceSmsFlowInput = {
   effectiveUserInput: string;
@@ -38,14 +35,19 @@ export async function resolveVoiceSmsFlow(
     utterance: effectiveUserInput,
   });
 
+  const smsIntent = await resolveVoiceSmsIntent({
+    userUtterance: effectiveUserInput,
+    assistantUtterance: assistantReply,
+  });
+
   const confirmation =
     digits === "1" || metaSignal.intent === "affirm";
 
   const rejection =
     digits === "2" || metaSignal.intent === "reject";
 
-  const newlyRequested = askedForSms(effectiveUserInput);
-  const promisedByAssistant = didAssistantPromiseSms(assistantReply);
+  const newlyRequested = smsIntent.userRequestedSms;
+  const promisedByAssistant = smsIntent.assistantPromisedSms;
 
   let resolvedType: LinkType | null = null;
   let shouldSendNow = false;
@@ -53,7 +55,13 @@ export async function resolveVoiceSmsFlow(
   let nextPendingType: LinkType | null = null;
 
   if (input.awaiting && confirmation) {
-    resolvedType = input.pendingType || guessLinkType(effectiveUserInput);
+    resolvedType =
+      input.pendingType ||
+      (await resolveVoiceLinkType({
+        utterance: effectiveUserInput,
+        fallback: "reservar",
+      }));
+
     shouldSendNow = true;
     nextPendingType = null;
 
@@ -83,7 +91,11 @@ export async function resolveVoiceSmsFlow(
   }
 
   if (newlyRequested) {
-    resolvedType = guessLinkType(effectiveUserInput);
+    resolvedType = await resolveVoiceLinkType({
+      utterance: effectiveUserInput,
+      fallback: "reservar",
+    });
+
     shouldSendNow = true;
     nextPendingType = null;
 
@@ -100,7 +112,10 @@ export async function resolveVoiceSmsFlow(
   }
 
   if (promisedByAssistant) {
-    const inferredType = guessLinkType(`${effectiveUserInput} ${assistantReply}`);
+    const inferredType = await resolveVoiceLinkType({
+      utterance: `${effectiveUserInput} ${assistantReply}`.trim(),
+      fallback: "reservar",
+    });
 
     if (confirmation) {
       return {

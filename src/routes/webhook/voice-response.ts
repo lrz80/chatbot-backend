@@ -27,10 +27,6 @@ import {
 
 import {
   extractDigits,
-  askedForSms,
-  didAssistantPromiseSms,
-  guessLinkType,
-  coerceSpeechToMenuDigit,
 } from "../../lib/voice/resolveVoiceTurnSignals";
 import {
   resolveEffectiveVoiceLocale,
@@ -54,6 +50,7 @@ import { resolveVoiceProviderVoice } from "../../lib/voice/resolveVoiceProviderV
 import { resolveVoiceSmsDeliveryOutcome } from "../../lib/voice/resolveVoiceSmsDeliveryOutcome";
 import { renderVoiceSmsConfirmation } from "../../lib/voice/renderVoiceSmsConfirmation";
 import { resolveVoiceMetaSignal } from "../../lib/voice/resolveVoiceMetaSignal";
+import { resolveVoiceMenuSelection } from "../../lib/voice/resolveVoiceMenuSelection";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -396,7 +393,11 @@ router.post('/', async (req: Request, res: Response) => {
     : null;
 
   if (!digits && effectiveUserInput && resolvedInitialVoiceIntent !== "booking") {
-    const coerced = coerceSpeechToMenuDigit(effectiveUserInput);
+    const coerced = await resolveVoiceMenuSelection({
+      utterance: effectiveUserInput,
+      locale: state.lang,
+    });
+
     if (coerced) digits = coerced;
   }
 
@@ -937,7 +938,10 @@ router.post('/', async (req: Request, res: Response) => {
       earlyMetaSignal.intent !== "affirm" &&
       earlyMetaSignal.intent !== "reject"
     ) {
-      const nextDigit = coerceSpeechToMenuDigit(effectiveUserInput);
+      const nextDigit = await resolveVoiceMenuSelection({
+        utterance: effectiveUserInput,
+        locale: currentLocale,
+      });
 
       state = {
         ...state,
@@ -1370,7 +1374,6 @@ router.post('/', async (req: Request, res: Response) => {
       metaConfidence: thisTurnMetaSignal.confidence,
       tagMatch: !!tagMatch,
       pendingMatch: !!state.pendingType,
-      askedForSms: askedForSms(effectiveUserInput),
       smsType,
     });
 
