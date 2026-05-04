@@ -51,6 +51,7 @@ import { resolveVoiceSmsDeliveryOutcome } from "../../lib/voice/resolveVoiceSmsD
 import { renderVoiceSmsConfirmation } from "../../lib/voice/renderVoiceSmsConfirmation";
 import { resolveVoiceMetaSignal } from "../../lib/voice/resolveVoiceMetaSignal";
 import { resolveVoiceMenuSelection } from "../../lib/voice/resolveVoiceMenuSelection";
+import { normalizeVoiceTurnInput } from "../../lib/voice/normalizeVoiceTurnInput";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -312,10 +313,8 @@ router.post("/lang", async (req: Request, res: Response) => {
       return res.type("text/xml").send(vr.toString());
     }
 
-    vr.say(
-      { language: "en-US", voice: resolveVoiceProviderVoice("en-US") as any },
-      renderVoiceLifecycle("language_continue_en", "en-US")
-    );
+    // Inglés no necesita confirmación hablada.
+    // Sigue directo para evitar repetir saludo.
     vr.redirect("/webhook/voice-response?lang=en");
     return res.type("text/xml").send(vr.toString());
   }
@@ -333,10 +332,8 @@ router.post("/lang", async (req: Request, res: Response) => {
     return res.type("text/xml").send(vr.toString());
   }
 
-  vr.say(
-    { language: "en-US", voice: resolveVoiceProviderVoice("en-US") as any },
-    renderVoiceLifecycle("language_continue_en", "en-US")
-  );
+  // Si no hubo selección explícita ni utterance real,
+  // por defecto sigue a inglés sin volver a hablar aquí.
   vr.redirect("/webhook/voice-response?lang=en");
   return res.type("text/xml").send(vr.toString());
 });
@@ -350,10 +347,15 @@ router.post('/', async (req: Request, res: Response) => {
   const callerRaw  = from.replace(/^tel:/, '');
   const callerE164 = normalizarNumero(callerRaw);
 
-  const userInputRaw = (req.body.SpeechResult || '').toString();
+  const normalizedTurnInput = normalizeVoiceTurnInput({
+    speech: (req.body.SpeechResult || "").toString(),
+    digits: (req.body.Digits || "").toString(),
+  });
+
+  const userInputRaw = normalizedTurnInput.text;
   const userInput = userInputRaw.trim();
 
-  let digits = (req.body.Digits || '').toString().trim();
+  let digits = normalizedTurnInput.digits;
 
   // UNA SOLA instancia de VoiceResponse
   const vr = new twiml.VoiceResponse();
@@ -392,14 +394,24 @@ router.post('/', async (req: Request, res: Response) => {
     ? resolveVoiceIntentFromUtterance(effectiveUserInput)
     : null;
 
-  if (!digits && effectiveUserInput && resolvedInitialVoiceIntent !== "booking") {
+  const canCoerceVoiceInputToMenuSelection =
+    !!effectiveUserInput &&
+    !digits &&
+    !state.awaiting &&
+    !state.awaitingNumber &&
+    typeof state.bookingStepIndex !== "number" &&
+    resolvedInitialVoiceIntent !== "booking";
+
+  if (canCoerceVoiceInputToMenuSelection) {
     const coerced = await resolveVoiceMenuSelection({
       utterance: effectiveUserInput,
       locale: state.lang,
-    });
+  });
 
-    if (coerced) digits = coerced;
+  if (coerced) {
+    digits = coerced;
   }
+}
 
   const langParam =
     typeof req.query.lang === "string" ? (req.query.lang as string) : undefined;
@@ -807,10 +819,12 @@ router.post('/', async (req: Request, res: Response) => {
       // Si fue "completed", simplemente retomamos flujo normal (no respondemos nada especial)
     }
 
-    console.log('[VOICE][NUM_CAPTURE]', JSON.stringify({
+    console.log("[VOICE][NUM_CAPTURE]", JSON.stringify({
       callSid,
-      SpeechResult: req.body.SpeechResult,
-      Digits: req.body.Digits
+      rawSpeechResult: req.body.SpeechResult,
+      rawDigits: req.body.Digits,
+      normalizedText: userInput,
+      normalizedDigits: digits,
     }));
 
     const earlyConversationClosure = await resolveVoiceConversationClosure(
@@ -818,7 +832,12 @@ router.post('/', async (req: Request, res: Response) => {
       currentLocale
     );
 
-    if (earlyConversationClosure.shouldClose && !state.awaitingNumber) {
+    if (
+      earlyConversationClosure.shouldClose &&
+      !state.awaitingNumber &&
+      typeof state.bookingStepIndex !== "number" &&
+      resolvedInitialVoiceIntent !== "booking"
+    ) {
       await deleteVoiceCallState(callSid);
 
       vr.say(
@@ -830,12 +849,45 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type("text/xml").send(vr.toString());
     }
 
+    if (
+      effectiveUserInput &&
+      (
+        typeof state.bookingStepIndex === "number" ||
+        resolvedInitialVoiceIntent === "booking"
+      )
+    ) {
+      const bookingTurnResult = await handleVoiceBookingTurn({
+        vr,
+        tenant,
+        cfg,
+        callSid,
+        didNumber,
+        callerE164,
+        currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
+        voiceName,
+        state,
+        userInput,
+        effectiveUserInput,
+        digits,
+        logBotSay,
+      });
+
+      if (bookingTurnResult.handled) {
+        return res.type("text/xml").send(bookingTurnResult.twiml);
+      }
+
+      state = bookingTurnResult.state;
+    }
+
+    const hasActiveBookingStep = typeof state.bookingStepIndex === "number";
+
     // ✅ capturar número cuando estábamos esperando uno
-    if (state.awaitingNumber && (userInput || digits)) {
-      let rawDigits = digits || extractDigits(userInput);
+    if (!hasActiveBookingStep && state.awaitingNumber && (effectiveUserInput || digits)) {
+      let rawDigits = digits || extractDigits(effectiveUserInput);
+
       if (!rawDigits) {
-        const spoken = wordsToDigits(userInput);
-        rawDigits = extractDigits(spoken) || ''; // vuelve a limpiar por si vino con '+'
+        const spoken = wordsToDigits(effectiveUserInput);
+        rawDigits = extractDigits(spoken) || "";
       }
       let candidate = rawDigits ? `+${rawDigits.replace(/^\+/, '')}` : null;
 
@@ -927,10 +979,12 @@ router.post('/', async (req: Request, res: Response) => {
     // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI
     let earlySmsType: LinkType | null = null;
 
-    const earlyMetaSignal = await resolveVoiceMetaSignal({
-      utterance: effectiveUserInput,
-      locale: currentLocale,
-    });
+    const earlyMetaSignal = !hasActiveBookingStep
+      ? await resolveVoiceMetaSignal({
+          utterance: effectiveUserInput,
+          locale: currentLocale,
+        })
+      : { intent: "other", confidence: 0 };
 
     if (
       state.awaiting &&
@@ -968,13 +1022,23 @@ router.post('/', async (req: Request, res: Response) => {
       }
     }
 
-    const earlySmsFlow = await resolveVoiceSmsFlow({
-      effectiveUserInput,
-      digits,
-      awaiting: !!state.awaiting,
-      pendingType: state.pendingType ?? null,
-      assistantReply: null,
-    });
+    const earlySmsFlow = !hasActiveBookingStep
+      ? await resolveVoiceSmsFlow({
+          effectiveUserInput,
+          digits,
+          awaiting: !!state.awaiting,
+          pendingType: state.pendingType ?? null,
+          assistantReply: null,
+        })
+      : {
+          confirmed: false,
+          rejected: false,
+          shouldSendNow: false,
+          resolvedType: null,
+          newlyRequested: false,
+          shouldKeepPending: false,
+          nextPendingType: null,
+        };
 
     if (state.awaiting && (earlySmsFlow.confirmed || earlySmsFlow.rejected)) {
       state = {
@@ -1089,8 +1153,8 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (
       digits &&
+      !hasActiveBookingStep &&
       !state.awaiting &&
-      typeof state.bookingStepIndex !== "number" &&
       resolvedVoiceIntentForTurn !== "booking"
     ) {
       const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
@@ -1166,29 +1230,7 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // ——— FAST INTENT: si el usuario pidió algo directo (sin DTMF), lee desde prompt y luego ofrece SMS ———
-    if (effectiveUserInput) {
-      const bookingTurnResult = await handleVoiceBookingTurn({
-        vr,
-        tenant,
-        cfg,
-        callSid,
-        didNumber,
-        callerE164,
-        currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
-        voiceName,
-        state,
-        userInput,
-        effectiveUserInput,
-        digits,
-        logBotSay,
-      });
-
-      if (bookingTurnResult.handled) {
-        return res.type("text/xml").send(bookingTurnResult.twiml);
-      }
-
-      state = bookingTurnResult.state;
-
+    if (effectiveUserInput && !hasActiveBookingStep) {
       const businessTopic = resolveVoiceBusinessTopic(effectiveUserInput);
 
       const sayAndOffer = async (
@@ -1566,7 +1608,9 @@ router.post('/', async (req: Request, res: Response) => {
       effectiveUserInput,
       currentLocale
     );
-    const fin = conversationClosure.shouldClose;
+    const fin =
+      !hasActiveBookingStep &&
+      conversationClosure.shouldClose;
 
     // ✅ recorte a 2 frases y normalización de horas antes de locutar
     const speakOut = sanitizeForSay(
