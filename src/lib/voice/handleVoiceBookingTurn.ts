@@ -467,24 +467,23 @@ export async function handleVoiceBookingTurn(
     }
 
     if (confirmationMetaSignal.intent === "reject" || digits === "2") {
-      const cancelMessageResolved = await resolveBookingFlowSpeech({
-        baseText: cfg?.booking_cancel_message || "",
-        locale: currentLocale,
-        bookingData: state.bookingData || {},
-        callerE164,
-      });
+      const cancelMessageTemplate =
+        typeof currentStep.validation_config?.cancel_message === "string"
+          ? currentStep.validation_config.cancel_message.trim()
+          : "";
 
-      const followupMessageResolved = await resolveBookingFlowSpeech({
-        baseText: cfg?.welcome_message || "",
+      const cancelMessageResolved = await resolveBookingFlowSpeech({
+        baseText: cancelMessageTemplate,
         locale: currentLocale,
         bookingData: state.bookingData || {},
         callerE164,
       });
 
       const cancelPrompt = twoSentencesMax(
-        buildVoiceContinuationPrompt({
-          primaryText: cancelMessageResolved,
-          followupText: followupMessageResolved,
+        assertNonEmptyBookingSpeech({
+          text: cancelMessageResolved,
+          stepKey: currentStep.step_key,
+          field: "prompt",
         })
       );
 
