@@ -19,9 +19,13 @@ export function resolveVoiceConversationClosure(
 ): ResolveVoiceConversationClosureResult {
   const s = normalizeText(value);
 
-  const shouldClose = /\b(gracias|eso es todo|nada mas|bye|adios)\b/u.test(s);
+  const explicitFarewell =
+    /\b(hasta luego|hasta pronto|adios|bye|goodbye|chao|nos vemos)\b/u.test(s);
+
+  const explicitConversationEnd =
+    /\b(eso es todo|nada mas|no gracias eso es todo|no gracias nada mas)\b/u.test(s);
 
   return {
-    shouldClose,
+    shouldClose: explicitFarewell || explicitConversationEnd,
   };
 }

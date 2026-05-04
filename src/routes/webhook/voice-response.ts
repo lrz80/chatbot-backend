@@ -813,6 +813,20 @@ router.post('/', async (req: Request, res: Response) => {
       Digits: req.body.Digits
     }));
 
+    const earlyConversationClosure = resolveVoiceConversationClosure(effectiveUserInput);
+
+    if (earlyConversationClosure.shouldClose && !state.awaitingNumber) {
+      await deleteVoiceCallState(callSid);
+
+      vr.say(
+        { language: currentLocale as any, voice: voiceName },
+        renderVoiceLifecycle("call_goodbye", currentLocale)
+      );
+
+      vr.hangup();
+      return res.type("text/xml").send(vr.toString());
+    }
+
     // ✅ capturar número cuando estábamos esperando uno
     if (state.awaitingNumber && (userInput || digits)) {
       let rawDigits = digits || extractDigits(userInput);
@@ -1182,6 +1196,14 @@ router.post('/', async (req: Request, res: Response) => {
         );
 
         vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
+
+        logBotSay({
+          callSid,
+          to: didNumber || "ivr",
+          text: spoken,
+          lang: currentLocale,
+          context: `business_topic:${topic}`,
+        });
 
         await offerSms(
           vr,
