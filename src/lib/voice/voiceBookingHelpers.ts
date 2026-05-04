@@ -6,6 +6,7 @@ import {
   VoiceBookingServiceOption,
   VoiceBookingServiceResolution,
 } from "./types";
+import { detectTextLanguage } from "../detectTextLanguage";
 
 function maskForVoice(n: string) {
   return (n || "").replace(
@@ -190,15 +191,34 @@ export async function resolveBookingFlowSpeech(params: {
 
   if (!rendered) return "";
 
-  const targetLocale = (params.locale || "").trim().toLowerCase();
+  const targetLocale = String(params.locale || "").trim().toLowerCase();
+  const targetLanguage =
+    targetLocale.startsWith("es") ? "es" :
+    targetLocale.startsWith("en") ? "en" :
+    targetLocale.startsWith("pt") ? "pt" :
+    targetLocale.startsWith("fr") ? "fr" :
+    targetLocale.startsWith("it") ? "it" :
+    targetLocale.startsWith("de") ? "de" :
+    targetLocale;
 
-  // El booking flow base está persistido en inglés.
-  // Solo devolvemos directo cuando el idioma destino también es inglés.
-  if (!targetLocale || targetLocale === "en" || targetLocale.startsWith("en-")) {
+  let sourceLanguage = "unknown";
+
+  try {
+    sourceLanguage = await detectTextLanguage(rendered);
+  } catch {
+    sourceLanguage = "unknown";
+  }
+
+  if (sourceLanguage !== "unknown" && sourceLanguage === targetLanguage) {
     return rendered;
   }
 
-  return (await traducirTexto(rendered, params.locale)).trim();
+  try {
+    const translated = await traducirTexto(rendered, targetLanguage, "default");
+    return (translated || rendered).trim();
+  } catch {
+    return rendered;
+  }
 }
 
 export function buildAnswersBySlot(params: {
