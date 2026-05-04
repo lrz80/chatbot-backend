@@ -762,6 +762,61 @@ export async function handleVoiceBookingTurn(
 
     const rawDatetime = String(resolvedStepValue || "").trim();
 
+      const datetimeMetaSignal = await resolveVoiceMetaSignal({
+      utterance: effectiveUserInput,
+      locale: currentLocale,
+    });
+
+    if (
+      datetimeMetaSignal.intent === "affirm" ||
+      datetimeMetaSignal.intent === "reject"
+    ) {
+      const retryPromptResolved = await resolveBookingFlowSpeech({
+        baseText: currentStep.retry_prompt || currentStep.prompt || "",
+        locale: currentLocale,
+        bookingData: state.bookingData || {},
+        callerE164,
+      });
+
+      const retryPrompt = twoSentencesMax(
+        assertNonEmptyBookingSpeech({
+          text: retryPromptResolved,
+          stepKey: currentStep.step_key,
+          field: currentStep.retry_prompt ? "retry_prompt" : "prompt",
+        })
+      );
+
+      const gather = vr.gather({
+        input: ["speech"] as any,
+        action: "/webhook/voice-response",
+        method: "POST",
+        language: currentLocale as any,
+        speechTimeout: "auto",
+        timeout: 7,
+        actionOnEmptyResult: true,
+        bargeIn: true,
+      });
+
+      gather.say(
+        { language: currentLocale as any, voice: voiceName },
+        retryPrompt
+      );
+
+      logBotSay({
+        callSid,
+        to: didNumber || "ivr",
+        text: retryPrompt,
+        lang: currentLocale,
+        context: `booking_retry:${currentStep.step_key}:meta_signal`,
+      });
+
+      return {
+        handled: true,
+        state,
+        twiml: vr.toString(),
+      };
+    }
+
     if (serviceName && rawDatetime) {
       const scheduleValidation = await resolveVoiceScheduleValidation({
         tenantId: tenant.id,
