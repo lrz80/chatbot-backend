@@ -1,31 +1,21 @@
 // src/lib/voice/resolveVoiceConversationClosure.ts
 
+import { resolveVoiceMetaSignal } from "./resolveVoiceMetaSignal";
+
 export type ResolveVoiceConversationClosureResult = {
   shouldClose: boolean;
 };
 
-function normalizeText(value: string): string {
-  return (value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-export function resolveVoiceConversationClosure(
-  value: string
-): ResolveVoiceConversationClosureResult {
-  const s = normalizeText(value);
-
-  const explicitFarewell =
-    /\b(hasta luego|hasta pronto|adios|bye|goodbye|chao|nos vemos)\b/u.test(s);
-
-  const explicitConversationEnd =
-    /\b(eso es todo|nada mas|no gracias eso es todo|no gracias nada mas)\b/u.test(s);
+export async function resolveVoiceConversationClosure(
+  value: string,
+  locale?: string | null
+): Promise<ResolveVoiceConversationClosureResult> {
+  const signal = await resolveVoiceMetaSignal({
+    utterance: value,
+    locale,
+  });
 
   return {
-    shouldClose: explicitFarewell || explicitConversationEnd,
+    shouldClose: signal.intent === "close",
   };
 }

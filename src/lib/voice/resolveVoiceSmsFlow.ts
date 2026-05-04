@@ -5,9 +5,8 @@ import {
   askedForSms,
   didAssistantPromiseSms,
   guessLinkType,
-  saidNo,
-  saidYes,
 } from "./resolveVoiceTurnSignals";
+import { resolveVoiceMetaSignal } from "./resolveVoiceMetaSignal";
 
 export type ResolveVoiceSmsFlowInput = {
   effectiveUserInput: string;
@@ -28,15 +27,22 @@ export type ResolveVoiceSmsFlowResult = {
   nextPendingType: LinkType | null;
 };
 
-export function resolveVoiceSmsFlow(
+export async function resolveVoiceSmsFlow(
   input: ResolveVoiceSmsFlowInput
-): ResolveVoiceSmsFlowResult {
+): Promise<ResolveVoiceSmsFlowResult> {
   const effectiveUserInput = input.effectiveUserInput || "";
   const digits = (input.digits || "").trim();
   const assistantReply = input.assistantReply || "";
 
-  const confirmation = saidYes(effectiveUserInput) || digits === "1";
-  const rejection = saidNo(effectiveUserInput) || digits === "2";
+  const metaSignal = await resolveVoiceMetaSignal({
+    utterance: effectiveUserInput,
+  });
+
+  const confirmation =
+    digits === "1" || metaSignal.intent === "affirm";
+
+  const rejection =
+    digits === "2" || metaSignal.intent === "reject";
 
   const newlyRequested = askedForSms(effectiveUserInput);
   const promisedByAssistant = didAssistantPromiseSms(assistantReply);

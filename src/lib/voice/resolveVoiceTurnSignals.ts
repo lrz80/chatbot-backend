@@ -7,8 +7,8 @@ export type VoiceTurnSignals = {
   extractedDigits: string;
   smsRequested: boolean;
   assistantPromisedSms: boolean;
-  smsConfirmation: boolean;
-  smsRejection: boolean;
+  smsConfirmation: false;
+  smsRejection: false;
   guessedLinkType: LinkType;
   coercedMenuDigit?: "1" | "2" | "3" | "4";
 };
@@ -25,22 +25,6 @@ function normalizeText(value: string): string {
 
 export function extractDigits(value: string): string {
   return (value || "").replace(/\D+/g, "");
-}
-
-export function saidYes(value: string): boolean {
-  const s = normalizeText(value);
-
-  return /\b(si|si por favor|claro|dale|ok|okay|porfa|envialo|mandalo|hazlo|yes|yep|please do|send it|text it)\b/u.test(
-    s
-  );
-}
-
-export function saidNo(value: string): boolean {
-  const s = normalizeText(value);
-
-  return /\b(no|no gracias|mejor no|luego|despues|mas tarde|not now|dont)\b/u.test(
-    s
-  );
 }
 
 export function askedForSms(value: string): boolean {
@@ -149,8 +133,8 @@ export function resolveVoiceTurnSignals(value: string): VoiceTurnSignals {
     extractedDigits: extractDigits(value),
     smsRequested: askedForSms(value),
     assistantPromisedSms: didAssistantPromiseSms(value),
-    smsConfirmation: saidYes(value),
-    smsRejection: saidNo(value),
+    smsConfirmation: false,
+    smsRejection: false,
     guessedLinkType: guessLinkType(value),
     coercedMenuDigit: coerceSpeechToMenuDigit(value),
   };

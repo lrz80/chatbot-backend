@@ -17,6 +17,7 @@ import {
   resolvePhoneFromVoiceInput,
   resolveVoiceBookingService,
 } from "./voiceBookingHelpers";
+import { resolveVoiceMetaSignal } from "./resolveVoiceMetaSignal";
 
 function twoSentencesMax(s: string) {
   const parts = (s || "")
@@ -267,7 +268,12 @@ export async function handleVoiceBookingTurn(
   }
 
   if (currentStep.expected_type === "confirmation") {
-    if (saidYes(userInput) || digits === "1") {
+    const confirmationMetaSignal = await resolveVoiceMetaSignal({
+      utterance: userInput,
+      locale: currentLocale,
+    });
+
+    if (confirmationMetaSignal.intent === "affirm" || digits === "1") {
       try {
         const { rows: settingsRows } = await pool.query(
           `
@@ -459,7 +465,7 @@ export async function handleVoiceBookingTurn(
       }
     }
 
-    if (saidNo(userInput) || digits === "2") {
+    if (confirmationMetaSignal.intent === "reject" || digits === "2") {
       await deleteVoiceCallState(callSid);
 
       const cancelRaw = cfg?.booking_cancel_message || "No se agendó la cita.";

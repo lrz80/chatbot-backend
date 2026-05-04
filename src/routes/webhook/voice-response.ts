@@ -30,8 +30,6 @@ import {
   askedForSms,
   didAssistantPromiseSms,
   guessLinkType,
-  saidYes,
-  saidNo,
   coerceSpeechToMenuDigit,
 } from "../../lib/voice/resolveVoiceTurnSignals";
 import {
@@ -55,6 +53,7 @@ import { generateVoiceFollowupReply } from "../../lib/voice/generateVoiceFollowu
 import { resolveVoiceProviderVoice } from "../../lib/voice/resolveVoiceProviderVoice";
 import { resolveVoiceSmsDeliveryOutcome } from "../../lib/voice/resolveVoiceSmsDeliveryOutcome";
 import { renderVoiceSmsConfirmation } from "../../lib/voice/renderVoiceSmsConfirmation";
+import { resolveVoiceMetaSignal } from "../../lib/voice/resolveVoiceMetaSignal";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -813,7 +812,10 @@ router.post('/', async (req: Request, res: Response) => {
       Digits: req.body.Digits
     }));
 
-    const earlyConversationClosure = resolveVoiceConversationClosure(effectiveUserInput);
+    const earlyConversationClosure = await resolveVoiceConversationClosure(
+      effectiveUserInput,
+      currentLocale
+    );
 
     if (earlyConversationClosure.shouldClose && !state.awaitingNumber) {
       await deleteVoiceCallState(callSid);
@@ -924,11 +926,16 @@ router.post('/', async (req: Request, res: Response) => {
     // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI
     let earlySmsType: LinkType | null = null;
 
+    const earlyMetaSignal = await resolveVoiceMetaSignal({
+      utterance: effectiveUserInput,
+      locale: currentLocale,
+    });
+
     if (
       state.awaiting &&
       effectiveUserInput &&
-      !saidYes(effectiveUserInput) &&
-      !saidNo(effectiveUserInput)
+      earlyMetaSignal.intent !== "affirm" &&
+      earlyMetaSignal.intent !== "reject"
     ) {
       const nextDigit = coerceSpeechToMenuDigit(effectiveUserInput);
 
@@ -957,7 +964,7 @@ router.post('/', async (req: Request, res: Response) => {
       }
     }
 
-    const earlySmsFlow = resolveVoiceSmsFlow({
+    const earlySmsFlow = await resolveVoiceSmsFlow({
       effectiveUserInput,
       digits,
       awaiting: !!state.awaiting,
@@ -1286,7 +1293,7 @@ router.post('/', async (req: Request, res: Response) => {
       respuesta = respuesta.replace(tagMatch[0], "").trim();
     }
 
-    const resolvedSmsFlow = resolveVoiceSmsFlow({
+    const resolvedSmsFlow = await resolveVoiceSmsFlow({
       effectiveUserInput,
       digits,
       awaiting: !!state.awaiting,
@@ -1350,12 +1357,17 @@ router.post('/', async (req: Request, res: Response) => {
       });
     }
 
+    const thisTurnMetaSignal = await resolveVoiceMetaSignal({
+      utterance: effectiveUserInput,
+      locale: currentLocale,
+    });
+
     console.log('[VOICE/SMS] dbg', {
       awaiting: state.awaiting,
       pendingType: state.pendingType,
       digits,
-      saidYes: saidYes(effectiveUserInput),
-      saidNo: saidNo(effectiveUserInput),
+      metaIntent: thisTurnMetaSignal.intent,
+      metaConfidence: thisTurnMetaSignal.confidence,
       tagMatch: !!tagMatch,
       pendingMatch: !!state.pendingType,
       askedForSms: askedForSms(effectiveUserInput),
@@ -1367,8 +1379,8 @@ router.post('/', async (req: Request, res: Response) => {
       // número preferido: alterno confirmado > callerE164
       const preferred = (state.altDest && isValidE164(state.altDest)) ? state.altDest : callerE164;
 
-      // si el usuario ya dijo explícitamente "sí" o pulsó 1 en este turno, no bloqueamos
-      const thisTurnYes = saidYes(effectiveUserInput) || digits === '1';
+      const thisTurnYes =
+        thisTurnMetaSignal.intent === "affirm" || digits === "1";
 
       if (!thisTurnYes) {
         if (!isValidE164(preferred)) {
@@ -1547,7 +1559,10 @@ router.post('/', async (req: Request, res: Response) => {
     await incrementarUsoPorNumero(didNumber);
 
     // ——— ¿Terminamos? ———
-    const conversationClosure = resolveVoiceConversationClosure(effectiveUserInput);
+    const conversationClosure = await resolveVoiceConversationClosure(
+      effectiveUserInput,
+      currentLocale
+    );
     const fin = conversationClosure.shouldClose;
 
     // ✅ recorte a 2 frases y normalización de horas antes de locutar
