@@ -2,13 +2,15 @@
 
 import { twiml } from "twilio";
 import { SupportedVoiceLocale } from "./resolveVoiceLanguage";
+import { getVoiceMenuCopy } from "./voiceMenuCopy";
 
 type ResolveVoiceFn = (locale: string, cfgVoice?: string) => any;
 
 type BuildIntroByLanguageParams = {
   selected?: string;
-  brand?: string;
   resolveVoice: ResolveVoiceFn;
+  locale?: SupportedVoiceLocale;
+  englishIntroText: string;
 };
 
 type BuildMainMenuParams = {
@@ -17,6 +19,7 @@ type BuildMainMenuParams = {
   voiceName: any;
   brand: string;
   greetingText: string;
+  menuPrompt?: string;
   callSid?: string;
   toNumber?: string;
   logBotSay?: (input: {
@@ -28,30 +31,57 @@ type BuildMainMenuParams = {
   }) => void;
 };
 
+function normalizePrompt(value: string): string {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function assertNonEmptyMenuText(value: string, field: string): string {
+  const text = normalizePrompt(value);
+
+  if (!text) {
+    throw new Error(`VOICE_MENU_EMPTY_TEXT:${field}`);
+  }
+
+  return text;
+}
+
 export function buildIntroByLanguage({
   selected,
-  brand,
   resolveVoice,
+  locale = "en-US",
+  englishIntroText,
 }: BuildIntroByLanguageParams): string {
   const vr = new twiml.VoiceResponse();
+  const copy = getVoiceMenuCopy(locale);
 
-  const business = brand && brand.trim().length > 0 ? brand.trim() : undefined;
+  const safeEnglishIntro = assertNonEmptyMenuText(
+    englishIntroText,
+    "englishIntroText"
+  );
+
+  const safeSpanishSelectionPrompt = assertNonEmptyMenuText(
+    copy.spanishSelectionPrompt,
+    "spanishSelectionPrompt"
+  );
+
+  const safeSpanishConfirmedPrompt = assertNonEmptyMenuText(
+    copy.spanishConfirmedPrompt,
+    "spanishConfirmedPrompt"
+  );
 
   if (selected === "es") {
-    const lineEs = business
-      ? `Hola, soy Amy del equipo de ${business}. Continuamos en español.`
-      : "Hola, soy Amy. Continuamos en español.";
-
-    vr.say({ language: "es-ES", voice: resolveVoice("es-ES") as any }, lineEs);
+    vr.say(
+      { language: "es-ES", voice: resolveVoice("es-ES") as any },
+      safeSpanishConfirmedPrompt
+    );
     vr.redirect("/webhook/voice-response?lang=es");
     return vr.toString();
   }
 
-  const lineEn = business
-    ? `Hi, this is Amy from ${business}.`
-    : "Hi, this is Amy.";
-
-  vr.say({ language: "en-US", voice: resolveVoice("en-US") as any }, lineEn);
+  vr.say(
+    { language: "en-US", voice: resolveVoice("en-US") as any },
+    safeEnglishIntro
+  );
 
   const gather = vr.gather({
     input: ["dtmf", "speech"] as any,
@@ -70,7 +100,7 @@ export function buildIntroByLanguage({
 
   gather.say(
     { language: "es-ES", voice: resolveVoice("es-ES") as any },
-    'Para español, marque dos o diga "Español".'
+    safeSpanishSelectionPrompt
   );
 
   vr.redirect("/webhook/voice-response/lang?fallback=en");
@@ -82,8 +112,8 @@ export function buildMainMenu({
   vr,
   locale,
   voiceName,
-  brand,
   greetingText,
+  menuPrompt,
   callSid,
   toNumber,
   logBotSay,
@@ -100,16 +130,10 @@ export function buildMainMenu({
     timeout: 4,
   });
 
-  const menuText = locale.startsWith("es")
-    ? "Puedes decirme que quieres agendar una cita, o marcar 1 para precios, 2 para horarios o 3 para ubicación."
-    : "You can tell me you want to book an appointment, or press 1 for prices, 2 for hours, or 3 for location.";
+  const safeGreeting = assertNonEmptyMenuText(greetingText, "greetingText");
+  const safeMenuText = assertNonEmptyMenuText(menuPrompt || "", "menuPrompt");
 
-  const fallbackGreeting = locale.startsWith("es")
-    ? `Hola, soy Amy del equipo de ${brand}.`
-    : `Hi, I'm Amy from ${brand}.`;
-
-  const safeGreeting = (greetingText || "").trim() || fallbackGreeting;
-  const line = `${safeGreeting} ${menuText}`.trim();
+  const line = `${safeGreeting} ${safeMenuText}`.trim();
 
   gather.say({ language: locale as any, voice: voiceName }, line);
 

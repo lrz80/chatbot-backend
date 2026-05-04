@@ -34,10 +34,7 @@ import {
   resolveVoiceLanguageSelection,
 } from "../../lib/voice/resolveVoiceLanguage";
 import { renderVoiceReply } from "../../lib/voice/renderVoiceReply";
-import {
-  buildIntroByLanguage,
-  buildMainMenu,
-} from "../../lib/voice/renderVoiceMenus";
+
 import { resolveVoiceSmsFlow } from "../../lib/voice/resolveVoiceSmsFlow";
 import { resolveVoiceMenuIntent } from "../../lib/voice/resolveVoiceMenuIntent";
 import { generateVoiceSnippetFromKnowledge } from "../../lib/voice/generateVoiceSnippetFromKnowledge";
@@ -52,6 +49,11 @@ import { renderVoiceSmsConfirmation } from "../../lib/voice/renderVoiceSmsConfir
 import { resolveVoiceMetaSignal } from "../../lib/voice/resolveVoiceMetaSignal";
 import { resolveVoiceMenuSelection } from "../../lib/voice/resolveVoiceMenuSelection";
 import { normalizeVoiceTurnInput } from "../../lib/voice/normalizeVoiceTurnInput";
+import {
+  buildIntroByLanguage,
+  buildMainMenu,
+} from "../../lib/voice/renderVoiceMenus";
+import { getVoiceMenuCopy } from "../../lib/voice/voiceMenuCopy";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -608,12 +610,19 @@ router.post('/', async (req: Request, res: Response) => {
 
     // 👉 Primer hit de la llamada: intro en inglés + “para español oprima 2” con nombre del negocio
     if (!state.turn && !langParam && !userInput && !digits) {
+      const menuCopy = getVoiceMenuCopy("en-US");
+
+      const englishIntroText =
+        (cfg?.welcome_message || "").trim() || menuCopy.englishIntroPrompt;
+
       const introXml = buildIntroByLanguage({
         selected: undefined,
-        brand,
         resolveVoice: resolveVoiceProviderVoice,
+        locale: "en-US",
+        englishIntroText,
       });
-      return res.type('text/xml').send(introXml);
+
+      return res.type("text/xml").send(introXml);
     }
 
     // A partir de aquí ya contamos los turnos de la llamada
@@ -647,12 +656,16 @@ router.post('/', async (req: Request, res: Response) => {
     ) {
       const brandForMenu = await getTenantBrand(tenant.id);
 
-      const fallbackWelcome = currentLocale.startsWith('es')
+      const fallbackWelcome = currentLocale.startsWith("es")
         ? `Hola, soy Amy del equipo de ${brandForMenu}. ¿En qué puedo ayudarte hoy?`
         : `Hi, this is Amy from ${brandForMenu}. How can I help you today?`;
 
       const welcomeText = twoSentencesMax(
-        (cfg?.welcome_message || '').trim() || fallbackWelcome
+        (cfg?.welcome_message || "").trim() || fallbackWelcome
+      );
+
+      const mainMenuPrompt = twoSentencesMax(
+        (cfg?.main_menu_prompt || "").trim()
       );
 
       buildMainMenu({
@@ -661,6 +674,7 @@ router.post('/', async (req: Request, res: Response) => {
         voiceName,
         brand: brandForMenu,
         greetingText: welcomeText,
+        menuPrompt: mainMenuPrompt,
         callSid,
         toNumber: didNumber || "ivr",
         logBotSay,

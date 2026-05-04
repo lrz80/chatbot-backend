@@ -178,12 +178,20 @@ export async function handleVoiceBookingTurn(
     return { handled: false, state };
   }
 
-  const resolvedIntent = effectiveUserInput
-    ? resolveVoiceIntentFromUtterance(effectiveUserInput)
-    : null;
+  const bookingAlreadyActive = typeof state.bookingStepIndex === "number";
+
+  if (!bookingAlreadyActive && !effectiveUserInput) {
+    return { handled: false, state };
+  }
+
+  const resolvedIntent = bookingAlreadyActive
+    ? "booking"
+    : effectiveUserInput
+      ? resolveVoiceIntentFromUtterance(effectiveUserInput)
+      : null;
 
   const wantsBooking =
-    typeof state.bookingStepIndex === "number" ||
+    bookingAlreadyActive ||
     resolvedIntent === "booking";
 
   if (!wantsBooking) {
