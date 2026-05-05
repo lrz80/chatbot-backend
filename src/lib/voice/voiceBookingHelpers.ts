@@ -8,6 +8,31 @@ import {
 } from "./types";
 import { detectTextLanguage } from "../detectTextLanguage";
 
+type BookingSpeechCacheEntry = {
+  expiresAt: number;
+  value: string;
+};
+
+const BOOKING_SPEECH_TTL_MS = 60_000;
+const bookingSpeechCache = new Map<string, BookingSpeechCacheEntry>();
+
+function buildBookingSpeechCacheKey(input: {
+  baseText: string;
+  locale: string;
+  bookingData: Record<string, string>;
+  callerE164: string | null;
+}) {
+  const rendered = renderBookingTemplate(
+    input.baseText,
+    buildBookingPromptVariables({
+      bookingData: input.bookingData || {},
+      callerE164: input.callerE164,
+    })
+  ).trim();
+
+  return `${String(input.locale || "").trim().toLowerCase()}::${rendered}`;
+}
+
 function maskForVoice(n: string) {
   return (n || "").replace(
     /^\+?(\d{0,3})\d{0,6}(\d{2})(\d{2})$/,
@@ -191,6 +216,20 @@ export async function resolveBookingFlowSpeech(params: {
 
   if (!rendered) return "";
 
+  const cacheKey = buildBookingSpeechCacheKey({
+    baseText: params.baseText,
+    locale: params.locale,
+    bookingData: params.bookingData,
+    callerE164: params.callerE164,
+  });
+
+  const now = Date.now();
+  const cached = bookingSpeechCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
   const targetLocale = String(params.locale || "").trim().toLowerCase();
   const targetLanguage =
     targetLocale.startsWith("es") ? "es" :
@@ -201,6 +240,7 @@ export async function resolveBookingFlowSpeech(params: {
     targetLocale.startsWith("de") ? "de" :
     targetLocale;
 
+  let resolved = rendered;
   let sourceLanguage = "unknown";
 
   try {
@@ -209,16 +249,21 @@ export async function resolveBookingFlowSpeech(params: {
     sourceLanguage = "unknown";
   }
 
-  if (sourceLanguage !== "unknown" && sourceLanguage === targetLanguage) {
-    return rendered;
+  if (sourceLanguage === "unknown" || sourceLanguage !== targetLanguage) {
+    try {
+      const translated = await traducirTexto(rendered, targetLanguage, "default");
+      resolved = (translated || rendered).trim();
+    } catch {
+      resolved = rendered;
+    }
   }
 
-  try {
-    const translated = await traducirTexto(rendered, targetLanguage, "default");
-    return (translated || rendered).trim();
-  } catch {
-    return rendered;
-  }
+  bookingSpeechCache.set(cacheKey, {
+    expiresAt: now + BOOKING_SPEECH_TTL_MS,
+    value: resolved,
+  });
+
+  return resolved;
 }
 
 export function buildAnswersBySlot(params: {
