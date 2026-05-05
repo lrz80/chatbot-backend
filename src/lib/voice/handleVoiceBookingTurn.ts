@@ -18,7 +18,6 @@ import {
   resolveVoiceBookingService,
 } from "./voiceBookingHelpers";
 import { resolveVoiceMetaSignal } from "./resolveVoiceMetaSignal";
-import { buildVoiceContinuationPrompt } from "./buildVoiceContinuationPrompt";
 
 function twoSentencesMax(s: string) {
   const parts = (s || "")
@@ -98,6 +97,22 @@ function assertNonEmptyBookingSpeech(input: {
   return value;
 }
 
+function resolveBookingSpeechFast(params: {
+  baseText: string;
+  locale: VoiceLocale;
+  bookingData?: Record<string, any>;
+  callerE164?: string | null;
+}) {
+  const hasTemplateVars = /\{[^}]+\}/.test(params.baseText || "");
+  const hasCallerPlaceholder = (params.baseText || "").includes("{caller_phone}");
+
+  if (!hasTemplateVars && !hasCallerPlaceholder) {
+    return params.baseText.trim();
+  }
+
+  return null;
+}
+
 function createBookingGather(params: {
   vr: twiml.VoiceResponse;
   locale: VoiceLocale;
@@ -168,8 +183,6 @@ export async function handleVoiceBookingTurn(
 
   let state = params.state;
 
-  const flow = await getBookingFlow(tenant.id);
-
   if (!effectiveUserInput && typeof state.bookingStepIndex !== "number") {
     return { handled: false, state };
   }
@@ -193,6 +206,8 @@ export async function handleVoiceBookingTurn(
   if (!wantsBooking) {
     return { handled: false, state };
   }
+
+  const flow = await getBookingFlow(tenant.id);
 
   if (!flow.length) {
     throw new Error("BOOKING_FLOW_NOT_CONFIGURED");
@@ -227,12 +242,19 @@ export async function handleVoiceBookingTurn(
       promptTranslations: firstStep.prompt_translations || null,
     });
 
-    const askResolved = await resolveBookingFlowSpeech({
-      baseText: firstStepPromptText,
-      locale: currentLocale,
-      bookingData: state.bookingData || {},
-      callerE164,
-    });
+    const askResolved =
+      resolveBookingSpeechFast({
+        baseText: firstStepPromptText,
+        locale: currentLocale,
+        bookingData: state.bookingData || {},
+        callerE164,
+      }) ||
+      (resolveBookingFlowSpeech({
+        baseText: firstStepPromptText,
+        locale: currentLocale,
+        bookingData: state.bookingData || {},
+        callerE164,
+      }));
 
     const ask = twoSentencesMax(
       assertNonEmptyBookingSpeech({
@@ -340,7 +362,7 @@ export async function handleVoiceBookingTurn(
           promptTranslations: successStep.prompt_translations || null,
         });
 
-        const successPromptResolved = await resolveBookingFlowSpeech({
+        const successPromptResolved = resolveBookingFlowSpeech({
           baseText: successPromptText,
           locale: currentLocale,
           bookingData: bookingSpeechData,
@@ -470,7 +492,7 @@ export async function handleVoiceBookingTurn(
           ? currentStep.validation_config.cancel_message.trim()
           : "";
 
-      const cancelMessageResolved = await resolveBookingFlowSpeech({
+      const cancelMessageResolved = resolveBookingFlowSpeech({
         baseText: cancelMessageTemplate,
         locale: currentLocale,
         bookingData: state.bookingData || {},
@@ -554,7 +576,7 @@ export async function handleVoiceBookingTurn(
     });
 
     const retry = twoSentencesMax(
-      await resolveBookingFlowSpeech({
+      resolveBookingFlowSpeech({
         baseText: confirmationRetryText,
         locale: currentLocale,
         bookingData: state.bookingData || {},
@@ -600,7 +622,7 @@ export async function handleVoiceBookingTurn(
         fallbackPromptTranslations: currentStep.prompt_translations || null,
       });
 
-      const retryPromptResolved = await resolveBookingFlowSpeech({
+      const retryPromptResolved = resolveBookingFlowSpeech({
         baseText: phoneRetryText,
         locale: currentLocale,
         bookingData: state.bookingData || {},
@@ -647,7 +669,7 @@ export async function handleVoiceBookingTurn(
     });
 
     const prompt = twoSentencesMax(
-      await resolveBookingFlowSpeech({
+      resolveBookingFlowSpeech({
         baseText: nextStepPromptTextAfterPhone,
         locale: currentLocale,
         bookingData: nextData,
@@ -722,7 +744,7 @@ export async function handleVoiceBookingTurn(
         fallbackPromptTranslations: currentStep.prompt_translations || null,
       });
 
-      const retryPromptResolved = await resolveBookingFlowSpeech({
+      const retryPromptResolved = resolveBookingFlowSpeech({
         baseText: serviceRetryText,
         locale: currentLocale,
         bookingData: state.bookingData || {},
@@ -757,9 +779,14 @@ export async function handleVoiceBookingTurn(
     if (serviceResolution.kind === "ambiguous") {
       const optionsText = serviceResolution.options.join(", ");
 
-      const ambiguousPrompt = await resolveBookingFlowSpeech({
-        baseText:
-          "I found several similar options: ${optionsText}. Please say the full service name you want to book.",
+      const ambiguousBaseText = currentLocale.startsWith("es")
+        ? "Encontré varias opciones parecidas: {optionsText}. Por favor dime el nombre completo del servicio que quieres reservar."
+        : currentLocale.startsWith("pt")
+        ? "Encontrei várias opções parecidas: {optionsText}. Por favor diga o nome completo do serviço que você quer agendar."
+        : "I found several similar options: {optionsText}. Please say the full service name you want to book.";
+
+      const ambiguousPrompt = resolveBookingFlowSpeech({
+        baseText: ambiguousBaseText,
         locale: currentLocale,
         bookingData: {
           ...(state.bookingData || {}),
@@ -788,7 +815,7 @@ export async function handleVoiceBookingTurn(
 
     resolvedStepValue = serviceResolution.value;
 
-    const localizedServiceDisplay = await resolveBookingFlowSpeech({
+    const localizedServiceDisplay = resolveBookingFlowSpeech({
       baseText: serviceResolution.value,
       locale: currentLocale,
       bookingData: state.bookingData || {},
@@ -836,7 +863,7 @@ export async function handleVoiceBookingTurn(
         fallbackPromptTranslations: currentStep.prompt_translations || null,
       });
 
-      const retryPromptResolved = await resolveBookingFlowSpeech({
+      const retryPromptResolved = resolveBookingFlowSpeech({
         baseText: datetimeRetryText,
         locale: currentLocale,
         bookingData: state.bookingData || {},
@@ -929,7 +956,7 @@ export async function handleVoiceBookingTurn(
             ? unavailablePrompt
             : localizedRetryBase;
 
-        const retryPromptResolved = await resolveBookingFlowSpeech({
+        const retryPromptResolved = resolveBookingFlowSpeech({
           baseText: promptTemplate,
           locale: currentLocale,
           bookingData: {
@@ -1013,7 +1040,7 @@ export async function handleVoiceBookingTurn(
     promptTranslations: nextStep.prompt_translations || null,
   });
 
-  const promptResolved = await resolveBookingFlowSpeech({
+  const promptResolved = resolveBookingFlowSpeech({
     baseText: nextStepPromptText,
     locale: currentLocale,
     bookingData: nextData,

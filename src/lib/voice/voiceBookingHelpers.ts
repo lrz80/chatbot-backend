@@ -281,7 +281,7 @@ export function buildBookingPromptVariables(params: {
   };
 }
 
-export async function resolveBookingFlowSpeech(params: {
+export function resolveBookingFlowSpeech(params: {
   baseText: string;
   locale: string;
   bookingData: Record<string, string>;
@@ -311,40 +311,12 @@ export async function resolveBookingFlowSpeech(params: {
     return cached.value;
   }
 
-  const targetLocale = String(params.locale || "").trim().toLowerCase();
-  const targetLanguage =
-    targetLocale.startsWith("es") ? "es" :
-    targetLocale.startsWith("en") ? "en" :
-    targetLocale.startsWith("pt") ? "pt" :
-    targetLocale.startsWith("fr") ? "fr" :
-    targetLocale.startsWith("it") ? "it" :
-    targetLocale.startsWith("de") ? "de" :
-    targetLocale;
-
-  let resolved = rendered;
-  let sourceLanguage = "unknown";
-
-  try {
-    sourceLanguage = await detectTextLanguage(rendered);
-  } catch {
-    sourceLanguage = "unknown";
-  }
-
-  if (sourceLanguage === "unknown" || sourceLanguage !== targetLanguage) {
-    try {
-      const translated = await traducirTexto(rendered, targetLanguage, "default");
-      resolved = (translated || rendered).trim();
-    } catch {
-      resolved = rendered;
-    }
-  }
-
   bookingSpeechCache.set(cacheKey, {
     expiresAt: now + BOOKING_SPEECH_TTL_MS,
-    value: resolved,
+    value: rendered,
   });
 
-  return resolved;
+  return rendered;
 }
 
 export function buildAnswersBySlot(params: {
