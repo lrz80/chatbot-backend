@@ -187,6 +187,87 @@ export function renderBookingTemplate(
   return output.trim();
 }
 
+function normalizeLocaleKey(locale: string) {
+  const value = String(locale || "").trim();
+
+  if (!value) return "";
+
+  if (value.startsWith("es")) return "es-ES";
+  if (value.startsWith("en")) return "en-US";
+  if (value.startsWith("pt")) return "pt-BR";
+
+  return value;
+}
+
+function pickLocalizedBookingText(params: {
+  locale: string;
+  translations?: Record<string, unknown> | null;
+  fallbackText?: string | null;
+}) {
+  const localeKey = normalizeLocaleKey(params.locale);
+  const translations = params.translations || {};
+
+  const exact =
+    typeof translations[localeKey] === "string"
+      ? String(translations[localeKey]).trim()
+      : "";
+
+  if (exact) return exact;
+
+  const languagePrefix = localeKey.split("-")[0];
+
+  const prefixedEntry = Object.entries(translations).find(([key, value]) => {
+    return (
+      typeof value === "string" &&
+      String(key || "").toLowerCase().startsWith(languagePrefix.toLowerCase())
+    );
+  });
+
+  if (prefixedEntry && typeof prefixedEntry[1] === "string") {
+    const value = String(prefixedEntry[1]).trim();
+    if (value) return value;
+  }
+
+  const fallback = String(params.fallbackText || "").trim();
+  return fallback;
+}
+
+export function resolveBookingPromptText(params: {
+  locale: string;
+  prompt?: string | null;
+  promptTranslations?: Record<string, unknown> | null;
+}) {
+  return pickLocalizedBookingText({
+    locale: params.locale,
+    translations: params.promptTranslations,
+    fallbackText: params.prompt,
+  });
+}
+
+export function resolveBookingRetryText(params: {
+  locale: string;
+  retryPrompt?: string | null;
+  retryPromptTranslations?: Record<string, unknown> | null;
+  fallbackPrompt?: string | null;
+  fallbackPromptTranslations?: Record<string, unknown> | null;
+}) {
+  const localizedRetry = pickLocalizedBookingText({
+    locale: params.locale,
+    translations: params.retryPromptTranslations,
+    fallbackText: params.retryPrompt,
+  });
+
+  if (localizedRetry) {
+    return localizedRetry;
+  }
+
+  return pickLocalizedBookingText({
+    locale: params.locale,
+    translations: params.fallbackPromptTranslations,
+    fallbackText: params.fallbackPrompt,
+  });
+}
+
 export function buildBookingPromptVariables(params: {
   bookingData: Record<string, string>;
   callerE164: string | null;

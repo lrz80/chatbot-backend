@@ -10,6 +10,8 @@ export type BookingStep = {
   enabled: boolean;
   retry_prompt: string | null;
   validation_config: Record<string, unknown> | null;
+  prompt_translations: Record<string, string> | null;
+  retry_prompt_translations: Record<string, string> | null;
 };
 
 type BookingFlowCacheEntry = {
@@ -55,7 +57,9 @@ export async function getBookingFlow(
       required,
       enabled,
       retry_prompt,
-      validation_config
+      validation_config,
+      prompt_translations,
+      retry_prompt_translations
     FROM appointment_booking_flows
     WHERE tenant_id = $1
       AND channel = $2
