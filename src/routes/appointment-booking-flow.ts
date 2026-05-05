@@ -2,6 +2,7 @@
 import { Router } from "express";
 import pool from "../lib/db";
 import { authenticateUser } from "../middleware/auth";
+import { clearVoiceBookingFlowCache } from "../lib/voice/handleVoiceBookingTurn";
 
 const router = Router();
 
@@ -237,6 +238,7 @@ router.post("/", authenticateUser, async (req: any, res) => {
     }
 
     await client.query("COMMIT");
+    clearVoiceBookingFlowCache(tenantId);
 
     const { rows } = await pool.query(
       `
