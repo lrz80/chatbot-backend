@@ -642,12 +642,12 @@ export async function handleVoiceBookingTurn(
             callerE164,
           });
 
-          const combinedPrompt = twoSentencesMax(
-            `${successPrompt} ${assertNonEmptyBookingSpeech({
+          const smsOfferPrompt = twoSentencesMax(
+            assertNonEmptyBookingSpeech({
               text: nextPromptResolved,
               stepKey: nextStepAfterSuccess.step_key,
               field: "prompt",
-            })}`
+            })
           );
 
           state = {
@@ -682,13 +682,18 @@ export async function handleVoiceBookingTurn(
 
           gather.say(
             { language: currentLocale as any, voice: voiceName },
-            combinedPrompt
+            successPrompt
+          );
+
+          gather.say(
+            { language: currentLocale as any, voice: voiceName },
+            smsOfferPrompt
           );
 
           logBotSay({
             callSid,
             to: didNumber || "ivr",
-            text: combinedPrompt,
+            text: `${successPrompt} ${smsOfferPrompt}`,
             lang: currentLocale,
             context: "booking_success_offer_sms",
           });
