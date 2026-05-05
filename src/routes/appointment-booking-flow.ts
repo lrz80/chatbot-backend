@@ -14,6 +14,18 @@ const VALID_EXPECTED_TYPES = new Set([
   "number",
 ]);
 
+function normalizeTranslationsObject(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([key, rawValue]) => [String(key).trim(), String(rawValue ?? "").trim()])
+      .filter(([key, text]) => key && text)
+  );
+}
+
 router.get("/", authenticateUser, async (req: any, res) => {
   const tenantId = req.user?.tenant_id;
 
@@ -32,6 +44,8 @@ router.get("/", authenticateUser, async (req: any, res) => {
         step_order,
         prompt,
         retry_prompt,
+        prompt_translations,
+        retry_prompt_translations,
         validation_config,
         expected_type,
         required,
@@ -106,6 +120,9 @@ router.post("/", authenticateUser, async (req: any, res) => {
     for (const rawStep of steps) {
       const stepKey = String(rawStep.step_key || "").trim();
       const prompt = String(rawStep.prompt || "").trim();
+      const retryPrompt = String(rawStep.retry_prompt || "").trim();
+      const promptTranslations = normalizeTranslationsObject(rawStep.prompt_translations);
+      const retryPromptTranslations = normalizeTranslationsObject(rawStep.retry_prompt_translations);
       const expectedType = String(rawStep.expected_type || "text").trim();
       const stepOrder = Number(rawStep.step_order);
       const required = typeof rawStep.required === "boolean" ? rawStep.required : true;
@@ -119,6 +136,18 @@ router.post("/", authenticateUser, async (req: any, res) => {
         throw new Error(`Invalid prompt for step ${stepKey}`);
       }
 
+      for (const [locale, text] of Object.entries(promptTranslations)) {
+        if (!locale || text.length > 2000) {
+          throw new Error(`Invalid prompt_translations for step ${stepKey}`);
+        }
+      }
+
+      for (const [locale, text] of Object.entries(retryPromptTranslations)) {
+        if (!locale || text.length > 2000) {
+          throw new Error(`Invalid retry_prompt_translations for step ${stepKey}`);
+        }
+      }
+
       if (!Number.isInteger(stepOrder) || stepOrder < 1 || stepOrder > 100) {
         throw new Error(`Invalid step_order for step ${stepKey}`);
       }
@@ -130,50 +159,58 @@ router.post("/", authenticateUser, async (req: any, res) => {
       await client.query(
         `
         INSERT INTO appointment_booking_flows (
-            tenant_id,
-            channel,
-            step_key,
-            step_order,
-            prompt,
-            retry_prompt,
-            validation_config,
-            expected_type,
-            required,
-            enabled,
-            created_at,
-            updated_at
-        )
-        VALUES (
-            $1,
-            'voice',
-            $2,
-            $3,
-            $4,
-            $5,
-            $6,
-            $7,
-            $8,
-            $9,
-            NOW(),
-            NOW()
-        )
-        ON CONFLICT (tenant_id, channel, step_key)
-        DO UPDATE SET
-            step_order = EXCLUDED.step_order,
-            prompt = EXCLUDED.prompt,
-            retry_prompt = EXCLUDED.retry_prompt,
-            validation_config = EXCLUDED.validation_config,
-            expected_type = EXCLUDED.expected_type,
-            required = EXCLUDED.required,
-            enabled = EXCLUDED.enabled,
-            updated_at = NOW()
+          tenant_id,
+          channel,
+          step_key,
+          step_order,
+          prompt,
+          retry_prompt,
+          prompt_translations,
+          retry_prompt_translations,
+          validation_config,
+          expected_type,
+          required,
+          enabled,
+          created_at,
+          updated_at
+      )
+      VALUES (
+          $1,
+          'voice',
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          NOW(),
+          NOW()
+      )
+      ON CONFLICT (tenant_id, channel, step_key)
+      DO UPDATE SET
+          step_order = EXCLUDED.step_order,
+          prompt = EXCLUDED.prompt,
+          retry_prompt = EXCLUDED.retry_prompt,
+          prompt_translations = EXCLUDED.prompt_translations,
+          retry_prompt_translations = EXCLUDED.retry_prompt_translations,
+          validation_config = EXCLUDED.validation_config,
+          expected_type = EXCLUDED.expected_type,
+          required = EXCLUDED.required,
+          enabled = EXCLUDED.enabled,
+          updated_at = NOW()
         `,
         [
             tenantId,
             stepKey,
             stepOrder,
             prompt,
-            rawStep.retry_prompt || null,
+            retryPrompt || null,
+            Object.keys(promptTranslations).length ? promptTranslations : null,
+            Object.keys(retryPromptTranslations).length ? retryPromptTranslations : null,
             rawStep.validation_config || {},
             expectedType,
             required,
@@ -194,6 +231,8 @@ router.post("/", authenticateUser, async (req: any, res) => {
         step_order,
         prompt,
         retry_prompt,
+        prompt_translations,
+        retry_prompt_translations,
         validation_config,
         expected_type,
         required,
