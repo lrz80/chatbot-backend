@@ -337,6 +337,207 @@ export async function handleVoiceBookingTurn(
       locale: currentLocale,
     });
 
+    const rawSlot =
+      typeof currentStep.validation_config?.slot === "string"
+        ? currentStep.validation_config.slot.trim()
+        : "";
+
+    const isBookingConfirmationStep =
+      rawSlot === "confirmation" || currentStep.step_key === "confirm";
+
+    const isOfferBookingSmsStep =
+      currentStep.step_key === "offer_booking_sms";
+
+    if (isOfferBookingSmsStep) {
+      if (confirmationMetaSignal.intent === "affirm" || digits === "1") {
+        const postBookingStateData = {
+          ...(state.bookingData || {}),
+          __last_voice_domain: "booking",
+          __last_booking_outcome: "confirmed",
+          __last_assistant_text:
+            currentLocale.startsWith("es")
+              ? "Perfecto, te lo envío por SMS."
+              : currentLocale.startsWith("pt")
+              ? "Perfeito, vou te enviar por SMS."
+              : "Perfect, I'll send it by SMS.",
+        };
+
+        state = {
+          ...state,
+          awaiting: true,
+          pendingType: "reservar",
+          awaitingNumber: false,
+          smsSent: false,
+          bookingStepIndex: undefined,
+          bookingData: postBookingStateData,
+        };
+
+        await upsertVoiceCallState({
+          callSid,
+          tenantId: tenant.id,
+          lang: state.lang ?? currentLocale,
+          turn: state.turn ?? 0,
+          awaiting: true,
+          pendingType: "reservar",
+          awaitingNumber: false,
+          altDest: state.altDest ?? null,
+          smsSent: false,
+          bookingStepIndex: null,
+          bookingData: postBookingStateData,
+        });
+
+        const confirmationText = currentLocale.startsWith("es")
+          ? "Perfecto, te lo envío por SMS."
+          : currentLocale.startsWith("pt")
+          ? "Perfeito, vou te enviar por SMS."
+          : "Perfect, I'll send it by SMS.";
+
+        const gather = createBookingGather({
+          vr,
+          locale: currentLocale,
+          isConfirmationStep: true,
+        });
+
+        gather.say(
+          { language: currentLocale as any, voice: voiceName },
+          twoSentencesMax(confirmationText)
+        );
+
+        logBotSay({
+          callSid,
+          to: didNumber || "ivr",
+          text: confirmationText,
+          lang: currentLocale,
+          context: "booking_offer_sms_accept",
+        });
+
+        return {
+          handled: true,
+          state,
+          twiml: vr.toString(),
+        };
+      }
+
+      if (confirmationMetaSignal.intent === "reject" || digits === "2") {
+        const cancelMessageTemplate =
+          typeof currentStep.validation_config?.cancel_message === "string"
+            ? currentStep.validation_config.cancel_message.trim()
+            : "";
+
+        const cancelMessageResolved = resolveBookingFlowSpeech({
+          baseText:
+            cancelMessageTemplate ||
+            (currentLocale.startsWith("es")
+              ? "Perfecto, no te envío el SMS. ¿Te ayudo en algo más?"
+              : currentLocale.startsWith("pt")
+              ? "Perfeito, não vou enviar o SMS. Posso te ajudar com mais alguma coisa?"
+              : "Perfect, I won't send the SMS. Can I help you with anything else?"),
+          locale: currentLocale,
+          bookingData: state.bookingData || {},
+          callerE164,
+        });
+
+        const spokenPrompt = twoSentencesMax(
+          assertNonEmptyBookingSpeech({
+            text: cancelMessageResolved,
+            stepKey: currentStep.step_key,
+            field: "prompt",
+          })
+        );
+
+        const postBookingStateData = {
+          ...(state.bookingData || {}),
+          __last_voice_domain: "booking",
+          __last_booking_outcome: "confirmed",
+          __last_assistant_text: spokenPrompt,
+        };
+
+        state = {
+          ...state,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+          smsSent: false,
+          bookingStepIndex: undefined,
+          bookingData: postBookingStateData,
+        };
+
+        await upsertVoiceCallState({
+          callSid,
+          tenantId: tenant.id,
+          lang: state.lang ?? currentLocale,
+          turn: state.turn ?? 0,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+          altDest: state.altDest ?? null,
+          smsSent: false,
+          bookingStepIndex: null,
+          bookingData: postBookingStateData,
+        });
+
+        const gather = createBookingGather({
+          vr,
+          locale: currentLocale,
+          isConfirmationStep: true,
+        });
+
+        gather.say(
+          { language: currentLocale as any, voice: voiceName },
+          spokenPrompt
+        );
+
+        logBotSay({
+          callSid,
+          to: didNumber || "ivr",
+          text: spokenPrompt,
+          lang: currentLocale,
+          context: "booking_offer_sms_reject",
+        });
+
+        return {
+          handled: true,
+          state,
+          twiml: vr.toString(),
+        };
+      }
+
+      const smsRetryText = resolveBookingRetryText({
+        locale: currentLocale,
+        retryPrompt: currentStep.retry_prompt || "",
+        retryPromptTranslations: currentStep.retry_prompt_translations || null,
+        fallbackPrompt: currentStep.prompt || "",
+        fallbackPromptTranslations: currentStep.prompt_translations || null,
+      });
+
+      const retry = twoSentencesMax(
+        resolveBookingFlowSpeech({
+          baseText: smsRetryText,
+          locale: currentLocale,
+          bookingData: state.bookingData || {},
+          callerE164,
+        })
+      );
+
+      const gather = createBookingGather({
+        vr,
+        locale: currentLocale,
+        isConfirmationStep: true,
+      });
+
+      gather.say({ language: currentLocale as any, voice: voiceName }, retry);
+
+      return {
+        handled: true,
+        state,
+        twiml: vr.toString(),
+      };
+    }
+
+    if (!isBookingConfirmationStep) {
+      return { handled: false, state };
+    }
+
     if (confirmationMetaSignal.intent === "affirm" || digits === "1") {
       try {
         const { rows: settingsRows } = await pool.query(
@@ -381,6 +582,14 @@ export async function handleVoiceBookingTurn(
           throw new Error("BOOKING_SUCCESS_STEP_NOT_CONFIGURED");
         }
 
+        const successStepIndex = flow.findIndex(
+          (step) => step.step_key === successStep.step_key
+        );
+
+        if (successStepIndex === -1) {
+          throw new Error("BOOKING_SUCCESS_STEP_INDEX_NOT_FOUND");
+        }
+
         const bookingSpeechData = {
           ...(state.bookingData || {}),
           service:
@@ -391,7 +600,7 @@ export async function handleVoiceBookingTurn(
             state.bookingData?.datetime_display ||
             state.bookingData?.datetime ||
             "",
-          };
+        };
 
         const successPromptText = resolveBookingPromptText({
           locale: currentLocale,
@@ -413,6 +622,83 @@ export async function handleVoiceBookingTurn(
             field: "prompt",
           })
         );
+
+        const nextStepAfterSuccess = flow[successStepIndex + 1];
+
+        if (
+          nextStepAfterSuccess &&
+          nextStepAfterSuccess.step_key === "offer_booking_sms"
+        ) {
+          const nextPromptText = resolveBookingPromptText({
+            locale: currentLocale,
+            prompt: nextStepAfterSuccess.prompt || "",
+            promptTranslations: nextStepAfterSuccess.prompt_translations || null,
+          });
+
+          const nextPromptResolved = resolveBookingFlowSpeech({
+            baseText: nextPromptText,
+            locale: currentLocale,
+            bookingData: bookingSpeechData,
+            callerE164,
+          });
+
+          const combinedPrompt = twoSentencesMax(
+            `${successPrompt} ${assertNonEmptyBookingSpeech({
+              text: nextPromptResolved,
+              stepKey: nextStepAfterSuccess.step_key,
+              field: "prompt",
+            })}`
+          );
+
+          state = {
+            ...state,
+            awaiting: false,
+            pendingType: null,
+            awaitingNumber: false,
+            smsSent: false,
+            bookingStepIndex: successStepIndex + 1,
+            bookingData: bookingSpeechData,
+          };
+
+          await upsertVoiceCallState({
+            callSid,
+            tenantId: tenant.id,
+            lang: state.lang ?? currentLocale,
+            turn: state.turn ?? 0,
+            awaiting: false,
+            pendingType: null,
+            awaitingNumber: false,
+            altDest: state.altDest ?? null,
+            smsSent: false,
+            bookingStepIndex: successStepIndex + 1,
+            bookingData: bookingSpeechData,
+          });
+
+          const gather = createBookingGather({
+            vr,
+            locale: currentLocale,
+            isConfirmationStep: true,
+          });
+
+          gather.say(
+            { language: currentLocale as any, voice: voiceName },
+            combinedPrompt
+          );
+
+          logBotSay({
+            callSid,
+            to: didNumber || "ivr",
+            text: combinedPrompt,
+            lang: currentLocale,
+            context: "booking_success_offer_sms",
+          });
+
+          return {
+            handled: true,
+            state,
+            twiml: vr.toString(),
+          };
+        }
 
         const gather = createBookingGather({
           vr,
@@ -440,7 +726,12 @@ export async function handleVoiceBookingTurn(
           awaitingNumber: false,
           smsSent: false,
           bookingStepIndex: undefined,
-          bookingData: {},
+          bookingData: {
+            ...bookingSpeechData,
+            __last_voice_domain: "booking",
+            __last_booking_outcome: "confirmed",
+            __last_assistant_text: successPrompt,
+          },
         };
 
         await upsertVoiceCallState({
@@ -454,7 +745,7 @@ export async function handleVoiceBookingTurn(
           altDest: state.altDest ?? null,
           smsSent: false,
           bookingStepIndex: null,
-          bookingData: {},
+          bookingData: state.bookingData,
         });
 
         return {
@@ -606,10 +897,12 @@ export async function handleVoiceBookingTurn(
       };
     }
 
-    const confirmationRetryText = resolveBookingPromptText({
+    const confirmationRetryText = resolveBookingRetryText({
       locale: currentLocale,
-      prompt: currentStep.prompt || "",
-      promptTranslations: currentStep.prompt_translations || null,
+      retryPrompt: currentStep.retry_prompt || "",
+      retryPromptTranslations: currentStep.retry_prompt_translations || null,
+      fallbackPrompt: currentStep.prompt || "",
+      fallbackPromptTranslations: currentStep.prompt_translations || null,
     });
 
     const retry = twoSentencesMax(
