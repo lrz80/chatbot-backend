@@ -98,64 +98,93 @@ router.post("/", authenticateUser, async (req: any, res) => {
   try {
     await client.query("BEGIN");
 
-    const seenOrders = new Set<number>();
-    const seenKeys = new Set<string>();
-
-    for (const rawStep of steps) {
-    const stepKey = String(rawStep.step_key || "").trim();
-    const stepOrder = Number(rawStep.step_order);
-
-    if (seenKeys.has(stepKey)) {
-        throw new Error(`step_key duplicado: ${stepKey}`);
-    }
-
-    if (seenOrders.has(stepOrder)) {
-        throw new Error(`step_order duplicado: ${stepOrder}`);
-    }
-
-    seenKeys.add(stepKey);
-    seenOrders.add(stepOrder);
-    }
-
-    for (const rawStep of steps) {
+    const normalizedSteps: Array<{
+      step_key: string;
+      step_order: number;
+      prompt: string;
+      retry_prompt: string | null;
+      prompt_translations: Record<string, string>;
+      retry_prompt_translations: Record<string, string>;
+      validation_config: Record<string, unknown>;
+      expected_type: string;
+      required: boolean;
+      enabled: boolean;
+    }> = steps.map((rawStep: any, index: number) => {
       const stepKey = String(rawStep.step_key || "").trim();
       const prompt = String(rawStep.prompt || "").trim();
       const retryPrompt = String(rawStep.retry_prompt || "").trim();
       const promptTranslations = normalizeTranslationsObject(rawStep.prompt_translations);
       const retryPromptTranslations = normalizeTranslationsObject(rawStep.retry_prompt_translations);
       const expectedType = String(rawStep.expected_type || "text").trim();
-      const stepOrder = Number(rawStep.step_order);
       const required = typeof rawStep.required === "boolean" ? rawStep.required : true;
       const enabled = typeof rawStep.enabled === "boolean" ? rawStep.enabled : true;
+      const validationConfig =
+        rawStep.validation_config && typeof rawStep.validation_config === "object"
+          ? (rawStep.validation_config as Record<string, unknown>)
+          : {};
 
-      if (!stepKey || stepKey.length > 80) {
+      return {
+        step_key: stepKey,
+        step_order: index + 1,
+        prompt,
+        retry_prompt: retryPrompt || null,
+        prompt_translations: promptTranslations,
+        retry_prompt_translations: retryPromptTranslations,
+        validation_config: validationConfig,
+        expected_type: expectedType,
+        required,
+        enabled,
+      };
+    });
+
+    const seenKeys = new Set<string>();
+
+    for (const step of normalizedSteps) {
+      if (!step.step_key || step.step_key.length > 80) {
         throw new Error("Invalid step_key");
       }
 
-      if (!prompt || prompt.length > 1000) {
-        throw new Error(`Invalid prompt for step ${stepKey}`);
+      if (seenKeys.has(step.step_key)) {
+        throw new Error(`step_key duplicado: ${step.step_key}`);
       }
 
-      for (const [locale, text] of Object.entries(promptTranslations)) {
+      seenKeys.add(step.step_key);
+
+      if (!step.prompt || step.prompt.length > 1000) {
+        throw new Error(`Invalid prompt for step ${step.step_key}`);
+      }
+
+      for (const [locale, text] of Object.entries(step.prompt_translations)) {
         if (!locale || text.length > 2000) {
-          throw new Error(`Invalid prompt_translations for step ${stepKey}`);
+          throw new Error(`Invalid prompt_translations for step ${step.step_key}`);
         }
       }
 
-      for (const [locale, text] of Object.entries(retryPromptTranslations)) {
+      for (const [locale, text] of Object.entries(step.retry_prompt_translations)) {
         if (!locale || text.length > 2000) {
-          throw new Error(`Invalid retry_prompt_translations for step ${stepKey}`);
+          throw new Error(`Invalid retry_prompt_translations for step ${step.step_key}`);
         }
       }
 
-      if (!Number.isInteger(stepOrder) || stepOrder < 1 || stepOrder > 100) {
-        throw new Error(`Invalid step_order for step ${stepKey}`);
+      if (!Number.isInteger(step.step_order) || step.step_order < 1 || step.step_order > 100) {
+        throw new Error(`Invalid step_order for step ${step.step_key}`);
       }
 
-      if (!VALID_EXPECTED_TYPES.has(expectedType)) {
-        throw new Error(`Invalid expected_type for step ${stepKey}`);
+      if (!VALID_EXPECTED_TYPES.has(step.expected_type)) {
+        throw new Error(`Invalid expected_type for step ${step.step_key}`);
       }
+    }
 
+    await client.query(
+      `
+      DELETE FROM appointment_booking_flows
+      WHERE tenant_id = $1
+        AND channel = 'voice'
+      `,
+      [tenantId]
+    );
+
+    for (const step of normalizedSteps) {
       await client.query(
         `
         INSERT INTO appointment_booking_flows (
@@ -173,8 +202,8 @@ router.post("/", authenticateUser, async (req: any, res) => {
           enabled,
           created_at,
           updated_at
-      )
-      VALUES (
+        )
+        VALUES (
           $1,
           'voice',
           $2,
@@ -189,32 +218,20 @@ router.post("/", authenticateUser, async (req: any, res) => {
           $11,
           NOW(),
           NOW()
-      )
-      ON CONFLICT (tenant_id, channel, step_key)
-      DO UPDATE SET
-          step_order = EXCLUDED.step_order,
-          prompt = EXCLUDED.prompt,
-          retry_prompt = EXCLUDED.retry_prompt,
-          prompt_translations = EXCLUDED.prompt_translations,
-          retry_prompt_translations = EXCLUDED.retry_prompt_translations,
-          validation_config = EXCLUDED.validation_config,
-          expected_type = EXCLUDED.expected_type,
-          required = EXCLUDED.required,
-          enabled = EXCLUDED.enabled,
-          updated_at = NOW()
+        )
         `,
         [
-            tenantId,
-            stepKey,
-            stepOrder,
-            prompt,
-            retryPrompt || null,
-            Object.keys(promptTranslations).length ? promptTranslations : null,
-            Object.keys(retryPromptTranslations).length ? retryPromptTranslations : null,
-            rawStep.validation_config || {},
-            expectedType,
-            required,
-            enabled,
+          tenantId,
+          step.step_key,
+          step.step_order,
+          step.prompt,
+          step.retry_prompt,
+          Object.keys(step.prompt_translations).length ? step.prompt_translations : null,
+          Object.keys(step.retry_prompt_translations).length ? step.retry_prompt_translations : null,
+          step.validation_config,
+          step.expected_type,
+          step.required,
+          step.enabled,
         ]
       );
     }
