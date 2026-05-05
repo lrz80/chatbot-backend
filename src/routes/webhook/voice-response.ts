@@ -658,26 +658,37 @@ router.post('/', async (req: Request, res: Response) => {
 
       const fallbackWelcome = currentLocale.startsWith("es")
         ? `Hola, soy Amy del equipo de ${brandForMenu}. ¿En qué puedo ayudarte hoy?`
+        : currentLocale.startsWith("pt")
+        ? `Olá, aqui é a Amy da equipe de ${brandForMenu}. Como posso te ajudar hoje?`
         : `Hi, this is Amy from ${brandForMenu}. How can I help you today?`;
 
       const welcomeText = twoSentencesMax(
         (cfg?.welcome_message || "").trim() || fallbackWelcome
       );
 
-      const mainMenuPrompt = twoSentencesMax(
-        (cfg?.main_menu_prompt || "").trim()
+      const gather = vr.gather({
+        input: ['speech', 'dtmf'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: currentLocale as any,
+        speechTimeout: 'auto',
+        timeout: 7,
+        actionOnEmptyResult: true,
+        bargeIn: true,
+      });
+
+      gather.say(
+        { language: currentLocale as any, voice: voiceName },
+        welcomeText
       );
 
-      buildMainMenu({
-        vr,
-        locale: currentLocale,
-        voiceName,
-        brand: brandForMenu,
-        greetingText: welcomeText,
-        menuPrompt: mainMenuPrompt,
+      logBotSay({
         callSid,
-        toNumber: didNumber || "ivr",
-        logBotSay,
+        to: didNumber || "ivr",
+        text: welcomeText,
+        lang: currentLocale,
+        context: "welcome",
       });
 
       return res.type("text/xml").send(vr.toString());
@@ -734,10 +745,15 @@ router.post('/', async (req: Request, res: Response) => {
       // Si no hay booking activo, mantén el contexto repitiendo el último mensaje real del bot
       const vrSilence = new twiml.VoiceResponse();
 
+      const followupText = currentLocale.startsWith("es")
+        ? "¿Necesitas algo más?"
+        : currentLocale.startsWith("pt")
+        ? "Posso te ajudar com mais alguma coisa?"
+        : "Do you need anything else?";
+
+      
       const retryText = twoSentencesMax(
-        sanitizeForSay(
-          (cfg?.welcome_message || '').trim()
-        )
+        sanitizeForSay(followupText)
       );
 
       const gather = vrSilence.gather({
@@ -752,20 +768,18 @@ router.post('/', async (req: Request, res: Response) => {
         bargeIn: true,
       });
 
-      if (retryText) {
-        gather.say(
-          { language: currentLocale as any, voice: voiceName },
-          retryText
-        );
+      gather.say(
+        { language: currentLocale as any, voice: voiceName },
+        retryText
+      );
 
-        logBotSay({
-          callSid,
-          to: didNumber || 'ivr',
-          text: retryText,
-          lang: currentLocale,
-          context: 'silence_retry_last_assistant',
-        });
-      }
+      logBotSay({
+        callSid,
+        to: didNumber || 'ivr',
+        text: retryText,
+        lang: currentLocale,
+        context: 'silence_followup_after_turn',
+      });
 
       return res.type('text/xml').send(vrSilence.toString());
     }

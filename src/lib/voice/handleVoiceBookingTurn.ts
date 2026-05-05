@@ -10,8 +10,6 @@ import { resolveVoiceIntentFromUtterance } from "./resolveVoiceIntentFromUtteran
 import { CallState, VoiceLocale } from "./types";
 import {
   buildAnswersBySlot,
-  buildBookingPromptVariables,
-  renderBookingTemplate,
   resolveBookingFlowSpeech,
   resolveBookingPromptText,
   resolveBookingRetryText,
@@ -100,32 +98,28 @@ function assertNonEmptyBookingSpeech(input: {
   return value;
 }
 
-function saidYes(t: string) {
-  const s = (t || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+function createBookingGather(params: {
+  vr: twiml.VoiceResponse;
+  locale: VoiceLocale;
+  isPhoneStep?: boolean;
+  isConfirmationStep?: boolean;
+}) {
+  const input =
+    params.isPhoneStep || params.isConfirmationStep
+      ? (["speech", "dtmf"] as any)
+      : (["speech"] as any);
 
-  return /\b(si|si por favor|claro|dale|ok|okay|porfa|envialo|mandalo|hazlo|yes|yep|please do|send it|text it)\b/u.test(
-    s
-  );
-}
-
-function saidNo(t: string) {
-  const s = (t || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-
-  return /\b(no|no gracias|mejor no|luego|despues|mas tarde|not now|dont)\b/u.test(
-    s
-  );
+  return params.vr.gather({
+    input,
+    numDigits: params.isPhoneStep ? 15 : params.isConfirmationStep ? 1 : undefined,
+    action: "/webhook/voice-response",
+    method: "POST",
+    language: params.locale as any,
+    speechTimeout: "1",
+    timeout: 5,
+    actionOnEmptyResult: true,
+    bargeIn: true,
+  });
 }
 
 type HandleVoiceBookingTurnParams = {
@@ -248,15 +242,9 @@ export async function handleVoiceBookingTurn(
       })
     );
 
-    const gather = vr.gather({
-      input: ["speech"] as any,
-      action: "/webhook/voice-response",
-      method: "POST",
-      language: currentLocale as any,
-      speechTimeout: "auto",
-      timeout: 7,
-      actionOnEmptyResult: true,
-      bargeIn: true,
+    const gather = createBookingGather({
+      vr,
+      locale: currentLocale,
     });
 
     gather.say({ language: currentLocale as any, voice: voiceName }, ask);
@@ -367,16 +355,10 @@ export async function handleVoiceBookingTurn(
           })
         );
 
-        const gather = vr.gather({
-          input: ["speech", "dtmf"] as any,
-          numDigits: 1,
-          action: "/webhook/voice-response",
-          method: "POST",
-          language: currentLocale as any,
-          speechTimeout: "auto",
-          timeout: 7,
-          actionOnEmptyResult: true,
-          bargeIn: true,
+        const gather = createBookingGather({
+          vr,
+          locale: currentLocale,
+          isConfirmationStep: true,
         });
 
         gather.say(
@@ -440,15 +422,9 @@ export async function handleVoiceBookingTurn(
             suggestedStarts,
           });
 
-          const gather = vr.gather({
-            input: ["speech"] as any,
-            action: "/webhook/voice-response",
-            method: "POST",
-            language: currentLocale as any,
-            speechTimeout: "auto",
-            timeout: 7,
-            actionOnEmptyResult: true,
-            bargeIn: true,
+          const gather = createBookingGather({
+            vr,
+            locale: currentLocale,
           });
 
           gather.say(
@@ -515,6 +491,12 @@ export async function handleVoiceBookingTurn(
         field: "prompt",
       });
 
+      const postBookingStateData = {
+        __last_voice_domain: "booking",
+        __last_booking_outcome: "cancelled",
+        __last_assistant_text: spokenPrompt,
+      };
+
       state = {
         ...state,
         awaiting: false,
@@ -522,7 +504,7 @@ export async function handleVoiceBookingTurn(
         awaitingNumber: false,
         smsSent: false,
         bookingStepIndex: undefined,
-        bookingData: {},
+        bookingData: postBookingStateData,
       };
 
       await upsertVoiceCallState({
@@ -536,19 +518,13 @@ export async function handleVoiceBookingTurn(
         altDest: state.altDest ?? null,
         smsSent: false,
         bookingStepIndex: null,
-        bookingData: {},
+        bookingData: postBookingStateData,
       });
 
-      const gather = vr.gather({
-        input: ["speech", "dtmf"] as any,
-        numDigits: 1,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: currentLocale as any,
-        speechTimeout: "auto",
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
+      const gather = createBookingGather({
+        vr,
+        locale: currentLocale,
+        isConfirmationStep: true,
       });
 
       gather.say(
@@ -586,12 +562,10 @@ export async function handleVoiceBookingTurn(
       })
     );
 
-    const gather = vr.gather({
-      input: ["speech", "dtmf"] as any,
-      numDigits: 1,
-      action: "/webhook/voice-response",
-      method: "POST",
-      language: currentLocale as any,
+    const gather = createBookingGather({
+      vr,
+      locale: currentLocale,
+      isConfirmationStep: true,
     });
 
     gather.say({ language: currentLocale as any, voice: voiceName }, retry);
@@ -612,16 +586,10 @@ export async function handleVoiceBookingTurn(
     });
 
     if (!phoneResolution.ok) {
-      const gather = vr.gather({
-        input: ["speech", "dtmf"] as any,
-        numDigits: 1,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: currentLocale as any,
-        speechTimeout: "auto",
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
+      const gather = createBookingGather({
+        vr,
+        locale: currentLocale,
+        isPhoneStep: true,
       });
 
       const phoneRetryText = resolveBookingRetryText({
@@ -710,19 +678,11 @@ export async function handleVoiceBookingTurn(
     const isPhoneStep = nextStep.expected_type === "phone";
     const isConfirmationStep = nextStep.expected_type === "confirmation";
 
-    const gather = vr.gather({
-      input:
-        isPhoneStep || isConfirmationStep
-          ? (["speech", "dtmf"] as any)
-          : (["speech"] as any),
-      numDigits: isPhoneStep ? 15 : isConfirmationStep ? 1 : undefined,
-      action: "/webhook/voice-response",
-      method: "POST",
-      language: currentLocale as any,
-      speechTimeout: "auto",
-      timeout: 7,
-      actionOnEmptyResult: true,
-      bargeIn: true,
+    const gather = createBookingGather({
+      vr,
+      locale: currentLocale,
+      isPhoneStep,
+      isConfirmationStep,
     });
 
     gather.say(
@@ -777,15 +737,9 @@ export async function handleVoiceBookingTurn(
         })
       );
 
-      const gather = vr.gather({
-        input: ["speech"] as any,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: currentLocale as any,
-        speechTimeout: "auto",
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
+      const gather = createBookingGather({
+        vr,
+        locale: currentLocale,
       });
 
       gather.say(
@@ -815,15 +769,9 @@ export async function handleVoiceBookingTurn(
         callerE164,
       });
 
-      const gather = vr.gather({
-        input: ["speech"] as any,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: currentLocale as any,
-        speechTimeout: "auto",
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
+      const gather = createBookingGather({
+        vr,
+        locale: currentLocale,
       });
 
       gather.say(
@@ -903,15 +851,9 @@ export async function handleVoiceBookingTurn(
         })
       );
 
-      const gather = vr.gather({
-        input: ["speech"] as any,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: currentLocale as any,
-        speechTimeout: "auto",
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
+      const gather = createBookingGather({
+        vr,
+        locale: currentLocale,
       });
 
       gather.say(
@@ -1014,15 +956,9 @@ export async function handleVoiceBookingTurn(
           })
         );
 
-        const gather = vr.gather({
-          input: ["speech"] as any,
-          action: "/webhook/voice-response",
-          method: "POST",
-          language: currentLocale as any,
-          speechTimeout: "auto",
-          timeout: 7,
-          actionOnEmptyResult: true,
-          bargeIn: true,
+        const gather = createBookingGather({
+          vr,
+          locale: currentLocale,
         });
 
         gather.say(
@@ -1115,19 +1051,11 @@ export async function handleVoiceBookingTurn(
   const isPhoneStep = nextStep.expected_type === "phone";
   const isConfirmationStep = nextStep.expected_type === "confirmation";
 
-  const gather = vr.gather({
-    input:
-      isPhoneStep || isConfirmationStep
-        ? (["speech", "dtmf"] as any)
-        : (["speech"] as any),
-    numDigits: isPhoneStep ? 15 : isConfirmationStep ? 1 : undefined,
-    action: "/webhook/voice-response",
-    method: "POST",
-    language: currentLocale as any,
-    speechTimeout: "auto",
-    timeout: 7,
-    actionOnEmptyResult: true,
-    bargeIn: true,
+  const gather = createBookingGather({
+    vr,
+    locale: currentLocale,
+    isPhoneStep,
+    isConfirmationStep,
   });
 
   gather.say(
