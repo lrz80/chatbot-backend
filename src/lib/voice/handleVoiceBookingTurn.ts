@@ -20,6 +20,41 @@ import {
 import { resolveVoiceMetaSignal } from "./resolveVoiceMetaSignal";
 import { twoSentencesMax } from "./speechFormatting";
 
+function buildExtraBookingFields(
+  bookingData: Record<string, any> | undefined
+): Record<string, string> {
+  const excludedKeys = new Set([
+    "service",
+    "service_display",
+    "datetime",
+    "datetime_display",
+    "customer_name",
+    "name",
+    "customer_phone",
+    "phone",
+    "customer_email",
+    "email",
+    "confirmation",
+    "booking_sms_payload",
+    "__voice_intro_played",
+    "__last_voice_domain",
+    "__last_booking_outcome",
+    "__last_assistant_text",
+    "__last_booking_error",
+  ]);
+
+  return Object.fromEntries(
+    Object.entries(bookingData || {})
+      .filter(([key, value]) => {
+        const cleanKey = String(key || "").trim();
+        const cleanValue = String(value || "").trim();
+
+        return cleanKey && cleanValue && !excludedKeys.has(cleanKey);
+      })
+      .map(([key, value]) => [key, String(value).trim()])
+  );
+}
+
 function formatSuggestedStartForVoice(
   dateISO: string,
   locale: VoiceLocale,
@@ -563,6 +598,12 @@ export async function handleVoiceBookingTurn(
           bookingData: state.bookingData || {},
         });
 
+        console.log("[VOICE][BOOKING][ANSWERS_BY_SLOT]", {
+          callSid,
+          answersBySlot,
+          bookingData: state.bookingData || {},
+        });
+
         const appointment = await createAppointmentFromVoice({
           tenantId: tenant.id,
           answersBySlot,
@@ -584,6 +625,8 @@ export async function handleVoiceBookingTurn(
         if (successStepIndex === -1) {
           throw new Error("BOOKING_SUCCESS_STEP_INDEX_NOT_FOUND");
         }
+
+        const extraFields = buildExtraBookingFields(state.bookingData || {});
 
         const bookingSmsPayload = {
           business_name: String(tenant?.name || "").trim(),
@@ -617,6 +660,7 @@ export async function handleVoiceBookingTurn(
             appointmentRecord?.event_link ||
             ""
           ).trim(),
+          extra_fields: extraFields,
         };
 
         const bookingSmsPayloadJson = JSON.stringify(bookingSmsPayload);
