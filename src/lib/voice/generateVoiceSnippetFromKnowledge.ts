@@ -18,79 +18,189 @@ type GenerateVoiceSnippetFromKnowledgeParams = {
   brand: string;
 };
 
+function topicInstruction(topic: VoiceSnippetTopic, locale: SupportedVoiceLocale): string {
+  if (locale.startsWith("es")) {
+    switch (topic) {
+      case "precios":
+        return "Extrae solamente la información relacionada con precios, costos, tarifas o condiciones de precio.";
+      case "horarios":
+        return "Extrae solamente la información relacionada con horarios, días de atención, disponibilidad o agenda.";
+      case "ubicacion":
+        return "Extrae solamente la información relacionada con ubicación, dirección, zona, ciudad o instrucciones para llegar.";
+      case "pagos":
+        return "Extrae solamente la información relacionada con métodos de pago aceptados.";
+    }
+  }
+
+  switch (topic) {
+    case "precios":
+      return "Extract only information related to prices, costs, rates, or pricing conditions.";
+    case "horarios":
+      return "Extract only information related to hours, business days, availability, or schedule.";
+    case "ubicacion":
+      return "Extract only information related to location, address, area, city, or directions.";
+    case "pagos":
+      return "Extract only information related to accepted payment methods.";
+  }
+}
+
+function fallbackText(topic: VoiceSnippetTopic, locale: SupportedVoiceLocale): string {
+  if (locale.startsWith("es")) {
+    switch (topic) {
+      case "precios":
+        return "No tengo los precios exactos configurados en este momento.";
+      case "horarios":
+        return "No tengo los horarios exactos configurados en este momento.";
+      case "ubicacion":
+        return "No tengo la ubicación exacta configurada en este momento.";
+      case "pagos":
+        return "No tengo los métodos de pago exactos configurados en este momento.";
+    }
+  }
+
+  switch (topic) {
+    case "precios":
+      return "I do not have the exact pricing configured right now.";
+    case "horarios":
+      return "I do not have the exact hours configured right now.";
+    case "ubicacion":
+      return "I do not have the exact location configured right now.";
+    case "pagos":
+      return "I do not have the exact payment methods configured right now.";
+  }
+}
+
+function cleanKnowledge(value: string): string {
+  return (value || "")
+    .replace(/\r/g, "\n")
+    .replace(/\n{4,}/g, "\n\n")
+    .trim();
+}
+
+function stripUnsupportedOutput(value: string): string {
+  return (value || "")
+    .replace(/\[\[.*?\]\]/g, "")
+    .replace(/\bhttps?:\/\/\S+/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export async function generateVoiceSnippetFromKnowledge({
   topic,
   cfg,
   locale,
   brand,
 }: GenerateVoiceSnippetFromKnowledgeParams): Promise<string> {
+  const systemPrompt = cleanKnowledge((cfg.system_prompt || "").toString());
+  const keyInfo = cleanKnowledge((cfg.info_clave || "").toString());
+
+  const knowledge = [systemPrompt, keyInfo].filter(Boolean).join("\n\n");
+
+  if (!knowledge) {
+    return fallbackText(topic, locale);
+  }
+
   const { default: OpenAI } = await import("openai");
 
   const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY || "",
   });
 
-  const systemPrompt = (cfg.system_prompt || "").toString().trim();
-  const keyInfo = (cfg.info_clave || "").toString().trim();
+  const instruction = topicInstruction(topic, locale);
 
   const system = locale.startsWith("es")
     ? `
-Eres Amy, asistente del negocio ${brand}.
-Usa EXCLUSIVAMENTE la información en estas dos fuentes:
+Eres Amy, asistente telefónica del negocio ${brand}.
 
-1) SYSTEM_PROMPT DEL NEGOCIO:
-${systemPrompt}
+TAREA:
+${instruction}
 
-2) INFO_CLAVE DEL NEGOCIO:
-${keyInfo}
+FUENTE ÚNICA DE VERDAD:
+Usa solamente el contenido provisto por el negocio.
 
-REGLAS DE RESPUESTA:
-- Devuelve 1-2 frases máximo, aptas para locución telefónica.
-- No incluyas URLs ni digas que enviarás un link aquí.
+REGLAS:
+- Responde en español.
+- Devuelve máximo 2 frases.
 - No inventes datos.
-- Para horarios, formatea horas de forma natural.
-- Para precios, solo menciona montos si aparecen literalmente.
-- Mantén el tono breve, claro y natural.
+- No agregues información externa.
+- No incluyas URLs.
+- No digas que enviarás SMS ni links.
+- Si el dato no aparece en la fuente, responde exactamente: "${fallbackText(topic, locale)}"
+- Para direcciones, teléfonos, nombres de calles, códigos postales, precios y horarios: copia los datos exactamente como aparecen en la fuente. No los reescribas, no los traduzcas y no los conviertas en palabras.
 `.trim()
     : `
-You are Amy, the assistant for ${brand}.
-Use ONLY the information from these two sources:
+You are Amy, the phone assistant for ${brand}.
 
-1) BUSINESS SYSTEM PROMPT:
-${systemPrompt}
+TASK:
+${instruction}
 
-2) BUSINESS KEY INFO:
-${keyInfo}
+ONLY SOURCE OF TRUTH:
+Use only the business-provided content.
 
-RESPONSE RULES:
-- Reply in 1-2 sentences maximum, suitable for phone speech.
-- Do not include URLs or say you will send a link here.
-- Do not invent information.
-- For hours, format time naturally.
-- For prices, mention amounts only if they appear literally.
-- Keep the tone brief, clear, and natural.
+RULES:
+- Reply in English.
+- Return at most 2 sentences.
+- Do not invent facts.
+- Do not add external information.
+- Do not include URLs.
+- Do not say you will send SMS or links.
+- If the detail does not appear in the source, reply exactly: "${fallbackText(topic, locale)}"
+- For addresses, phone numbers, street names, zip codes, prices, and hours: copy the facts exactly as they appear in the source. Do not rewrite, translate, or spell them out.
 `.trim();
 
   const user = locale.startsWith("es")
-    ? `Responde únicamente en español. Dame un breve resumen sobre ${topic} en máximo 2 frases, usando solo lo provisto.`
-    : `Respond only in English. Give me a short summary about ${topic} in at most 2 sentences, using only the provided information.`;
+    ? `
+Contenido del negocio:
+${knowledge}
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-  });
+Extrae la respuesta telefónica breve para el tema: ${topic}.
+`.trim()
+    : `
+Business content:
+${knowledge}
 
-  const text = (completion.choices[0]?.message?.content || "").trim();
+Extract the short phone answer for topic: ${topic}.
+`.trim();
 
-  if (text) {
-    return text;
-  }
+  const fallback = fallbackText(topic, locale);
 
-  return locale.startsWith("es")
-    ? "No tengo ese dato exacto aquí."
-    : "I don’t have that exact detail here.";
+  const completion = await withTimeout(
+    openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+    3500,
+    null as any
+  );
+
+  const raw = completion?.choices?.[0]?.message?.content?.trim() || "";
+
+  const cleaned = stripUnsupportedOutput(raw);
+
+  return cleaned || fallback;
 }
