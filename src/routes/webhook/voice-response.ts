@@ -10,7 +10,9 @@ import { canUseChannel } from "../../lib/features";
 import { getVoiceCallState } from "../../lib/voice/getVoiceCallState";
 import { upsertVoiceCallState } from "../../lib/voice/upsertVoiceCallState";
 import { deleteVoiceCallState } from "../../lib/voice/deleteVoiceCallState";
-import { resolveVoiceIntentFromUtterance } from "../../lib/voice/resolveVoiceIntentFromUtterance";
+import {
+  resolveVoiceIntentFromUtteranceAsync,
+} from "../../lib/voice/resolveVoiceIntentFromUtterance";
 import { traducirTexto } from "../../lib/traducirTexto";
 
 import { CallState, LinkType } from "../../lib/voice/types";
@@ -602,7 +604,7 @@ router.post('/', async (req: Request, res: Response) => {
     !userInput && !!pendingUtterance;
 
   const resolvedInitialVoiceIntent = effectiveUserInput
-    ? resolveVoiceIntentFromUtterance(effectiveUserInput)
+    ? await resolveVoiceIntentFromUtteranceAsync(effectiveUserInput)
     : null;
 
   const hasPendingUtterance = Boolean(pendingUtterance);
@@ -1734,7 +1736,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ===== IVR simple por dígito (1/2/3/4) =====
     const resolvedVoiceIntentForTurn = effectiveUserInput
-      ? resolveVoiceIntentFromUtterance(effectiveUserInput)
+      ? await resolveVoiceIntentFromUtteranceAsync(effectiveUserInput)
       : null;
 
     if (

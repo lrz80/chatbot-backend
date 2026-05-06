@@ -6,7 +6,7 @@ import { createAppointmentFromVoice } from "../appointments/createAppointmentFro
 import { resolveVoiceScheduleValidation } from "../appointments/resolveVoiceScheduleValidation";
 import { upsertVoiceCallState } from "./upsertVoiceCallState";
 import { deleteVoiceCallState } from "./deleteVoiceCallState";
-import { resolveVoiceIntentFromUtterance } from "./resolveVoiceIntentFromUtterance";
+import { resolveVoiceIntentFromUtteranceAsync } from "./resolveVoiceIntentFromUtterance";
 import { CallState, VoiceLocale } from "./types";
 import {
   buildAnswersBySlot,
@@ -223,7 +223,10 @@ export async function handleVoiceBookingTurn(
   const resolvedIntent = bookingAlreadyActive
     ? "booking"
     : effectiveUserInput
-      ? resolveVoiceIntentFromUtterance(effectiveUserInput)
+      ? await resolveVoiceIntentFromUtteranceAsync(effectiveUserInput, {
+          timeoutMs: 1500,
+          minConfidence: 0.65,
+        })
       : null;
 
   const wantsBooking =
