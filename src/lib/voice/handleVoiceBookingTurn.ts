@@ -356,10 +356,10 @@ export async function handleVoiceBookingTurn(
           __last_booking_outcome: "confirmed",
           __last_assistant_text:
             currentLocale.startsWith("es")
-              ? "Perfecto, te lo envío por SMS."
+              ? "Cliente aceptó recibir los detalles por SMS."
               : currentLocale.startsWith("pt")
-              ? "Perfeito, vou te enviar por SMS."
-              : "Perfect, I'll send it by SMS.",
+              ? "O cliente aceitou receber os detalhes por SMS."
+              : "Customer accepted receiving the booking details by SMS.",
         };
 
         state = {
@@ -386,35 +386,9 @@ export async function handleVoiceBookingTurn(
           bookingData: postBookingStateData,
         });
 
-        const confirmationText = currentLocale.startsWith("es")
-          ? "Perfecto, te lo envío por SMS."
-          : currentLocale.startsWith("pt")
-          ? "Perfeito, vou te enviar por SMS."
-          : "Perfect, I'll send it by SMS.";
-
-        const gather = createBookingGather({
-          vr,
-          locale: currentLocale,
-          isConfirmationStep: true,
-        });
-
-        gather.say(
-          { language: currentLocale as any, voice: voiceName },
-          twoSentencesMax(confirmationText)
-        );
-
-        logBotSay({
-          callSid,
-          to: didNumber || "ivr",
-          text: confirmationText,
-          lang: currentLocale,
-          context: "booking_offer_sms_accept",
-        });
-
         return {
-          handled: true,
+          handled: false,
           state,
-          twiml: vr.toString(),
         };
       }
 
@@ -575,7 +549,7 @@ export async function handleVoiceBookingTurn(
           settings: appointmentSettings,
         });
 
-        void appointment;
+        const appointmentRecord = appointment as any;
 
         const successStep = resolveBookingSuccessStep({ flow });
         if (!successStep) {
@@ -590,7 +564,43 @@ export async function handleVoiceBookingTurn(
           throw new Error("BOOKING_SUCCESS_STEP_INDEX_NOT_FOUND");
         }
 
-        const bookingSpeechData = {
+        const bookingSmsPayload = {
+          business_name: String(tenant?.name || "").trim(),
+          business_phone: String(
+            cfg?.representante_number ||
+            tenant?.twilio_voice_number ||
+            tenant?.twilio_sms_number ||
+            ""
+          ).trim(),
+          service: String(
+            state.bookingData?.service_display ||
+            state.bookingData?.service ||
+            ""
+          ).trim(),
+          datetime: String(
+            state.bookingData?.datetime_display ||
+            state.bookingData?.datetime ||
+            ""
+          ).trim(),
+          customer_name: String(
+            state.bookingData?.customer_name ||
+            state.bookingData?.name ||
+            ""
+          ).trim(),
+          google_calendar_link: String(
+            appointmentRecord?.google_event_link ||
+            appointmentRecord?.googleEventLink ||
+            appointmentRecord?.html_link ||
+            appointmentRecord?.htmlLink ||
+            appointmentRecord?.google_event_url ||
+            appointmentRecord?.event_link ||
+            ""
+          ).trim(),
+        };
+
+        const bookingSmsPayloadJson = JSON.stringify(bookingSmsPayload);
+
+        const bookingSpeechData: Record<string, string> = {
           ...(state.bookingData || {}),
           service:
             state.bookingData?.service_display ||
@@ -657,7 +667,10 @@ export async function handleVoiceBookingTurn(
             awaitingNumber: false,
             smsSent: false,
             bookingStepIndex: successStepIndex + 1,
-            bookingData: bookingSpeechData,
+            bookingData: {
+              ...bookingSpeechData,
+              booking_sms_payload: bookingSmsPayloadJson,
+            },
           };
 
           await upsertVoiceCallState({
@@ -733,6 +746,7 @@ export async function handleVoiceBookingTurn(
           bookingStepIndex: undefined,
           bookingData: {
             ...bookingSpeechData,
+            booking_sms_payload: bookingSmsPayloadJson,
             __last_voice_domain: "booking",
             __last_booking_outcome: "confirmed",
             __last_assistant_text: successPrompt,

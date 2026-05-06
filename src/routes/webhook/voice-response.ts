@@ -71,6 +71,128 @@ const isValidE164 = (n?: string | null) => !!n && /^\+\d{10,15}$/.test(n);
 
 const short = (s: string, n = 120) => (s.length > n ? s.slice(0, n) + '…' : s);
 
+type BookingSmsPayload = {
+  business_name: string;
+  business_phone: string;
+  service: string;
+  datetime: string;
+  customer_name: string;
+  google_calendar_link: string;
+};
+
+function parseBookingSmsPayload(
+  bookingData: Record<string, any> | undefined
+): BookingSmsPayload | null {
+  const raw = bookingData?.booking_sms_payload;
+
+  if (!raw || typeof raw !== "string") {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+
+    return {
+      business_name: String(parsed?.business_name || "").trim(),
+      business_phone: String(parsed?.business_phone || "").trim(),
+      service: String(parsed?.service || "").trim(),
+      datetime: String(parsed?.datetime || "").trim(),
+      customer_name: String(parsed?.customer_name || "").trim(),
+      google_calendar_link: String(parsed?.google_calendar_link || "").trim(),
+    };
+  } catch (error) {
+    console.error("[VOICE][BOOKING_SMS][PARSE_ERROR]", {
+      error,
+      raw,
+    });
+    return null;
+  }
+}
+
+function buildBookingConfirmationSmsBody(
+  payload: BookingSmsPayload,
+  locale: "es-ES" | "en-US" | "pt-BR"
+): string {
+  if (locale.startsWith("es")) {
+    const lines = [
+      "Tu reserva quedó confirmada ✅",
+      "",
+      `Servicio: ${payload.service || "No especificado"}`,
+      `Fecha y hora: ${payload.datetime || "No especificada"}`,
+      `Cliente: ${payload.customer_name || "No especificado"}`,
+    ];
+
+    if (payload.business_phone) {
+      lines.push(
+        "",
+        `Si necesitas cambiar tu reserva contáctanos al Tel: ${payload.business_phone}.`
+      );
+    }
+
+    if (payload.google_calendar_link) {
+      lines.push(
+        "",
+        "Guarda esta cita en tu Google Calendar:",
+        payload.google_calendar_link
+      );
+    }
+
+    return lines.join("\n").trim();
+  }
+
+  if (locale.startsWith("pt")) {
+    const lines = [
+      "Sua reserva foi confirmada ✅",
+      "",
+      `Serviço: ${payload.service || "Não especificado"}`,
+      `Data e hora: ${payload.datetime || "Não especificada"}`,
+      `Cliente: ${payload.customer_name || "Não especificado"}`,
+    ];
+
+    if (payload.business_phone) {
+      lines.push(
+        "",
+        `Se precisar alterar sua reserva, entre em contato pelo Tel: ${payload.business_phone}.`
+      );
+    }
+
+    if (payload.google_calendar_link) {
+      lines.push(
+        "",
+        "Salve este compromisso no seu Google Calendar:",
+        payload.google_calendar_link
+      );
+    }
+
+    return lines.join("\n").trim();
+  }
+
+  const lines = [
+    "Your booking is confirmed ✅",
+    "",
+    `Service: ${payload.service || "Not specified"}`,
+    `Date and time: ${payload.datetime || "Not specified"}`,
+    `Customer: ${payload.customer_name || "Not specified"}`,
+  ];
+
+  if (payload.business_phone) {
+    lines.push(
+      "",
+      `If you need to change your booking, contact us at: ${payload.business_phone}.`
+    );
+  }
+
+  if (payload.google_calendar_link) {
+    lines.push(
+      "",
+      "Save this booking to your Google Calendar:",
+      payload.google_calendar_link
+    );
+  }
+
+  return lines.join("\n").trim();
+}
+
 //  Marca dinámica del tenant (solo `name`)
 async function getTenantBrand(tenantId: string): Promise<string> {
   const { rows } = await pool.query(
@@ -1540,55 +1662,157 @@ router.post('/', async (req: Request, res: Response) => {
         console.log("[VOICE/SMS] SMS ya enviado en esta llamada, se omite reintento.");
       } else {
         try {
-          const brand = await getTenantBrand(tenant.id);
+          const smsFrom =
+            tenant.twilio_sms_number || tenant.twilio_voice_number || "";
 
-          const result = await sendVoiceLinkSms({
-            tenantId: tenant.id,
-            smsType,
-            callerRaw,
-            callerE164,
-            overrideDestE164:
-              state.altDest && isValidE164(state.altDest) ? state.altDest : null,
-            smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || "",
-            brand,
-          });
+          const toDest =
+            (state.altDest && isValidE164(state.altDest) ? state.altDest : null) ||
+            callerE164;
 
-          const smsDeliveryOutcome = resolveVoiceSmsDeliveryOutcome(result, currentLocale);
+          const bookingSmsPayload =
+            smsType === "reservar"
+              ? parseBookingSmsPayload(state.bookingData || {})
+              : null;
 
-          if (!result.ok) {
-            console.warn("[VOICE/SMS] No se pudo enviar el SMS:", result.code, result.message);
-            respuesta += smsDeliveryOutcome.appendText;
-          } else {
-            console.log("[VOICE/SMS] sendSMS -> enviados =", result.sentCount);
-
-            state = {
-              ...state,
-              awaiting: false,
-              pendingType: null,
-              smsSent: true,
-            };
-
-            await upsertVoiceCallState({
-              callSid,
-              tenantId: tenant.id,
-              lang: state.lang ?? currentLocale,
-              turn: state.turn ?? 0,
-              awaiting: false,
-              pendingType: null,
-              awaitingNumber: state.awaitingNumber ?? false,
-              altDest: state.altDest ?? null,
-              smsSent: true,
-              bookingStepIndex: state.bookingStepIndex ?? null,
-              bookingData: state.bookingData ?? {},
-            });
-
-            await pool.query(
-              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-              VALUES ($1, 'system', $2, NOW(), $3, $4)`,
-              [tenant.id, "SMS enviado con link único.", CHANNEL_KEY, result.smsFrom]
+          if (bookingSmsPayload) {
+            const body = buildBookingConfirmationSmsBody(
+              bookingSmsPayload,
+              currentLocale
             );
 
-            respuesta += smsDeliveryOutcome.appendText;
+            console.log("[VOICE][BOOKING_SMS][SEND_ATTEMPT]", {
+              callSid,
+              tenantId: tenant.id,
+              smsFrom,
+              toDest,
+              body,
+            });
+
+            if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
+              console.warn("[VOICE][BOOKING_SMS] Número destino inválido:", {
+                callerRaw,
+                toDest,
+              });
+
+              respuesta += currentLocale.startsWith("es")
+                ? " No pude validar tu número para enviarte el SMS."
+                : currentLocale.startsWith("pt")
+                ? " Não consegui validar seu número para enviar o SMS."
+                : " I could not validate your number to send the SMS.";
+            } else if (!smsFrom) {
+              console.warn("[VOICE][BOOKING_SMS] No hay número SMS configurado.");
+              respuesta += currentLocale.startsWith("es")
+                ? " No hay un número SMS configurado para enviar la confirmación."
+                : currentLocale.startsWith("pt")
+                ? " Não há um número SMS configurado para enviar a confirmação."
+                : " There is no SMS number configured to send the confirmation.";
+            } else if (smsFrom.startsWith("whatsapp:")) {
+              console.warn("[VOICE][BOOKING_SMS] El número configurado es WhatsApp-only.");
+              respuesta += currentLocale.startsWith("es")
+                ? " El número configurado es WhatsApp y no puede enviar SMS."
+                : currentLocale.startsWith("pt")
+                ? " O número configurado é apenas WhatsApp e não pode enviar SMS."
+                : " The configured number is WhatsApp-only and cannot send SMS.";
+            } else {
+              const sentCount = await sendSMS({
+                mensaje: body,
+                destinatarios: [toDest],
+                fromNumber: smsFrom || undefined,
+                tenantId: tenant.id,
+                campaignId: null,
+              });
+
+              console.log("[VOICE][BOOKING_SMS][SENT]", {
+                callSid,
+                tenantId: tenant.id,
+                sentCount,
+                toDest,
+              });
+
+              state = {
+                ...state,
+                awaiting: false,
+                pendingType: null,
+                smsSent: true,
+              };
+
+              await upsertVoiceCallState({
+                callSid,
+                tenantId: tenant.id,
+                lang: state.lang ?? currentLocale,
+                turn: state.turn ?? 0,
+                awaiting: false,
+                pendingType: null,
+                awaitingNumber: state.awaitingNumber ?? false,
+                altDest: state.altDest ?? null,
+                smsSent: true,
+                bookingStepIndex: state.bookingStepIndex ?? null,
+                bookingData: state.bookingData ?? {},
+              });
+
+              await pool.query(
+                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+                VALUES ($1, 'system', $2, NOW(), $3, $4)`,
+                [tenant.id, "SMS enviado con confirmación de reserva.", CHANNEL_KEY, smsFrom]
+              );
+
+              respuesta += currentLocale.startsWith("es")
+                ? " Te acabo de enviar los detalles por SMS."
+                : currentLocale.startsWith("pt")
+                ? " Acabei de te enviar os detalhes por SMS."
+                : " I just sent you the booking details by SMS.";
+            }
+          } else {
+            const brand = await getTenantBrand(tenant.id);
+
+            const result = await sendVoiceLinkSms({
+              tenantId: tenant.id,
+              smsType,
+              callerRaw,
+              callerE164,
+              overrideDestE164:
+                state.altDest && isValidE164(state.altDest) ? state.altDest : null,
+              smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || "",
+              brand,
+            });
+
+            const smsDeliveryOutcome = resolveVoiceSmsDeliveryOutcome(result, currentLocale);
+
+            if (!result.ok) {
+              console.warn("[VOICE/SMS] No se pudo enviar el SMS:", result.code, result.message);
+              respuesta += smsDeliveryOutcome.appendText;
+            } else {
+              console.log("[VOICE/SMS] sendSMS -> enviados =", result.sentCount);
+
+              state = {
+                ...state,
+                awaiting: false,
+                pendingType: null,
+                smsSent: true,
+              };
+
+              await upsertVoiceCallState({
+                callSid,
+                tenantId: tenant.id,
+                lang: state.lang ?? currentLocale,
+                turn: state.turn ?? 0,
+                awaiting: false,
+                pendingType: null,
+                awaitingNumber: state.awaitingNumber ?? false,
+                altDest: state.altDest ?? null,
+                smsSent: true,
+                bookingStepIndex: state.bookingStepIndex ?? null,
+                bookingData: state.bookingData ?? {},
+              });
+
+              await pool.query(
+                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+                VALUES ($1, 'system', $2, NOW(), $3, $4)`,
+                [tenant.id, "SMS enviado con link único.", CHANNEL_KEY, result.smsFrom]
+              );
+
+              respuesta += smsDeliveryOutcome.appendText;
+            }
           }
         } catch (e: any) {
           console.error("[VOICE/SMS] Error enviando SMS:", e?.message || e);
