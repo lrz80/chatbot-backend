@@ -1060,6 +1060,89 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type("text/xml").send(vr.toString());
     }
 
+    const hasActiveBookingFlow = typeof state.bookingStepIndex === "number";
+
+    if (hasActiveBookingFlow && effectiveUserInput) {
+      const interruptionBusinessTopic = resolveVoiceBusinessTopic(effectiveUserInput);
+
+      const interruptionClosure = await resolveVoiceConversationClosure(
+        effectiveUserInput,
+        currentLocale
+      );
+
+      const interruptionMetaSignal = interruptionBusinessTopic.matched
+        ? { intent: "none" as const, confidence: 0 }
+        : await resolveVoiceMetaSignal({
+            utterance: effectiveUserInput,
+            locale: currentLocale,
+          });
+
+      const shouldLeaveBookingForBusinessTopic =
+        interruptionBusinessTopic.matched &&
+        interruptionBusinessTopic.topic &&
+        interruptionBusinessTopic.linkType;
+
+      const shouldCloseBooking =
+        interruptionClosure.shouldClose ||
+        interruptionMetaSignal.intent === "close" ||
+        interruptionMetaSignal.intent === "reject";
+
+      if (shouldLeaveBookingForBusinessTopic || shouldCloseBooking) {
+        const preservedBookingData: Record<string, any> = {};
+
+        if (state.bookingData?.__voice_intro_played) {
+          preservedBookingData.__voice_intro_played =
+            state.bookingData.__voice_intro_played;
+        }
+
+        state = {
+          ...state,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+          bookingStepIndex: undefined,
+          bookingData: preservedBookingData,
+        };
+
+        await upsertVoiceCallState({
+          callSid,
+          tenantId: tenant.id,
+          lang: state.lang ?? currentLocale,
+          turn: state.turn ?? 0,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+          altDest: state.altDest ?? null,
+          smsSent: state.smsSent ?? false,
+          bookingStepIndex: null,
+          bookingData: preservedBookingData,
+        });
+
+        console.log("[VOICE][BOOKING_INTERRUPTED]", {
+          callSid,
+          tenantId: tenant.id,
+          reason: shouldLeaveBookingForBusinessTopic
+            ? "business_topic"
+            : "close_or_reject",
+          userInput: effectiveUserInput,
+          businessTopic: interruptionBusinessTopic,
+          metaSignal: interruptionMetaSignal,
+        });
+
+        if (shouldCloseBooking && !shouldLeaveBookingForBusinessTopic) {
+          await deleteVoiceCallState(callSid);
+
+          vr.say(
+            { language: currentLocale as any, voice: voiceName },
+            renderVoiceLifecycle("call_goodbye", currentLocale)
+          );
+
+          vr.hangup();
+          return res.type("text/xml").send(vr.toString());
+        }
+      }
+    }
+
     if (
       effectiveUserInput &&
       (
