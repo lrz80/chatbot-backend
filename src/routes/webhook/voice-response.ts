@@ -1333,6 +1333,170 @@ router.post('/', async (req: Request, res: Response) => {
       }
 
       state = bookingTurnResult.state;
+
+      if (
+        state.awaiting &&
+        state.pendingType === "reservar" &&
+        effectiveUserInput
+      ) {
+        const bookingSmsPayload = parseBookingSmsPayload(state.bookingData || {});
+
+        const confirmedBookingSms =
+          digits === "1" ||
+          ["sí", "si", "yes", "ok", "okay"].includes(
+            effectiveUserInput
+              .trim()
+              .toLowerCase()
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .replace(/[^\p{L}\p{N}\s]/gu, "")
+          ) ||
+          (
+            await resolveVoiceMetaSignal({
+              utterance: effectiveUserInput,
+              locale: currentLocale,
+            })
+          ).intent === "affirm";
+
+        if (bookingSmsPayload && confirmedBookingSms) {
+          const smsFrom =
+            tenant.twilio_sms_number || tenant.twilio_voice_number || "";
+
+          const toDest =
+            (state.altDest && isValidE164(state.altDest) ? state.altDest : null) ||
+            callerE164;
+
+          const body = buildBookingConfirmationSmsBody(
+            bookingSmsPayload,
+            currentLocale
+          );
+
+          console.log("[VOICE][BOOKING_SMS][DIRECT_SEND_ATTEMPT]", {
+            callSid,
+            tenantId: tenant.id,
+            smsFrom,
+            toDest,
+            body,
+            bookingSmsPayload,
+          });
+
+          const vrSms = new twiml.VoiceResponse();
+
+          if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
+            const bad = currentLocale.startsWith("es")
+              ? "No pude validar tu número para enviarte el SMS. ¿Te ayudo con algo más?"
+              : currentLocale.startsWith("pt")
+              ? "Não consegui validar seu número para enviar o SMS. Posso te ajudar com mais alguma coisa?"
+              : "I could not validate your number to send the SMS. Can I help you with anything else?";
+
+            const gather = vrSms.gather({
+              input: ["speech", "dtmf"] as any,
+              numDigits: 1,
+              action: "/webhook/voice-response",
+              method: "POST",
+              language: currentLocale as any,
+              speechTimeout: "auto",
+              timeout: 7,
+              actionOnEmptyResult: true,
+              bargeIn: true,
+            });
+
+            gather.say({ language: currentLocale as any, voice: voiceName }, bad);
+
+            return res.type("text/xml").send(vrSms.toString());
+          }
+
+          if (!smsFrom || smsFrom.startsWith("whatsapp:")) {
+            const bad = currentLocale.startsWith("es")
+              ? "No hay un número SMS válido configurado para enviar la confirmación. ¿Te ayudo con algo más?"
+              : currentLocale.startsWith("pt")
+              ? "Não há um número SMS válido configurado para enviar a confirmação. Posso te ajudar com mais alguma coisa?"
+              : "There is no valid SMS number configured to send the confirmation. Can I help you with anything else?";
+
+            const gather = vrSms.gather({
+              input: ["speech", "dtmf"] as any,
+              numDigits: 1,
+              action: "/webhook/voice-response",
+              method: "POST",
+              language: currentLocale as any,
+              speechTimeout: "auto",
+              timeout: 7,
+              actionOnEmptyResult: true,
+              bargeIn: true,
+            });
+
+            gather.say({ language: currentLocale as any, voice: voiceName }, bad);
+
+            return res.type("text/xml").send(vrSms.toString());
+          }
+
+          const sentCount = await sendSMS({
+            mensaje: body,
+            destinatarios: [toDest],
+            fromNumber: smsFrom || undefined,
+            tenantId: tenant.id,
+            campaignId: null,
+          });
+
+          console.log("[VOICE][BOOKING_SMS][DIRECT_SENT]", {
+            callSid,
+            tenantId: tenant.id,
+            sentCount,
+            toDest,
+          });
+
+          state = {
+            ...state,
+            awaiting: false,
+            pendingType: null,
+            smsSent: true,
+          };
+
+          await upsertVoiceCallState({
+            callSid,
+            tenantId: tenant.id,
+            lang: state.lang ?? currentLocale,
+            turn: state.turn ?? 0,
+            awaiting: false,
+            pendingType: null,
+            awaitingNumber: state.awaitingNumber ?? false,
+            altDest: state.altDest ?? null,
+            smsSent: true,
+            bookingStepIndex: null,
+            bookingData: state.bookingData ?? {},
+          });
+
+          const ok = currentLocale.startsWith("es")
+            ? "Te acabo de enviar los detalles de tu reserva por SMS. ¿Necesitas algo más?"
+            : currentLocale.startsWith("pt")
+            ? "Acabei de te enviar os detalhes da sua reserva por SMS. Posso te ajudar com mais alguma coisa?"
+            : "I just sent your booking details by SMS. Do you need anything else?";
+
+          const gather = vrSms.gather({
+            input: ["speech", "dtmf"] as any,
+            numDigits: 1,
+            action: "/webhook/voice-response",
+            method: "POST",
+            language: currentLocale as any,
+            speechTimeout: "auto",
+            timeout: 7,
+            actionOnEmptyResult: true,
+            bargeIn: true,
+          });
+
+          gather.say({ language: currentLocale as any, voice: voiceName }, ok);
+
+          logBotSay({
+            callSid,
+            to: didNumber || "ivr",
+            text: ok,
+            lang: currentLocale,
+            context: "booking_sms_direct_sent_followup",
+          });
+
+          return res.type("text/xml").send(vrSms.toString());
+        }
+      }
     }
 
     const hasActiveBookingStep = typeof state.bookingStepIndex === "number";
