@@ -848,13 +848,72 @@ export async function handleVoiceBookingTurn(
         }
 
         const failRaw =
-          cfg?.booking_error_message || "Hubo un problema al agendar la cita.";
+          typeof cfg?.booking_error_message === "string" &&
+          cfg.booking_error_message.trim()
+            ? cfg.booking_error_message.trim()
+            : currentLocale.startsWith("es")
+            ? "No pude completar la reserva en este momento. ¿Quieres que te ayude con otra cosa?"
+            : currentLocale.startsWith("pt")
+            ? "Não consegui concluir a reserva neste momento. Posso te ajudar com mais alguma coisa?"
+            : "I could not complete the booking right now. Can I help you with anything else?";
 
-        vr.say(
+        const failPrompt = twoSentencesMax(failRaw);
+
+        const postBookingStateData = {
+          ...(state.bookingData || {}),
+          __last_voice_domain: "booking",
+          __last_booking_outcome: "failed",
+          __last_booking_error:
+            err?.error ||
+            err?.code ||
+            err?.providerError ||
+            err?.message ||
+            "BOOKING_FAILED",
+          __last_assistant_text: failPrompt,
+        };
+
+        state = {
+          ...state,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+          smsSent: false,
+          bookingStepIndex: undefined,
+          bookingData: postBookingStateData,
+        };
+
+        await upsertVoiceCallState({
+          callSid,
+          tenantId: tenant.id,
+          lang: state.lang ?? currentLocale,
+          turn: state.turn ?? 0,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+          altDest: state.altDest ?? null,
+          smsSent: false,
+          bookingStepIndex: null,
+          bookingData: postBookingStateData,
+        });
+
+        const gather = createBookingGather({
+          vr,
+          locale: currentLocale,
+          isConfirmationStep: true,
+        });
+
+        gather.say(
           { language: currentLocale as any, voice: voiceName },
-          twoSentencesMax(failRaw)
+          failPrompt
         );
-        vr.hangup();
+
+        logBotSay({
+          callSid,
+          to: didNumber || "ivr",
+          text: failPrompt,
+          lang: currentLocale,
+          context: "booking_create_failed_keep_call_alive",
+        });
 
         return {
           handled: true,
