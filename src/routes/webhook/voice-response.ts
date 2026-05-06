@@ -827,17 +827,39 @@ router.post('/', async (req: Request, res: Response) => {
       // Si estamos esperando confirmación del SMS, re-pregunta esa confirmación
       if (state.awaiting && state.pendingType) {
         const vrAsk = new twiml.VoiceResponse();
-        await offerSms(
-          vrAsk,
-          currentLocale as any,
-          voiceName,
-          callSid,
-          state,
-          state.pendingType,
-          tenant.id
+
+        const retryText = renderVoiceReply("sms_offer_confirmation", {
+          locale: currentLocale,
+          linkType: state.pendingType,
+        });
+
+        const gather = vrAsk.gather({
+          input: ["speech", "dtmf"] as any,
+          numDigits: 1,
+          action: "/webhook/voice-response",
+          method: "POST",
+          language: currentLocale as any,
+          speechTimeout: "auto",
+          timeout: 7,
+          actionOnEmptyResult: true,
+          bargeIn: true,
+          hints: currentLocale.startsWith("es") ? "sí, si, no, uno, 1" : "yes, no, one, 1",
+        });
+
+        gather.say(
+          { language: currentLocale as any, voice: voiceName },
+          retryText
         );
 
-        return res.type('text/xml').send(vrAsk.toString());
+        logBotSay({
+          callSid,
+          to: didNumber || "ivr",
+          text: retryText,
+          lang: currentLocale,
+          context: "sms_offer_retry_after_silence",
+        });
+
+        return res.type("text/xml").send(vrAsk.toString());
       }
 
       // Si estamos dentro de un booking, NO vuelvas a la bienvenida.
@@ -1567,25 +1589,54 @@ router.post('/', async (req: Request, res: Response) => {
           normalizeSpeechOutput(twoSentencesMax(spokenRaw), currentLocale as any)
         );
 
-        vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
+        const smsAsk = renderVoiceReply("sms_offer_confirmation", {
+          locale: currentLocale,
+          linkType: tipoLink,
+        });
+
+        const combinedText = twoSentencesMax(
+          sanitizeForSay(`${spoken} ${smsAsk}`)
+        );
+
+        const gather = vr.gather({
+          input: ["speech", "dtmf"] as any,
+          numDigits: 1,
+          action: "/webhook/voice-response",
+          method: "POST",
+          language: currentLocale as any,
+          speechTimeout: "auto",
+          timeout: 7,
+          actionOnEmptyResult: true,
+          bargeIn: true,
+          hints: currentLocale.startsWith("es") ? "sí, si, no, uno, 1" : "yes, no, one, 1",
+        });
+
+        gather.say(
+          { language: currentLocale as any, voice: voiceName },
+          combinedText
+        );
+
+        await upsertVoiceCallState({
+          callSid,
+          tenantId: tenant.id,
+          lang: state.lang ?? currentLocale,
+          turn: state.turn ?? 0,
+          awaiting: true,
+          pendingType: tipoLink,
+          awaitingNumber: state.awaitingNumber ?? false,
+          altDest: state.altDest ?? null,
+          smsSent: state.smsSent ?? false,
+          bookingStepIndex: state.bookingStepIndex ?? null,
+          bookingData: state.bookingData ?? {},
+        });
 
         logBotSay({
           callSid,
           to: didNumber || "ivr",
-          text: spoken,
+          text: combinedText,
           lang: currentLocale,
-          context: `business_topic:${topic}`,
+          context: `business_topic_with_sms_offer:${topic}`,
         });
-
-        await offerSms(
-          vr,
-          currentLocale as any,
-          voiceName,
-          callSid,
-          state,
-          tipoLink,
-          tenant.id
-        );
 
         return res.type("text/xml").send(vr.toString());
       };
