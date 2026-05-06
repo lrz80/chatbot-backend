@@ -10,6 +10,7 @@ import { markTrialUsedByEmail } from '../../lib/trial';
 import twilio from 'twilio';
 import { sendCapiEvent } from "../../services/metaCapi";
 import crypto from "crypto";
+import { upsertTenantSubscription } from "../../lib/billing/tenantSubscriptions.repo";
 
 const router = express.Router();
 
@@ -124,6 +125,38 @@ const flagsFromProduct = (product: Stripe.Product): ChannelFlags => {
     email_enabled:    bool(md.email_enabled,    defaults.email_enabled),
   };
 };
+
+type ContractMetadata = {
+  contractTermMonths: number | null;
+  billingCommitment: string | null;
+  billingInterval: string;
+};
+
+function parsePositiveInteger(value: unknown): number | null {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Math.trunc(parsed);
+}
+
+function addMonths(date: Date, months: number): Date {
+  const copy = new Date(date.getTime());
+  copy.setMonth(copy.getMonth() + months);
+  return copy;
+}
+
+function contractMetadataFromProduct(product: Stripe.Product | null): ContractMetadata {
+  const metadata = (product?.metadata || {}) as Record<string, string>;
+
+  return {
+    contractTermMonths: parsePositiveInteger(metadata.contract_term_months),
+    billingCommitment: metadata.billing_commitment || null,
+    billingInterval: metadata.billing_interval || "monthly",
+  };
+}
 
 type PlanLimits = Record<string, number>;
 
@@ -647,6 +680,25 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         const planLimits = prod ? limitsFromProduct(prod) : {};
 
+        const contractMetadata = contractMetadataFromProduct(prod);
+
+        const stripeCustomerId =
+          typeof subscription.customer === "string" ? subscription.customer : null;
+
+        const currentPeriodStart = stripeUnixToDateOrNull(subscription.current_period_start);
+        const currentPeriodEnd = stripeUnixToDateOrNull(subscription.current_period_end);
+
+        const subscriptionStartDate = stripeUnixToDateOrNull(subscription.start_date);
+
+        const contractStartDate = subscriptionStartDate;
+        const contractEndDate =
+          contractStartDate && contractMetadata.contractTermMonths
+            ? addMonths(contractStartDate, contractMetadata.contractTermMonths)
+            : null;
+
+        const trialStart = stripeUnixToDateOrNull(subscription.trial_start);
+        const trialEnd = stripeUnixToDateOrNull(subscription.trial_end);
+
         // 🔹 Plan desde Stripe: metadata.plan_code → nombre del producto → fallback 'pro'
         const planCode =
           (prod?.metadata as any)?.plan_code ||
@@ -680,6 +732,35 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             productId,                         // 👈 NUEVO
           ]
         );
+
+        await upsertTenantSubscription({
+          tenantId,
+          planCode,
+          stripeCustomerId,
+          stripeSubscriptionId: subscriptionId,
+          stripeProductId: productId,
+          status: subscription.status,
+
+          billingInterval: contractMetadata.billingInterval,
+          billingCommitment: contractMetadata.billingCommitment,
+          contractTermMonths: contractMetadata.contractTermMonths,
+
+          contractStartDate,
+          contractEndDate,
+
+          currentPeriodStart,
+          currentPeriodEnd,
+
+          trialStart,
+          trialEnd,
+          isTrial: esTrial,
+
+          metadata: {
+            stripe_event_id: event.id,
+            stripe_checkout_session_id: session.id,
+            source: "checkout.session.completed",
+          },
+        });
 
         await resetearCanales(tenantId, planLimits);
 

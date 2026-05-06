@@ -53,6 +53,22 @@ router.post("/checkout", async (req, res) => {
     if (priceId) {
       const price = await stripe.prices.retrieve(priceId);
 
+      const productId =
+        typeof price.product === "string" ? price.product : null;
+
+      const product = productId
+        ? await stripe.products.retrieve(productId)
+        : null;
+
+      const productMetadata =
+        product && !product.deleted ? product.metadata || {} : {};
+
+      const checkoutCouponId =
+        typeof productMetadata.checkout_coupon_id === "string" &&
+        productMetadata.checkout_coupon_id.trim()
+          ? productMetadata.checkout_coupon_id.trim()
+          : null;
+
       const mode: Stripe.Checkout.SessionCreateParams.Mode =
         price.type === "recurring" ? "subscription" : "payment";
 
@@ -76,6 +92,14 @@ router.post("/checkout", async (req, res) => {
         success_url: `${FRONTEND_URL}/dashboard/profile`,
         cancel_url: `${FRONTEND_URL}/upgrade?canceled=1`,
       };
+
+      if (checkoutCouponId) {
+        sessionParams.discounts = [
+          {
+            coupon: checkoutCouponId,
+          },
+        ];
+      }
 
       // ✅ CRÍTICO: si es subscription, mete tenant_id en subscription.metadata
       if (mode === "subscription") {
