@@ -54,6 +54,7 @@ import {
   buildMainMenu,
 } from "../../lib/voice/renderVoiceMenus";
 import { getVoiceMenuCopy } from "../../lib/voice/voiceMenuCopy";
+import { detectarIdioma } from "../../lib/detectarIdioma";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -380,6 +381,18 @@ router.post("/lang", async (req: Request, res: Response) => {
     speech: speechRaw,
   });
 
+  const detectedLanguageFromSpeech =
+    langSelection.hasRealUtterance && !langSelection.explicitLanguageSelection
+      ? await detectarIdioma(langSelection.originalSpeech).catch(() => null)
+      : null;
+
+  const selectedLanguage =
+    String(detectedLanguageFromSpeech || "").toLowerCase().startsWith("es")
+      ? "es"
+      : String(detectedLanguageFromSpeech || "").toLowerCase().startsWith("pt")
+      ? "pt"
+      : langSelection.selectedLanguage;
+
   console.log(
     "[VOICE][LANG]",
     JSON.stringify({
@@ -409,9 +422,9 @@ router.post("/lang", async (req: Request, res: Response) => {
       callSid,
       tenantId: tenant.id,
       lang:
-        langSelection.selectedLanguage === "es"
+        selectedLanguage === "es"
           ? "es-ES"
-          : langSelection.selectedLanguage === "pt"
+          : selectedLanguage === "pt"
           ? "pt-BR"
           : "en-US",
       turn: 0,
@@ -431,9 +444,9 @@ router.post("/lang", async (req: Request, res: Response) => {
 
   const vr = new twiml.VoiceResponse();
   const selectedLocale =
-    langSelection.selectedLanguage === "es"
+    selectedLanguage === "es"
       ? "es-ES"
-      : langSelection.selectedLanguage === "pt"
+      : selectedLanguage === "pt"
       ? "pt-BR"
       : "en-US";
 
@@ -461,9 +474,9 @@ router.post("/lang", async (req: Request, res: Response) => {
   if (langSelection.hasRealUtterance) {
     vr.redirect(
       `/webhook/voice-response?lang=${
-        langSelection.selectedLanguage === "es"
+        selectedLanguage === "es"
           ? "es"
-          : langSelection.selectedLanguage === "pt"
+          : selectedLanguage === "pt"
           ? "pt"
           : "en"
       }`
@@ -533,13 +546,17 @@ router.post('/', async (req: Request, res: Response) => {
     ? resolveVoiceIntentFromUtterance(effectiveUserInput)
     : null;
 
+  const hasPendingUtterance = Boolean(pendingUtterance);
+
   const canCoerceVoiceInputToMenuSelection =
     !!effectiveUserInput &&
+    !hasPendingUtterance &&
     !digits &&
     !state.awaiting &&
     !state.awaitingNumber &&
     typeof state.bookingStepIndex !== "number" &&
-    resolvedInitialVoiceIntent !== "booking";
+    resolvedInitialVoiceIntent !== "booking" &&
+    effectiveUserInput.trim().split(/\s+/).length <= 2;
 
   if (canCoerceVoiceInputToMenuSelection) {
     const coerced = await resolveVoiceMenuSelection({
@@ -912,10 +929,36 @@ router.post('/', async (req: Request, res: Response) => {
       if (state.awaiting && state.pendingType) {
         const vrAsk = new twiml.VoiceResponse();
 
-        const retryText = renderVoiceReply("sms_offer_confirmation", {
-          locale: currentLocale,
-          linkType: state.pendingType,
+        state = {
+          ...state,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+        };
+
+        await upsertVoiceCallState({
+          callSid,
+          tenantId: tenant.id,
+          lang: state.lang ?? currentLocale,
+          turn: state.turn ?? 0,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+          altDest: state.altDest ?? null,
+          smsSent: state.smsSent ?? false,
+          bookingStepIndex: state.bookingStepIndex ?? null,
+          bookingData: state.bookingData ?? {},
         });
+
+        const followupText = currentLocale.startsWith("es")
+          ? "Está bien. ¿Te ayudo con algo más?"
+          : currentLocale.startsWith("pt")
+          ? "Tudo bem. Posso te ajudar com mais alguma coisa?"
+          : "No problem. Can I help you with anything else?";
+
+        const retryText = twoSentencesMax(
+          sanitizeForSay(followupText)
+        );
 
         const gather = vrAsk.gather({
           input: ["speech", "dtmf"] as any,
@@ -927,9 +970,6 @@ router.post('/', async (req: Request, res: Response) => {
           timeout: 7,
           actionOnEmptyResult: true,
           bargeIn: true,
-          hints: currentLocale.startsWith("es")
-            ? "sí, si, no, uno, 1"
-            : "yes, no, one, 1",
         });
 
         gather.say(
@@ -942,7 +982,7 @@ router.post('/', async (req: Request, res: Response) => {
           to: didNumber || "ivr",
           text: retryText,
           lang: currentLocale,
-          context: "sms_offer_retry_after_silence",
+          context: "sms_offer_silence_cleared",
         });
 
         return res.type("text/xml").send(vrAsk.toString());
@@ -1638,6 +1678,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (
       digits &&
+      !effectiveUserInput &&
       !hasActiveBookingStep &&
       !state.awaiting &&
       resolvedVoiceIntentForTurn !== "booking"
