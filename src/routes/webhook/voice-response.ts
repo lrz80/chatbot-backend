@@ -1248,6 +1248,175 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     if (earlySmsType) {
+      const bookingSmsPayload =
+        earlySmsType === "reservar"
+          ? parseBookingSmsPayload(state.bookingData || {})
+          : null;
+
+      if (bookingSmsPayload) {
+        const smsFrom =
+          tenant.twilio_sms_number || tenant.twilio_voice_number || "";
+
+        const toDest =
+          (state.altDest && isValidE164(state.altDest) ? state.altDest : null) ||
+          callerE164;
+
+        const body = buildBookingConfirmationSmsBody(
+          bookingSmsPayload,
+          currentLocale
+        );
+
+        console.log("[VOICE][BOOKING_SMS][EARLY_SEND_ATTEMPT]", {
+          callSid,
+          tenantId: tenant.id,
+          smsFrom,
+          toDest,
+          body,
+          bookingSmsPayload,
+        });
+
+        if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
+          const bad = currentLocale.startsWith("es")
+            ? "No pude validar tu número para enviarte el SMS."
+            : currentLocale.startsWith("pt")
+            ? "Não consegui validar seu número para enviar o SMS."
+            : "I could not validate your number to send the SMS.";
+
+          vr.say({ language: currentLocale as any, voice: voiceName }, bad);
+          vr.gather({
+            input: ['speech', 'dtmf'] as any,
+            numDigits: 1,
+            action: '/webhook/voice-response',
+            method: 'POST',
+            language: currentLocale as any,
+            speechTimeout: 'auto',
+            timeout: 7,
+            actionOnEmptyResult: true,
+          });
+
+          return res.type('text/xml').send(vr.toString());
+        }
+
+        if (!smsFrom) {
+          const bad = currentLocale.startsWith("es")
+            ? "No hay un número SMS configurado para enviar la confirmación."
+            : currentLocale.startsWith("pt")
+            ? "Não há um número SMS configurado para enviar a confirmação."
+            : "There is no SMS number configured to send the confirmation.";
+
+          vr.say({ language: currentLocale as any, voice: voiceName }, bad);
+          vr.gather({
+            input: ['speech', 'dtmf'] as any,
+            numDigits: 1,
+            action: '/webhook/voice-response',
+            method: 'POST',
+            language: currentLocale as any,
+            speechTimeout: 'auto',
+            timeout: 7,
+            actionOnEmptyResult: true,
+          });
+
+          return res.type('text/xml').send(vr.toString());
+        }
+
+        if (smsFrom.startsWith("whatsapp:")) {
+          const bad = currentLocale.startsWith("es")
+            ? "El número configurado es WhatsApp y no puede enviar SMS."
+            : currentLocale.startsWith("pt")
+            ? "O número configurado é apenas WhatsApp e não pode enviar SMS."
+            : "The configured number is WhatsApp-only and cannot send SMS.";
+
+          vr.say({ language: currentLocale as any, voice: voiceName }, bad);
+          vr.gather({
+            input: ['speech', 'dtmf'] as any,
+            numDigits: 1,
+            action: '/webhook/voice-response',
+            method: 'POST',
+            language: currentLocale as any,
+            speechTimeout: 'auto',
+            timeout: 7,
+            actionOnEmptyResult: true,
+          });
+
+          return res.type('text/xml').send(vr.toString());
+        }
+
+        const sentCount = await sendSMS({
+          mensaje: body,
+          destinatarios: [toDest],
+          fromNumber: smsFrom || undefined,
+          tenantId: tenant.id,
+          campaignId: null,
+        });
+
+        console.log("[VOICE][BOOKING_SMS][EARLY_SENT]", {
+          callSid,
+          tenantId: tenant.id,
+          sentCount,
+          toDest,
+        });
+
+        state = {
+          ...state,
+          awaiting: false,
+          pendingType: null,
+          smsSent: true,
+        };
+
+        await upsertVoiceCallState({
+          callSid,
+          tenantId: tenant.id,
+          lang: state.lang ?? currentLocale,
+          turn: state.turn ?? 0,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: state.awaitingNumber ?? false,
+          altDest: state.altDest ?? null,
+          smsSent: true,
+          bookingStepIndex: state.bookingStepIndex ?? null,
+          bookingData: state.bookingData ?? {},
+        });
+
+        await pool.query(
+          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+          VALUES ($1, 'user', $2, NOW(), $3, $4)`,
+          [tenant.id, effectiveUserInput, CHANNEL_KEY, callerE164 || 'anónimo']
+        );
+
+        await pool.query(
+          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+          VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
+          [tenant.id, "SMS enviado con confirmación de reserva.", CHANNEL_KEY, didNumber || 'sistema']
+        );
+
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, created_at)
+          VALUES ($1, $2, NOW())`,
+          [tenant.id, CHANNEL_KEY]
+        );
+
+        const ok = currentLocale.startsWith("es")
+          ? "Te acabo de enviar los detalles de tu reserva por SMS."
+          : currentLocale.startsWith("pt")
+          ? "Acabei de te enviar os detalhes da sua reserva por SMS."
+          : "I just sent your booking details by SMS.";
+
+        vr.say({ language: currentLocale as any, voice: voiceName }, ok);
+        vr.gather({
+          input: ['speech', 'dtmf'] as any,
+          numDigits: 1,
+          action: '/webhook/voice-response',
+          method: 'POST',
+          language: currentLocale as any,
+          speechTimeout: 'auto',
+          timeout: 7,
+          actionOnEmptyResult: true,
+        });
+
+        await incrementarUsoPorNumero(didNumber);
+        return res.type('text/xml').send(vr.toString());
+      }
+
       await enviarSmsConLink(earlySmsType, {
         tenantId: tenant.id,
         callerE164,
@@ -1256,6 +1425,7 @@ router.post('/', async (req: Request, res: Response) => {
         callSid,
         overrideDestE164: (state.altDest && isValidE164(state.altDest)) ? state.altDest : undefined,
       });
+
       const ok = renderVoiceReply("sms_sent_success", {
         locale: currentLocale,
         linkType: earlySmsType,
@@ -1269,11 +1439,10 @@ router.post('/', async (req: Request, res: Response) => {
         method: 'POST',
         language: currentLocale as any,
         speechTimeout: 'auto',
-        timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
-        actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
+        timeout: 7,
+        actionOnEmptyResult: true,
       });
 
-      // Guarda conversación mínima del fast-path
       await pool.query(
         `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
         VALUES ($1, 'user', $2, NOW(), $3, $4)`,
