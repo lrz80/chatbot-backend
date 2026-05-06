@@ -81,6 +81,7 @@ type BookingSmsPayload = {
   datetime: string;
   customer_name: string;
   google_calendar_link: string;
+  extra_fields?: Record<string, string>;
 };
 
 function parseBookingSmsPayload(
@@ -95,6 +96,20 @@ function parseBookingSmsPayload(
   try {
     const parsed = JSON.parse(raw);
 
+    const extraFields =
+      parsed?.extra_fields &&
+      typeof parsed.extra_fields === "object" &&
+      !Array.isArray(parsed.extra_fields)
+        ? Object.fromEntries(
+            Object.entries(parsed.extra_fields)
+              .map(([key, value]) => [
+                String(key || "").trim(),
+                String(value || "").trim(),
+              ])
+              .filter(([key, value]) => key && value)
+          )
+        : {};
+
     return {
       business_name: String(parsed?.business_name || "").trim(),
       business_phone: String(parsed?.business_phone || "").trim(),
@@ -102,6 +117,7 @@ function parseBookingSmsPayload(
       datetime: String(parsed?.datetime || "").trim(),
       customer_name: String(parsed?.customer_name || "").trim(),
       google_calendar_link: String(parsed?.google_calendar_link || "").trim(),
+      extra_fields: extraFields,
     };
   } catch (error) {
     console.error("[VOICE][BOOKING_SMS][PARSE_ERROR]", {
@@ -185,6 +201,7 @@ function buildBookingConfirmationSmsBody(
       `Servicio: ${payload.service || "No especificado"}`,
       `Fecha y hora: ${payload.datetime || "No especificada"}`,
       `Cliente: ${payload.customer_name || "No especificado"}`,
+      ...buildBookingExtraFieldLines(payload.extra_fields),
     ];
 
     if (payload.business_phone) {
@@ -212,6 +229,7 @@ function buildBookingConfirmationSmsBody(
       `Serviço: ${payload.service || "Não especificado"}`,
       `Data e hora: ${payload.datetime || "Não especificada"}`,
       `Cliente: ${payload.customer_name || "Não especificado"}`,
+      ...buildBookingExtraFieldLines(payload.extra_fields),
     ];
 
     if (payload.business_phone) {
@@ -238,6 +256,7 @@ function buildBookingConfirmationSmsBody(
     `Service: ${payload.service || "Not specified"}`,
     `Date and time: ${payload.datetime || "Not specified"}`,
     `Customer: ${payload.customer_name || "Not specified"}`,
+    ...buildBookingExtraFieldLines(payload.extra_fields),
   ];
 
   if (payload.business_phone) {
@@ -256,6 +275,24 @@ function buildBookingConfirmationSmsBody(
   }
 
   return lines.join("\n").trim();
+}
+
+function humanizeBookingFieldName(key: string): string {
+  return String(key || "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function buildBookingExtraFieldLines(
+  extraFields?: Record<string, string>
+): string[] {
+  return Object.entries(extraFields || {})
+    .filter(([key, value]) => String(key).trim() && String(value).trim())
+    .map(([key, value]) => {
+      return `${humanizeBookingFieldName(key)}: ${String(value).trim()}`;
+    });
 }
 
 //  Marca dinámica del tenant (solo `name`)
@@ -1682,8 +1719,21 @@ router.post('/', async (req: Request, res: Response) => {
           bargeIn: true,
         });
 
+        gather.say(
+          { language: currentLocale as any, voice: voiceName },
+          ok
+        );
+
+        logBotSay({
+          callSid,
+          to: didNumber || "ivr",
+          text: ok,
+          lang: currentLocale,
+          context: "booking_sms_sent_followup",
+        });
+
         await incrementarUsoPorNumero(didNumber);
-        return res.type('text/xml').send(vr.toString());
+        return res.type("text/xml").send(vr.toString());
       }
 
       await enviarSmsConLink(earlySmsType, {
