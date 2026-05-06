@@ -1665,21 +1665,21 @@ router.post('/', async (req: Request, res: Response) => {
         );
 
         const ok = currentLocale.startsWith("es")
-          ? "Te acabo de enviar los detalles de tu reserva por SMS."
+          ? "Te acabo de enviar los detalles de tu reserva por SMS. ¿Necesitas algo más?"
           : currentLocale.startsWith("pt")
-          ? "Acabei de te enviar os detalhes da sua reserva por SMS."
-          : "I just sent your booking details by SMS.";
+          ? "Acabei de te enviar os detalhes da sua reserva por SMS. Posso te ajudar com mais alguma coisa?"
+          : "I just sent your booking details by SMS. Do you need anything else?";
 
-        vr.say({ language: currentLocale as any, voice: voiceName }, ok);
-        vr.gather({
-          input: ['speech', 'dtmf'] as any,
+        const gather = vr.gather({
+          input: ["speech", "dtmf"] as any,
           numDigits: 1,
-          action: '/webhook/voice-response',
-          method: 'POST',
+          action: "/webhook/voice-response",
+          method: "POST",
           language: currentLocale as any,
-          speechTimeout: 'auto',
-          timeout: 7,
+          speechTimeout: "1",
+          timeout: 4,
           actionOnEmptyResult: true,
+          bargeIn: true,
         });
 
         await incrementarUsoPorNumero(didNumber);
