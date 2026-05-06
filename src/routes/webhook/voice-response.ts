@@ -203,7 +203,7 @@ async function getTenantBrand(tenantId: string): Promise<string> {
     [tenantId]
   );
   const brand = (rows?.[0]?.brand || '').toString().trim();
-  return brand || 'Amy';
+  return brand || 'Aamy';
 }
 
 async function enviarSmsConLink(
@@ -779,10 +779,10 @@ router.post('/', async (req: Request, res: Response) => {
       const brandForMenu = await getTenantBrand(tenant.id);
 
       const fallbackWelcome = currentLocale.startsWith("es")
-        ? `Hola, soy Amy del equipo de ${brandForMenu}. ¿En qué puedo ayudarte hoy?`
+        ? `Hola, soy Aamy del equipo de ${brandForMenu}. ¿En qué puedo ayudarte hoy?`
         : currentLocale.startsWith("pt")
-        ? `Olá, aqui é a Amy da equipe de ${brandForMenu}. Como posso te ajudar hoje?`
-        : `Hi, this is Amy from ${brandForMenu}. How can I help you today?`;
+        ? `Olá, aqui é a Aamy da equipe de ${brandForMenu}. Como posso te ajudar hoje?`
+        : `Hi, this is Aamy from ${brandForMenu}. How can I help you today?`;
 
       const welcomeText = twoSentencesMax(
         (cfg?.welcome_message || "").trim() || fallbackWelcome
