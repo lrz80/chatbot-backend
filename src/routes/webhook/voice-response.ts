@@ -1227,6 +1227,13 @@ router.post('/', async (req: Request, res: Response) => {
     if (hasActiveBookingFlow && effectiveUserInput) {
       const interruptionBusinessTopic = resolveVoiceBusinessTopic(effectiveUserInput);
 
+    const interruptionVoiceIntent = await resolveVoiceIntentFromUtteranceAsync(
+      effectiveUserInput,
+      {
+        timeoutMs: 1500,
+        minConfidence: 0.65,
+      }
+    );
       const interruptionClosure = await resolveVoiceConversationClosure(
         effectiveUserInput,
         currentLocale
@@ -1244,12 +1251,19 @@ router.post('/', async (req: Request, res: Response) => {
         interruptionBusinessTopic.topic &&
         interruptionBusinessTopic.linkType;
 
+      const shouldLeaveBookingForHumanHandoff =
+        interruptionVoiceIntent === "human_handoff";
+
       const shouldCloseBooking =
         interruptionClosure.shouldClose ||
         interruptionMetaSignal.intent === "close" ||
         interruptionMetaSignal.intent === "reject";
 
-      if (shouldLeaveBookingForBusinessTopic || shouldCloseBooking) {
+      if (
+        shouldLeaveBookingForBusinessTopic ||
+        shouldLeaveBookingForHumanHandoff ||
+        shouldCloseBooking
+      ) {
         const preservedBookingData: Record<string, any> = {};
 
         if (state.bookingData?.__voice_intro_played) {
@@ -1280,11 +1294,55 @@ router.post('/', async (req: Request, res: Response) => {
           bookingData: preservedBookingData,
         });
 
+        if (shouldLeaveBookingForHumanHandoff) {
+          const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
+
+          if (REPRESENTANTE_NUMBER) {
+            vr.say(
+              { language: currentLocale as any, voice: voiceName },
+              renderVoiceReply("transfer_connecting", {
+                locale: currentLocale,
+              })
+            );
+
+            const dial = vr.dial({
+              action: "/webhook/voice-response?transfer=1",
+              method: "POST",
+              timeout: 20,
+            });
+
+            dial.number(REPRESENTANTE_NUMBER);
+
+            return res.type("text/xml").send(vr.toString());
+          }
+
+          vr.say(
+            { language: currentLocale as any, voice: voiceName },
+            renderVoiceReply("transfer_unavailable", {
+              locale: currentLocale,
+            })
+          );
+
+          await offerSms(
+            vr,
+            currentLocale as any,
+            voiceName,
+            callSid,
+            state,
+            "soporte",
+            tenant.id
+          );
+
+          return res.type("text/xml").send(vr.toString());
+        }
+
         console.log("[VOICE][BOOKING_INTERRUPTED]", {
           callSid,
           tenantId: tenant.id,
           reason: shouldLeaveBookingForBusinessTopic
             ? "business_topic"
+            : shouldLeaveBookingForHumanHandoff
+            ? "human_handoff"
             : "close_or_reject",
           userInput: effectiveUserInput,
           businessTopic: interruptionBusinessTopic,
@@ -2030,6 +2088,73 @@ router.post('/', async (req: Request, res: Response) => {
         { language: currentLocale as any, voice: voiceName },
         renderVoiceLifecycle("menu_option_not_recognized", currentLocale)
       );
+    }
+
+    // ——— FAST INTENT: transferencia a humano ———
+    if (
+      effectiveUserInput &&
+      !hasActiveBookingStep &&
+      resolvedVoiceIntentForTurn === "human_handoff"
+    ) {
+      const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
+
+      if (REPRESENTANTE_NUMBER) {
+        vr.say(
+          { language: currentLocale as any, voice: voiceName },
+          renderVoiceReply("transfer_connecting", {
+            locale: currentLocale,
+          })
+        );
+
+        const dial = vr.dial({
+          action: "/webhook/voice-response?transfer=1",
+          method: "POST",
+          timeout: 20,
+        });
+
+        dial.number(REPRESENTANTE_NUMBER);
+
+        logBotSay({
+          callSid,
+          to: didNumber || "ivr",
+          text: renderVoiceReply("transfer_connecting", {
+            locale: currentLocale,
+          }),
+          lang: currentLocale,
+          context: "human_handoff_transfer",
+        });
+
+        return res.type("text/xml").send(vr.toString());
+      }
+
+      vr.say(
+        { language: currentLocale as any, voice: voiceName },
+        renderVoiceReply("transfer_unavailable", {
+          locale: currentLocale,
+        })
+      );
+
+      await offerSms(
+        vr,
+        currentLocale as any,
+        voiceName,
+        callSid,
+        state,
+        "soporte",
+        tenant.id
+      );
+
+      logBotSay({
+        callSid,
+        to: didNumber || "ivr",
+        text: renderVoiceReply("transfer_unavailable", {
+          locale: currentLocale,
+        }),
+        lang: currentLocale,
+        context: "human_handoff_unavailable_offer_sms",
+      });
+
+      return res.type("text/xml").send(vr.toString());
     }
 
     // ——— FAST INTENT: si el usuario pidió algo directo (sin DTMF), lee desde prompt y luego ofrece SMS ———
