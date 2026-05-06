@@ -109,6 +109,19 @@ function parseBookingSmsPayload(
   }
 }
 
+function hasInitialVoiceIntroPlayed(state: CallState): boolean {
+  return String(state.bookingData?.__voice_intro_played || "") === "1";
+}
+
+function withInitialVoiceIntroPlayed(
+  bookingData: Record<string, any> | undefined
+): Record<string, any> {
+  return {
+    ...(bookingData || {}),
+    __voice_intro_played: "1",
+  };
+}
+
 function buildBookingConfirmationSmsBody(
   payload: BookingSmsPayload,
   locale: "es-ES" | "en-US" | "pt-BR"
@@ -408,9 +421,11 @@ router.post("/lang", async (req: Request, res: Response) => {
       altDest: null,
       smsSent: false,
       bookingStepIndex: null,
-      bookingData: langSelection.hasRealUtterance
-        ? { __pending_utterance: langSelection.originalSpeech }
-        : {},
+      bookingData: withInitialVoiceIntroPlayed(
+        langSelection.hasRealUtterance
+          ? { __pending_utterance: langSelection.originalSpeech }
+          : {}
+      ),
     });
   }
 
@@ -799,9 +814,13 @@ router.post('/', async (req: Request, res: Response) => {
         ? twoSentencesMax(mainMenuPrompt)
         : "";
 
+      const shouldRepeatWelcome = !hasInitialVoiceIntroPlayed(state);
+
       const initialPromptText = sanitizeForSay(
         normalizeSpeechOutput(
-          [welcomeText, menuText].filter(Boolean).join(" "),
+          shouldRepeatWelcome
+            ? [welcomeText, menuText].filter(Boolean).join(" ")
+            : menuText || welcomeText,
           currentLocale as any
         )
       );
@@ -828,7 +847,9 @@ router.post('/', async (req: Request, res: Response) => {
         to: didNumber || "ivr",
         text: initialPromptText,
         lang: currentLocale,
-        context: "welcome_with_main_menu_prompt",
+        context: shouldRepeatWelcome
+          ? "welcome_with_main_menu_prompt"
+          : "main_menu_prompt_after_initial_intro",
       });
 
       return res.type("text/xml").send(vr.toString());
