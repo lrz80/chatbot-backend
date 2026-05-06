@@ -146,7 +146,9 @@ REGLAS:
 - No agregues información externa.
 - No incluyas URLs.
 - No digas que enviarás SMS ni links.
-- Si el dato no aparece en la fuente, responde exactamente: "${fallbackText(topic, locale)}"
+- Si no hay ninguna información relacionada con el tema, responde exactamente: "${fallbackText(topic, locale)}"
+- Si hay información parcial o general relacionada con el tema, responde solo esa información sin agregar el fallback.
+- Nunca combines una respuesta útil con el fallback.
 - Para direcciones, teléfonos, nombres de calles, códigos postales, precios y horarios: copia los datos exactamente como aparecen en la fuente. No los reescribas, no los traduzcas y no los conviertas en palabras.
 `.trim()
     : `
@@ -165,7 +167,9 @@ RULES:
 - Do not add external information.
 - Do not include URLs.
 - Do not say you will send SMS or links.
-- If the detail does not appear in the source, reply exactly: "${fallbackText(topic, locale)}"
+- If there is no information related to the topic, reply exactly: "${fallbackText(topic, locale)}"
+- If there is partial or general information related to the topic, reply only with that information without adding the fallback.
+- Never combine a useful answer with the fallback.
 - For addresses, phone numbers, street names, zip codes, prices, and hours: copy the facts exactly as they appear in the source. Do not rewrite, translate, or spell them out.
 `.trim();
 
