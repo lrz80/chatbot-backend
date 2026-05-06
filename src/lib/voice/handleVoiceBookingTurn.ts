@@ -350,8 +350,14 @@ export async function handleVoiceBookingTurn(
 
     if (isOfferBookingSmsStep) {
       if (confirmationMetaSignal.intent === "affirm" || digits === "1") {
+        const preservedBookingSmsPayload =
+          typeof state.bookingData?.booking_sms_payload === "string"
+            ? state.bookingData.booking_sms_payload
+            : "";
+
         const postBookingStateData = {
           ...(state.bookingData || {}),
+          booking_sms_payload: preservedBookingSmsPayload,
           __last_voice_domain: "booking",
           __last_booking_outcome: "confirmed",
           __last_assistant_text:
@@ -384,6 +390,13 @@ export async function handleVoiceBookingTurn(
           smsSent: false,
           bookingStepIndex: null,
           bookingData: postBookingStateData,
+        });
+
+        console.log("[VOICE][BOOKING_SMS][PAYLOAD_PRESERVED_AFTER_ACCEPT]", {
+          callSid,
+          tenantId: tenant.id,
+          hasPayload: Boolean(postBookingStateData.booking_sms_payload),
+          bookingSmsPayload: postBookingStateData.booking_sms_payload || null,
         });
 
         return {
@@ -684,7 +697,10 @@ export async function handleVoiceBookingTurn(
             altDest: state.altDest ?? null,
             smsSent: false,
             bookingStepIndex: successStepIndex + 1,
-            bookingData: bookingSpeechData,
+            bookingData: {
+              ...bookingSpeechData,
+              booking_sms_payload: bookingSmsPayloadJson,
+            },
           });
 
           const gather = createBookingGather({
