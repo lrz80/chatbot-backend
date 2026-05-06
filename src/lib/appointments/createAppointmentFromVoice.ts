@@ -12,7 +12,7 @@ type AppointmentSettings = {
   enabled: boolean;
 };
 
-type BookingSlot =
+type CoreBookingSlot =
   | "service"
   | "datetime"
   | "customer_name"
@@ -22,10 +22,42 @@ type BookingSlot =
 
 type Args = {
   tenantId: string;
-  answersBySlot: Partial<Record<BookingSlot, string>>;
+  answersBySlot: Record<string, string | null | undefined>;
   idempotencyKey?: string;
   settings: AppointmentSettings;
 };
+
+function humanizeBookingFieldName(key: string): string {
+  return String(key || "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function buildExtraBookingDescriptionLines(
+  answersBySlot: Record<string, string | null | undefined>
+): string[] {
+  const excludedKeys = new Set([
+    "service",
+    "datetime",
+    "customer_name",
+    "customer_phone",
+    "customer_email",
+    "confirmation",
+  ]);
+
+  return Object.entries(answersBySlot || {})
+    .filter(([key, value]) => {
+      const cleanKey = String(key || "").trim();
+      const cleanValue = String(value || "").trim();
+
+      return Boolean(cleanKey) && Boolean(cleanValue) && !excludedKeys.has(cleanKey);
+    })
+    .map(([key, value]) => {
+      return `${humanizeBookingFieldName(key)}: ${String(value).trim()}`;
+    });
+}
 
 export async function createAppointmentFromVoice(args: Args) {
   const serviceName = String(args.answersBySlot.service || "").trim();
@@ -70,6 +102,8 @@ export async function createAppointmentFromVoice(args: Args) {
     args.idempotencyKey ||
     `voice:${args.tenantId}:${customerPhone || "unknown"}:${start.toISOString()}`;
 
+  const extraDescriptionLines = buildExtraBookingDescriptionLines(args.answersBySlot);
+
   const orchestrator = new BookingProviderOrchestrator();
 
   const bookedAt = new Date();
@@ -93,6 +127,7 @@ export async function createAppointmentFromVoice(args: Args) {
       `Cliente: ${customerName}`,
       customerPhone ? `Teléfono: ${customerPhone}` : null,
       customerEmail ? `Email: ${customerEmail}` : null,
+      ...extraDescriptionLines,
       `Booking creado: ${bookedAtLabel}`,
     ]
       .filter(Boolean)
