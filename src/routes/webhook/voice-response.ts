@@ -123,6 +123,46 @@ function withInitialVoiceIntroPlayed(
   };
 }
 
+function normalizeDetectedVoiceLanguage(value: unknown): "es" | "en" | "pt" | null {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (!raw) return null;
+
+  if (
+    raw === "es" ||
+    raw.startsWith("es-") ||
+    raw.includes("spanish") ||
+    raw.includes("espanol") ||
+    raw.includes("castellano")
+  ) {
+    return "es";
+  }
+
+  if (
+    raw === "pt" ||
+    raw.startsWith("pt-") ||
+    raw.includes("portuguese") ||
+    raw.includes("portugues")
+  ) {
+    return "pt";
+  }
+
+  if (
+    raw === "en" ||
+    raw.startsWith("en-") ||
+    raw.includes("english") ||
+    raw.includes("ingles")
+  ) {
+    return "en";
+  }
+
+  return null;
+}
+
 function buildBookingConfirmationSmsBody(
   payload: BookingSmsPayload,
   locale: "es-ES" | "en-US" | "pt-BR"
@@ -386,18 +426,20 @@ router.post("/lang", async (req: Request, res: Response) => {
       ? await detectarIdioma(langSelection.originalSpeech).catch(() => null)
       : null;
 
+  const normalizedDetectedLanguage =
+  normalizeDetectedVoiceLanguage(detectedLanguageFromSpeech);
+
   const selectedLanguage =
-    String(detectedLanguageFromSpeech || "").toLowerCase().startsWith("es")
-      ? "es"
-      : String(detectedLanguageFromSpeech || "").toLowerCase().startsWith("pt")
-      ? "pt"
-      : langSelection.selectedLanguage;
+    normalizedDetectedLanguage || langSelection.selectedLanguage;
 
   console.log(
     "[VOICE][LANG]",
     JSON.stringify({
       digits: rawDigits,
       speech: langSelection.normalizedSpeech,
+      detectedLanguageFromSpeech,
+      normalizedDetectedLanguage,
+      selectedLanguage,
       bodyKeys: Object.keys(req.body || {}),
     })
   );
@@ -604,7 +646,9 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     if (langParam) {
-      const chosen = resolveLocaleFromQueryLang(langParam, "en-US");
+      const chosen =
+        state.lang ||
+        resolveLocaleFromQueryLang(langParam, "en-US");
 
       state = {
         ...state,
@@ -874,7 +918,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ✅ handler de silencio (cuando Twilio devuelve sin SpeechResult/Digits en turnos posteriores)
     const noUserTurnInput =
-      !userInput &&
+      !effectiveUserInput &&
       !digits &&
       !String(req.body.SpeechResult || "").trim() &&
       !String(req.body.Digits || "").trim();
