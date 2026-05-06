@@ -436,10 +436,18 @@ router.post("/lang", async (req: Request, res: Response) => {
       : null;
 
   const normalizedDetectedLanguage =
-  normalizeDetectedVoiceLanguage(detectedLanguageFromSpeech);
+    normalizeDetectedVoiceLanguage(detectedLanguageFromSpeech);
 
-  const selectedLanguage =
-    langSelection.selectedLanguage || normalizedDetectedLanguage;
+  let selectedLanguage: "es" | "en" | "pt" =
+    langSelection.selectedLanguage === "es"
+      ? "es"
+      : langSelection.selectedLanguage === "pt"
+      ? "pt"
+      : "en";
+
+  if (normalizedDetectedLanguage) {
+    selectedLanguage = normalizedDetectedLanguage;
+  }
 
   console.log(
     "[VOICE][LANG]",
