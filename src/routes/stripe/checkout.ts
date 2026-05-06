@@ -51,17 +51,31 @@ router.post("/checkout", async (req, res) => {
     // 1) MODO DINÁMICO: si viene priceId -> usarlo directo
     // =========================================================
     if (priceId) {
-      const price = await stripe.prices.retrieve(priceId);
+      const price = await stripe.prices.retrieve(priceId, {
+        expand: ["product"],
+      });
 
-      const productId =
-        typeof price.product === "string" ? price.product : null;
+      if (!price.active) {
+        return res.status(400).json({
+          error: "This plan is no longer available.",
+        });
+      }
 
-      const product = productId
-        ? await stripe.products.retrieve(productId)
-        : null;
+      if (!price.product || typeof price.product === "string") {
+        return res.status(400).json({
+          error: "Invalid Stripe product.",
+        });
+      }
 
-      const productMetadata =
-        product && !product.deleted ? product.metadata || {} : {};
+      const product = price.product as Stripe.Product;
+
+      if (!product.active) {
+        return res.status(400).json({
+          error: "This product is no longer available.",
+        });
+      }
+
+      const productMetadata = product.metadata || {};
 
       const checkoutCouponId =
         typeof productMetadata.checkout_coupon_id === "string" &&
@@ -80,15 +94,12 @@ router.post("/checkout", async (req, res) => {
           tenant_id: tenantId,
           purpose: mode === "subscription" ? "aamy_membership" : "aamy_payment",
           price_id: priceId,
+          product_id: product.id,
         },
 
-        // ✅ esto ayuda para recuperar el tenant aunque no tengas metadata en algún evento
         client_reference_id: tenantId,
-
         customer_email: email,
 
-        // (opcional) útil si luego quieres que el frontend pueda mostrar un estado
-        // success_url: `${FRONTEND_URL}/dashboard/profile?stripe=success&session_id={CHECKOUT_SESSION_ID}`,
         success_url: `${FRONTEND_URL}/dashboard/profile`,
         cancel_url: `${FRONTEND_URL}/upgrade?canceled=1`,
       };
@@ -101,18 +112,17 @@ router.post("/checkout", async (req, res) => {
         ];
       }
 
-      // ✅ CRÍTICO: si es subscription, mete tenant_id en subscription.metadata
       if (mode === "subscription") {
         sessionParams.subscription_data = {
           metadata: {
             tenant_id: tenantId,
             purpose: "aamy_membership",
             price_id: priceId,
+            product_id: product.id,
           },
         };
       }
 
-      // ✅ SOLO en payment se permite customer_creation
       if (mode === "payment") {
         sessionParams.customer_creation = "always";
         sessionParams.payment_intent_data = {
@@ -121,6 +131,7 @@ router.post("/checkout", async (req, res) => {
       }
 
       const session = await stripe.checkout.sessions.create(sessionParams);
+
       return res.json({ url: session.url });
     }
 
@@ -183,8 +194,14 @@ router.post("/checkout", async (req, res) => {
 
     return res.json({ url: session.url });
   } catch (err) {
-    console.error("❌ Error creando sesión Stripe:", err);
-    return res.status(500).json({ error: "Error creando sesión de checkout" });
+    console.error("❌ Stripe checkout session creation failed:", {
+      message: err instanceof Error ? err.message : String(err),
+      err,
+    });
+
+    return res.status(500).json({
+      error: "Failed to create checkout session.",
+    });
   }
 });
 
