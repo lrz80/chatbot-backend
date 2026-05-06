@@ -243,10 +243,21 @@ export async function handleVoiceBookingTurn(
   if (typeof state.bookingStepIndex !== "number") {
     const firstStep = flow[0];
 
+    const preservedBookingData: Record<string, any> = {};
+
+    if (state.bookingData?.__voice_intro_played) {
+      preservedBookingData.__voice_intro_played =
+        state.bookingData.__voice_intro_played;
+    }
+
     state = {
       ...state,
+      awaiting: false,
+      pendingType: null,
+      awaitingNumber: false,
+      smsSent: false,
       bookingStepIndex: 0,
-      bookingData: {},
+      bookingData: preservedBookingData,
     };
 
     await upsertVoiceCallState({
@@ -254,13 +265,13 @@ export async function handleVoiceBookingTurn(
       tenantId: tenant.id,
       lang: state.lang ?? currentLocale,
       turn: state.turn ?? 0,
-      awaiting: state.awaiting ?? false,
-      pendingType: state.pendingType ?? null,
-      awaitingNumber: state.awaitingNumber ?? false,
+      awaiting: false,
+      pendingType: null,
+      awaitingNumber: false,
       altDest: state.altDest ?? null,
-      smsSent: state.smsSent ?? false,
+      smsSent: false,
       bookingStepIndex: 0,
-      bookingData: {},
+      bookingData: preservedBookingData,
     });
 
     const firstStepPromptText = resolveBookingPromptText({

@@ -863,7 +863,52 @@ router.post('/', async (req: Request, res: Response) => {
       !String(req.body.Digits || "").trim();
 
     if (noUserTurnInput) {
-      // Si estamos esperando confirmación del SMS, re-pregunta esa confirmación
+      // 1) Si estamos dentro de booking, booking tiene prioridad absoluta.
+      // Esto evita que un SMS pendiente viejo interrumpa el step actual.
+      if (typeof state.bookingStepIndex === "number") {
+        const bookingState = {
+          ...state,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+        };
+
+        await upsertVoiceCallState({
+          callSid,
+          tenantId: tenant.id,
+          lang: bookingState.lang ?? currentLocale,
+          turn: bookingState.turn ?? 0,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+          altDest: bookingState.altDest ?? null,
+          smsSent: bookingState.smsSent ?? false,
+          bookingStepIndex: bookingState.bookingStepIndex ?? null,
+          bookingData: bookingState.bookingData ?? {},
+        });
+
+        const bookingTurnResult = await handleVoiceBookingTurn({
+          vr: new twiml.VoiceResponse(),
+          tenant,
+          cfg,
+          callSid,
+          didNumber,
+          callerE164,
+          currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
+          voiceName,
+          state: bookingState,
+          userInput: "",
+          effectiveUserInput: "",
+          digits: "",
+          logBotSay,
+        });
+
+        if (bookingTurnResult.handled) {
+          return res.type("text/xml").send(bookingTurnResult.twiml);
+        }
+      }
+
+      // 2) Solo si NO hay booking activo, re-pregunta confirmación SMS.
       if (state.awaiting && state.pendingType) {
         const vrAsk = new twiml.VoiceResponse();
 
@@ -882,7 +927,9 @@ router.post('/', async (req: Request, res: Response) => {
           timeout: 7,
           actionOnEmptyResult: true,
           bargeIn: true,
-          hints: currentLocale.startsWith("es") ? "sí, si, no, uno, 1" : "yes, no, one, 1",
+          hints: currentLocale.startsWith("es")
+            ? "sí, si, no, uno, 1"
+            : "yes, no, one, 1",
         });
 
         gather.say(
@@ -901,31 +948,7 @@ router.post('/', async (req: Request, res: Response) => {
         return res.type("text/xml").send(vrAsk.toString());
       }
 
-      // Si estamos dentro de un booking, NO vuelvas a la bienvenida.
-      // Repite el step actual del booking.
-      if (typeof state.bookingStepIndex === "number") {
-        const bookingTurnResult = await handleVoiceBookingTurn({
-          vr: new twiml.VoiceResponse(),
-          tenant,
-          cfg,
-          callSid,
-          didNumber,
-          callerE164,
-          currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
-          voiceName,
-          state,
-          userInput: "",
-          effectiveUserInput: "",
-          digits: "",
-          logBotSay,
-        });
-
-        if (bookingTurnResult.handled) {
-          return res.type("text/xml").send(bookingTurnResult.twiml);
-        }
-      }
-
-      // Si no hay booking activo, mantén el contexto repitiendo el último mensaje real del bot
+      // 3) Si no hay booking ni SMS pendiente, follow-up normal.
       const vrSilence = new twiml.VoiceResponse();
 
       const followupText = currentLocale.startsWith("es")
@@ -934,18 +957,17 @@ router.post('/', async (req: Request, res: Response) => {
         ? "Posso te ajudar com mais alguma coisa?"
         : "Do you need anything else?";
 
-      
       const retryText = twoSentencesMax(
         sanitizeForSay(followupText)
       );
 
       const gather = vrSilence.gather({
-        input: ['speech', 'dtmf'] as any,
+        input: ["speech", "dtmf"] as any,
         numDigits: 1,
-        action: '/webhook/voice-response',
-        method: 'POST',
+        action: "/webhook/voice-response",
+        method: "POST",
         language: currentLocale as any,
-        speechTimeout: 'auto',
+        speechTimeout: "auto",
         timeout: 7,
         actionOnEmptyResult: true,
         bargeIn: true,
@@ -958,13 +980,13 @@ router.post('/', async (req: Request, res: Response) => {
 
       logBotSay({
         callSid,
-        to: didNumber || 'ivr',
+        to: didNumber || "ivr",
         text: retryText,
         lang: currentLocale,
-        context: 'silence_followup_after_turn',
+        context: "silence_followup_after_turn",
       });
 
-      return res.type('text/xml').send(vrSilence.toString());
+      return res.type("text/xml").send(vrSilence.toString());
     }
 
     // ===== Resultado de transferencia (Dial action) =====
