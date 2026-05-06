@@ -18,16 +18,13 @@ import {
   resolveVoiceBookingService,
 } from "./voiceBookingHelpers";
 import { resolveVoiceMetaSignal } from "./resolveVoiceMetaSignal";
+import { twoSentencesMax } from "./speechFormatting";
 
-function twoSentencesMax(s: string) {
-  const parts = (s || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(/(?<=[\.\?\!])\s+/);
-  return parts.slice(0, 2).join(" ").trim();
-}
-
-function formatSuggestedStartForVoice(dateISO: string, locale: VoiceLocale) {
+function formatSuggestedStartForVoice(
+  dateISO: string,
+  locale: VoiceLocale,
+  timeZone: string
+) {
   const date = new Date(dateISO);
 
   if (Number.isNaN(date.getTime())) {
@@ -40,7 +37,7 @@ function formatSuggestedStartForVoice(dateISO: string, locale: VoiceLocale) {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
-      timeZone: "America/New_York",
+      timeZone,
     }).format(date);
   }
 
@@ -49,36 +46,29 @@ function formatSuggestedStartForVoice(dateISO: string, locale: VoiceLocale) {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
-    timeZone: "America/New_York",
+    timeZone,
   }).format(date);
 }
 
 function buildBusyAlternativesPrompt(params: {
   locale: VoiceLocale;
   suggestedStarts: string[];
+  timeZone: string;
+  fallbackText: string;
 }) {
   const formatted = params.suggestedStarts
-    .map((iso) => formatSuggestedStartForVoice(iso, params.locale))
+    .map((iso) =>
+      formatSuggestedStartForVoice(iso, params.locale, params.timeZone)
+    )
     .filter(Boolean)
     .slice(0, 3);
 
-  if (params.locale.startsWith("es")) {
-    if (!formatted.length) {
-      return "Ese horario ya no está disponible. ¿Qué otra hora te gustaría?";
-    }
+  const optionsText = formatted.join(", ");
 
-    return `Ese horario ya no está disponible. Tengo cerca de esa hora: ${formatted.join(
-      ", "
-    )}. ¿Cuál prefieres?`;
-  }
-
-  if (!formatted.length) {
-    return "That time is no longer available. What other time would you prefer?";
-  }
-
-  return `That time is no longer available. I have these nearby times available: ${formatted.join(
-    ", "
-  )}. Which one do you prefer?`;
+  return params.fallbackText
+    .replace(/\{available_times\}/g, optionsText)
+    .replace(/\{suggested_times\}/g, optionsText)
+    .trim();
 }
 
 function assertNonEmptyBookingSpeech(input: {
@@ -332,10 +322,15 @@ export async function handleVoiceBookingTurn(
   }
 
   if (currentStep.expected_type === "confirmation") {
-    const confirmationMetaSignal = await resolveVoiceMetaSignal({
-      utterance: userInput,
-      locale: currentLocale,
-    });
+    const confirmationMetaSignal =
+      digits === "1"
+        ? { intent: "affirm" as const, confidence: 1 }
+        : digits === "2"
+          ? { intent: "reject" as const, confidence: 1 }
+          : await resolveVoiceMetaSignal({
+              utterance: userInput,
+              locale: currentLocale,
+            });
 
     const rawSlot =
       typeof currentStep.validation_config?.slot === "string"
@@ -412,13 +407,7 @@ export async function handleVoiceBookingTurn(
             : "";
 
         const cancelMessageResolved = resolveBookingFlowSpeech({
-          baseText:
-            cancelMessageTemplate ||
-            (currentLocale.startsWith("es")
-              ? "Perfecto, no te envío el SMS. ¿Te ayudo en algo más?"
-              : currentLocale.startsWith("pt")
-              ? "Perfeito, não vou enviar o SMS. Posso te ajudar com mais alguma coisa?"
-              : "Perfect, I won't send the SMS. Can I help you with anything else?"),
+          baseText: cancelMessageTemplate,
           locale: currentLocale,
           bookingData: state.bookingData || {},
           callerE164,
@@ -526,6 +515,8 @@ export async function handleVoiceBookingTurn(
     }
 
     if (confirmationMetaSignal.intent === "affirm" || digits === "1") {
+      let bookingTimeZone = "America/New_York";
+
       try {
         const { rows: settingsRows } = await pool.query(
           `
@@ -549,6 +540,9 @@ export async function handleVoiceBookingTurn(
           timezone: "America/New_York",
           enabled: true,
         };
+
+        bookingTimeZone =
+          String(appointmentSettings?.timezone || "").trim() || bookingTimeZone;
 
         const answersBySlot = buildAnswersBySlot({
           flow,
@@ -802,9 +796,19 @@ export async function handleVoiceBookingTurn(
           : [];
 
         if (providerError === "SLOT_BUSY") {
+          const confirmationRetryText = resolveBookingRetryText({
+            locale: currentLocale,
+            retryPrompt: currentStep.retry_prompt || "",
+            retryPromptTranslations: currentStep.retry_prompt_translations || null,
+            fallbackPrompt: currentStep.prompt || "",
+            fallbackPromptTranslations: currentStep.prompt_translations || null,
+          });
+
           const busyPrompt = buildBusyAlternativesPrompt({
             locale: currentLocale,
             suggestedStarts,
+            timeZone: bookingTimeZone,
+            fallbackText: confirmationRetryText,
           });
 
           const gather = createBookingGather({
@@ -1144,11 +1148,13 @@ export async function handleVoiceBookingTurn(
     if (serviceResolution.kind === "ambiguous") {
       const optionsText = serviceResolution.options.join(", ");
 
-      const ambiguousBaseText = currentLocale.startsWith("es")
-        ? "Encontré varias opciones parecidas: {optionsText}. Por favor dime el nombre completo del servicio que quieres reservar."
-        : currentLocale.startsWith("pt")
-        ? "Encontrei várias opções parecidas: {optionsText}. Por favor diga o nome completo do serviço que você quer agendar."
-        : "I found several similar options: {optionsText}. Please say the full service name you want to book.";
+      const ambiguousBaseText = resolveBookingRetryText({
+        locale: currentLocale,
+        retryPrompt: currentStep.retry_prompt || "",
+        retryPromptTranslations: currentStep.retry_prompt_translations || null,
+        fallbackPrompt: currentStep.prompt || "",
+        fallbackPromptTranslations: currentStep.prompt_translations || null,
+      });
 
       const ambiguousPrompt = resolveBookingFlowSpeech({
         baseText: ambiguousBaseText,
@@ -1210,63 +1216,6 @@ export async function handleVoiceBookingTurn(
     ).trim();
 
     const rawDatetime = String(resolvedStepValue || "").trim();
-
-      const datetimeMetaSignal = await resolveVoiceMetaSignal({
-      utterance: effectiveUserInput,
-      locale: currentLocale,
-    });
-
-    if (
-      datetimeMetaSignal.intent === "affirm" ||
-      datetimeMetaSignal.intent === "reject"
-    ) {
-      const datetimeRetryText = resolveBookingRetryText({
-        locale: currentLocale,
-        retryPrompt: currentStep.retry_prompt || "",
-        retryPromptTranslations: currentStep.retry_prompt_translations || null,
-        fallbackPrompt: currentStep.prompt || "",
-        fallbackPromptTranslations: currentStep.prompt_translations || null,
-      });
-
-      const retryPromptResolved = resolveBookingFlowSpeech({
-        baseText: datetimeRetryText,
-        locale: currentLocale,
-        bookingData: state.bookingData || {},
-        callerE164,
-      });
-
-      const retryPrompt = twoSentencesMax(
-        assertNonEmptyBookingSpeech({
-          text: retryPromptResolved,
-          stepKey: currentStep.step_key,
-          field: currentStep.retry_prompt ? "retry_prompt" : "prompt",
-        })
-      );
-
-      const gather = createBookingGather({
-        vr,
-        locale: currentLocale,
-      });
-
-      gather.say(
-        { language: currentLocale as any, voice: voiceName },
-        retryPrompt
-      );
-
-      logBotSay({
-        callSid,
-        to: didNumber || "ivr",
-        text: retryPrompt,
-        lang: currentLocale,
-        context: `booking_retry:${currentStep.step_key}:meta_signal`,
-      });
-
-      return {
-        handled: true,
-        state,
-        twiml: vr.toString(),
-      };
-    }
 
     if (serviceName && rawDatetime) {
       const scheduleValidation = await resolveVoiceScheduleValidation({

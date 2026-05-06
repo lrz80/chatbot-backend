@@ -788,6 +788,24 @@ router.post('/', async (req: Request, res: Response) => {
         (cfg?.welcome_message || "").trim() || fallbackWelcome
       );
 
+      const mainMenuPrompt = String(
+        cfg?.main_menu_prompt ||
+        cfg?.menu_prompt ||
+        cfg?.voice_menu_prompt ||
+        ""
+      ).trim();
+
+      const menuText = mainMenuPrompt
+        ? twoSentencesMax(mainMenuPrompt)
+        : "";
+
+      const initialPromptText = sanitizeForSay(
+        normalizeSpeechOutput(
+          [welcomeText, menuText].filter(Boolean).join(" "),
+          currentLocale as any
+        )
+      );
+
       const gather = vr.gather({
         input: ['speech', 'dtmf'] as any,
         numDigits: 1,
@@ -802,15 +820,15 @@ router.post('/', async (req: Request, res: Response) => {
 
       gather.say(
         { language: currentLocale as any, voice: voiceName },
-        welcomeText
+        initialPromptText
       );
 
       logBotSay({
         callSid,
         to: didNumber || "ivr",
-        text: welcomeText,
+        text: initialPromptText,
         lang: currentLocale,
-        context: "welcome",
+        context: "welcome_with_main_menu_prompt",
       });
 
       return res.type("text/xml").send(vr.toString());
