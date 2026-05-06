@@ -124,7 +124,16 @@ function withInitialVoiceIntroPlayed(
 }
 
 function normalizeDetectedVoiceLanguage(value: unknown): "es" | "en" | "pt" | null {
-  const raw = String(value || "")
+  const candidate =
+    typeof value === "object" && value !== null
+      ? (value as any).lang ??
+        (value as any).language ??
+        (value as any).detectedLanguage ??
+        (value as any).locale ??
+        ""
+      : value;
+
+  const raw = String(candidate || "")
     .trim()
     .toLowerCase()
     .normalize("NFD")
@@ -430,7 +439,7 @@ router.post("/lang", async (req: Request, res: Response) => {
   normalizeDetectedVoiceLanguage(detectedLanguageFromSpeech);
 
   const selectedLanguage =
-    normalizedDetectedLanguage || langSelection.selectedLanguage;
+    langSelection.selectedLanguage || normalizedDetectedLanguage;
 
   console.log(
     "[VOICE][LANG]",
