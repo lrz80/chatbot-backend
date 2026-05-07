@@ -1270,6 +1270,9 @@ export async function handleVoiceBookingTurn(
   const isServiceStep =
     currentStep.step_key === "service" || rawSlot === "service";
 
+  const isLocationDetailStep =
+    currentStep.step_key === "location_detail" || rawSlot === "location_detail";
+
   if (isServiceStep) {
     const serviceResolution = resolveVoiceBookingService({
       userInput: effectiveUserInput,
@@ -1372,6 +1375,70 @@ export async function handleVoiceBookingTurn(
         service_display: localizedServiceDisplay || serviceResolution.value,
       },
     };
+  }
+
+  if (isLocationDetailStep) {
+    const normalizedLocationInput = String(effectiveUserInput || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim();
+
+    const matchedLocation =
+      normalizedLocationInput.includes("salon") ||
+      normalizedLocationInput.includes("en el salon") ||
+      normalizedLocationInput.includes("in salon")
+        ? "salón"
+        : normalizedLocationInput.includes("mobile") ||
+          normalizedLocationInput.includes("movil") ||
+          normalizedLocationInput.includes("a domicilio") ||
+          normalizedLocationInput.includes("en mi ubicacion") ||
+          normalizedLocationInput.includes("en tu ubicacion")
+        ? "mobile grooming"
+        : null;
+
+    if (!matchedLocation) {
+      const retryText = resolveBookingRetryText({
+        locale: currentLocale,
+        retryPrompt: currentStep.retry_prompt || "",
+        retryPromptTranslations: currentStep.retry_prompt_translations || null,
+        fallbackPrompt: currentStep.prompt || "",
+        fallbackPromptTranslations: currentStep.prompt_translations || null,
+      });
+
+      const retryPromptResolved = resolveBookingFlowSpeech({
+        baseText: retryText,
+        locale: currentLocale,
+        bookingData: state.bookingData || {},
+        callerE164,
+      });
+
+      const retryPrompt = twoSentencesMax(
+        assertNonEmptyBookingSpeech({
+          text: retryPromptResolved,
+          stepKey: currentStep.step_key,
+          field: currentStep.retry_prompt ? "retry_prompt" : "prompt",
+        })
+      );
+
+      const gather = createBookingGather({
+        vr,
+        locale: currentLocale,
+      });
+
+      gather.say(
+        { language: currentLocale as any, voice: voiceName },
+        retryPrompt
+      );
+
+      return {
+        handled: true,
+        state,
+        twiml: vr.toString(),
+      };
+    }
+
+    resolvedStepValue = matchedLocation;
   }
 
   const isDatetimeStep =

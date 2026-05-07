@@ -464,6 +464,25 @@ function logBotSay({
 }
 
 router.post("/lang", async (req: Request, res: Response) => {
+  const callSid = (req.body.CallSid || "").toString();
+
+  const existingState = callSid ? await getVoiceCallState(callSid) : null;
+  const existingLang =
+    typeof existingState?.lang === "string" ? existingState.lang.trim() : "";
+
+  if (existingLang) {
+    const vr = new twiml.VoiceResponse();
+
+    const langCode = existingLang.startsWith("es")
+      ? "es"
+      : existingLang.startsWith("pt")
+      ? "pt"
+      : "en";
+
+    vr.redirect(`/webhook/voice-response?lang=${langCode}`);
+    return res.type("text/xml").send(vr.toString());
+  }
+
   const rawDigits = (req.body.Digits || "").toString().trim();
   const speechRaw = (req.body.SpeechResult || "").toString().trim();
 
@@ -503,7 +522,6 @@ router.post("/lang", async (req: Request, res: Response) => {
     })
   );
 
-  const callSid = (req.body.CallSid || "").toString();
   const to = (req.body.To || "").toString().replace(/^tel:/, "");
 
   const tRes = await pool.query(
@@ -517,6 +535,9 @@ router.post("/lang", async (req: Request, res: Response) => {
   );
 
   const tenant = tRes.rows[0];
+
+  const shouldCarryPendingUtterance =
+  langSelection.hasRealUtterance && !langSelection.explicitLanguageSelection;
 
   if (tenant && callSid) {
     await upsertVoiceCallState({
@@ -535,11 +556,11 @@ router.post("/lang", async (req: Request, res: Response) => {
       altDest: null,
       smsSent: false,
       bookingStepIndex: null,
-      bookingData: withInitialVoiceIntroPlayed(
-        langSelection.hasRealUtterance
-          ? { __pending_utterance: langSelection.originalSpeech }
-          : {}
-      ),
+      bookingData: shouldCarryPendingUtterance
+        ? withInitialVoiceIntroPlayed({
+            __pending_utterance: langSelection.originalSpeech,
+          })
+        : {},
     });
   }
 
@@ -866,7 +887,15 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(404).type("text/plain").send("voice_config_not_found");
     }
 
-    const voiceName: any = resolveVoiceProviderVoice(currentLocale, cfg?.voice_name);
+    const cfgLocale = String(cfg?.idioma || "").trim();
+
+    const localeCompatibleVoiceName =
+      cfgLocale === currentLocale ? cfg?.voice_name : undefined;
+
+    const voiceName: any = resolveVoiceProviderVoice(
+      currentLocale,
+      localeCompatibleVoiceName
+    );
 
     // 👉 Primer hit de la llamada: intro en inglés + “para español oprima 2” con nombre del negocio
     const initialMenuResult = await handleVoiceInitialMenu({
