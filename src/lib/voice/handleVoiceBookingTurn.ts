@@ -1518,10 +1518,16 @@ export async function handleVoiceBookingTurn(
         const rawAvailableTimes =
           scheduleValidation.reason === "schedule_not_available" ||
           scheduleValidation.reason === "lead_time_not_met"
-            ? scheduleValidation.availableTimes || []
+            ? Array.isArray(scheduleValidation.availableTimes)
+              ? scheduleValidation.availableTimes
+              : []
             : [];
 
-        const availableTimesText = rawAvailableTimes.join(", ");
+        const availableTimes = rawAvailableTimes
+          .map((value) => String(value || "").trim())
+          .filter(Boolean);
+
+        const availableTimesText = availableTimes.join(", ");
 
         const suggestedStarts =
           (
@@ -1530,7 +1536,23 @@ export async function handleVoiceBookingTurn(
           ) &&
           Array.isArray(scheduleValidation.suggestedStarts)
             ? scheduleValidation.suggestedStarts
+                .map((value) => String(value || "").trim())
+                .filter(Boolean)
             : [];
+
+        console.log("[VOICE][BOOKING][UNAVAILABLE_OPTIONS]", {
+          callSid,
+          serviceName: String(currentBookingData.service || "").trim(),
+          availableTimes,
+          suggestedStarts,
+          reason: scheduleValidation.reason,
+          timeZone: scheduleValidation.timeZone || null,
+        });
+
+        const fallbackSuggestedTimesText =
+          suggestedStarts.length > 0
+            ? suggestedStarts.join(", ")
+            : availableTimesText;
 
         const retryBaseResolved = resolveBookingFlowSpeech({
           baseText: promptTemplate,
@@ -1540,16 +1562,12 @@ export async function handleVoiceBookingTurn(
             requested_service: String(currentBookingData.service || "").trim(),
             requested_datetime: rawDatetime,
             available_times: availableTimesText,
-            suggested_times: availableTimesText,
+            suggested_times: fallbackSuggestedTimesText,
           },
           callerE164,
         });
 
         const retryPromptResolved =
-          (
-            scheduleValidation.reason === "schedule_not_available" ||
-            scheduleValidation.reason === "lead_time_not_met"
-          ) &&
           suggestedStarts.length > 0
             ? buildBusyAlternativesPrompt({
                 locale: currentLocale,
@@ -1558,7 +1576,19 @@ export async function handleVoiceBookingTurn(
                   String(scheduleValidation.timeZone || "").trim() || "America/New_York",
                 fallbackText: retryBaseResolved,
               })
-            : retryBaseResolved;
+            : fallbackSuggestedTimesText
+              ? retryBaseResolved
+              : currentLocale.startsWith("es")
+                ? `Ese horario no está disponible para ${String(
+                    currentBookingData.service || ""
+                  ).trim() || "este servicio"}. ¿Qué otro día y hora te gustaría?`
+                : currentLocale.startsWith("pt")
+                ? `Esse horário não está disponível para ${String(
+                    currentBookingData.service || ""
+                  ).trim() || "este serviço"}. Que outro dia e horário você gostaria?`
+                : `That time is not available for ${
+                    String(currentBookingData.service || "").trim() || "this service"
+                  }. What other day and time would you like?`;
 
         const retryPrompt = twoSentencesMax(
           assertNonEmptyBookingSpeech({
