@@ -21,7 +21,7 @@ const client = new OpenAI({
 
 const CACHE_VERSION = "v1_voice_intent_classifier";
 const CACHE_MAX_ITEMS = 500;
-const DEFAULT_TIMEOUT_MS = 1500;
+const DEFAULT_TIMEOUT_MS = 2500;
 
 const cache = new Map<string, VoiceIntentResult>();
 const pending = new Map<string, Promise<VoiceIntentResult>>();
