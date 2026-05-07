@@ -1510,14 +1510,18 @@ export async function handleVoiceBookingTurn(
             : localizedRetryBase;
 
         const rawAvailableTimes =
-          scheduleValidation.reason === "schedule_not_available"
+          scheduleValidation.reason === "schedule_not_available" ||
+          scheduleValidation.reason === "lead_time_not_met"
             ? scheduleValidation.availableTimes || []
             : [];
 
         const availableTimesText = rawAvailableTimes.join(", ");
 
         const suggestedStarts =
-          scheduleValidation.reason === "schedule_not_available" &&
+          (
+            scheduleValidation.reason === "schedule_not_available" ||
+            scheduleValidation.reason === "lead_time_not_met"
+          ) &&
           Array.isArray(scheduleValidation.suggestedStarts)
             ? scheduleValidation.suggestedStarts
             : [];
@@ -1536,7 +1540,10 @@ export async function handleVoiceBookingTurn(
         });
 
         const retryPromptResolved =
-          scheduleValidation.reason === "schedule_not_available" &&
+          (
+            scheduleValidation.reason === "schedule_not_available" ||
+            scheduleValidation.reason === "lead_time_not_met"
+          ) &&
           suggestedStarts.length > 0
             ? buildBusyAlternativesPrompt({
                 locale: currentLocale,
