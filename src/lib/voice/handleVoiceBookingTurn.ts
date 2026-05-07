@@ -67,7 +67,7 @@ function formatSuggestedStartForVoice(
   }
 
   if (locale.startsWith("es")) {
-    return new Intl.DateTimeFormat("es-US", {
+    return new Intl.DateTimeFormat("es-ES", {
       weekday: "long",
       hour: "numeric",
       minute: "2-digit",
@@ -1549,12 +1549,30 @@ export async function handleVoiceBookingTurn(
           timeZone: scheduleValidation.timeZone || null,
         });
 
-        const fallbackSuggestedTimesText =
-          suggestedStarts.length > 0
-            ? suggestedStarts.join(", ")
-            : availableTimesText;
+        const formattedSuggestedTimes = suggestedStarts
+          .map((iso) =>
+            formatSuggestedStartForVoice(
+              iso,
+              currentLocale,
+              String(scheduleValidation.timeZone || "").trim() || "America/New_York"
+            )
+          )
+          .filter(Boolean)
+          .slice(0, 3);
 
-        const retryBaseResolved = resolveBookingFlowSpeech({
+        const suggestedTimesText = formattedSuggestedTimes.join(", ");
+
+        console.log("[VOICE][BOOKING][UNAVAILABLE_OPTIONS]", {
+          callSid,
+          serviceName: String(currentBookingData.service || "").trim(),
+          availableTimes,
+          suggestedStarts,
+          formattedSuggestedTimes,
+          reason: scheduleValidation.reason,
+          timeZone: scheduleValidation.timeZone || null,
+        });
+
+        const retryPromptResolved = resolveBookingFlowSpeech({
           baseText: promptTemplate,
           locale: currentLocale,
           bookingData: {
@@ -1562,49 +1580,41 @@ export async function handleVoiceBookingTurn(
             requested_service: String(currentBookingData.service || "").trim(),
             requested_datetime: rawDatetime,
             available_times: availableTimesText,
-            suggested_times: fallbackSuggestedTimesText,
+            suggested_times: suggestedTimesText || availableTimesText,
           },
           callerE164,
         });
 
-        const retryPromptResolved =
-          suggestedStarts.length > 0
-            ? buildBusyAlternativesPrompt({
-                locale: currentLocale,
-                suggestedStarts,
-                timeZone:
-                  String(scheduleValidation.timeZone || "").trim() || "America/New_York",
-                fallbackText: retryBaseResolved,
-              })
-            : fallbackSuggestedTimesText
-              ? retryBaseResolved
-              : currentLocale.startsWith("es")
-                ? `Ese horario no está disponible para ${String(
-                    currentBookingData.service || ""
-                  ).trim() || "este servicio"}. ¿Qué otro día y hora te gustaría?`
-                : currentLocale.startsWith("pt")
-                ? `Esse horário não está disponível para ${String(
-                    currentBookingData.service || ""
-                  ).trim() || "este serviço"}. Que outro dia e horário você gostaria?`
+        const retryPromptFinal =
+          suggestedTimesText || availableTimesText
+            ? retryPromptResolved
+            : currentLocale.startsWith("es")
+              ? `Ese horario no está disponible para ${
+                  String(currentBookingData.service || "").trim() || "este servicio"
+                }. ¿Qué otro día y hora te gustaría?`
+              : currentLocale.startsWith("pt")
+                ? `Esse horário não está disponível para ${
+                    String(currentBookingData.service || "").trim() || "este serviço"
+                  }. Que outro dia e horário você gostaria?`
                 : `That time is not available for ${
                     String(currentBookingData.service || "").trim() || "this service"
                   }. What other day and time would you like?`;
 
         const retryPrompt = twoSentencesMax(
           assertNonEmptyBookingSpeech({
-            text: retryPromptResolved,
-            stepKey: currentStep.step_key,
-            field:
-              (
-                scheduleValidation.reason === "schedule_not_available" ||
-                scheduleValidation.reason === "lead_time_not_met"
-              ) && unavailablePrompt
-                ? "unavailable_prompt"
-                : currentStep.retry_prompt
-                  ? "retry_prompt"
-                  : "prompt",
-          })
-        );
+            text: retryPromptFinal,
+              stepKey: currentStep.step_key,
+              field:
+                (
+                  scheduleValidation.reason === "schedule_not_available" ||
+                  scheduleValidation.reason === "lead_time_not_met"
+                ) && unavailablePrompt
+                  ? "unavailable_prompt"
+                  : currentStep.retry_prompt
+                    ? "retry_prompt"
+                    : "prompt",
+            })
+          );
 
         const gather = createBookingGather({
           vr,
