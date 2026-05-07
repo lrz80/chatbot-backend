@@ -1502,7 +1502,10 @@ export async function handleVoiceBookingTurn(
         });
 
         const promptTemplate =
-          scheduleValidation.reason === "schedule_not_available" && unavailablePrompt
+          (
+            scheduleValidation.reason === "schedule_not_available" ||
+            scheduleValidation.reason === "lead_time_not_met"
+          ) && unavailablePrompt
             ? unavailablePrompt
             : localizedRetryBase;
 
@@ -1549,7 +1552,10 @@ export async function handleVoiceBookingTurn(
             text: retryPromptResolved,
             stepKey: currentStep.step_key,
             field:
-              scheduleValidation.reason === "schedule_not_available" && unavailablePrompt
+              (
+                scheduleValidation.reason === "schedule_not_available" ||
+                scheduleValidation.reason === "lead_time_not_met"
+              ) && unavailablePrompt
                 ? "unavailable_prompt"
                 : currentStep.retry_prompt
                   ? "retry_prompt"

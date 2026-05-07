@@ -1,4 +1,5 @@
 //src/lib/appointments/resolveVoiceScheduleValidation.ts
+import pool from "../db";
 import { parseVoiceRequestedDate } from "./parseVoiceRequestedDate";
 import { validateServiceScheduleForDate } from "./validateServiceScheduleForDate";
 
@@ -18,19 +19,26 @@ export type ResolveVoiceScheduleValidationResult =
       timeZone: string;
     }
   | {
-      ok: false;
-      reason: "invalid_datetime";
-      availableTimes: [];
-      suggestedStarts: [];
-      timeZone: string;
-    }
-  | {
-      ok: false;
-      reason: "schedule_not_available";
-      availableTimes: string[];
-      suggestedStarts: string[];
-      timeZone: string;
-    };
+    ok: false;
+    reason: "invalid_datetime";
+    availableTimes: [];
+    suggestedStarts: [];
+    timeZone: string;
+  }
+| {
+    ok: false;
+    reason: "lead_time_not_met";
+    availableTimes: [];
+    suggestedStarts: string[];
+    timeZone: string;
+  }
+| {
+    ok: false;
+    reason: "schedule_not_available";
+    availableTimes: string[];
+    suggestedStarts: string[];
+    timeZone: string;
+  };
 
 function dedupeStringArray(values: string[]): string[] {
   return Array.from(
@@ -50,6 +58,10 @@ function normalizeSuggestedStarts(input: unknown): string[] {
   return dedupeStringArray(
     input.filter((value): value is string => typeof value === "string")
   );
+}
+
+function addMinutes(date: Date, minutes: number): Date {
+  return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
 export async function resolveVoiceScheduleValidation(
@@ -81,6 +93,50 @@ export async function resolveVoiceScheduleValidation(
     };
   }
 
+    const { rows: settingsRows } = await pool.query(
+    `
+      SELECT
+        min_lead_minutes
+      FROM appointment_settings
+      WHERE tenant_id = $1
+      LIMIT 1
+    `,
+    [params.tenantId]
+  );
+
+  const minLeadMinutesRaw = Number(settingsRows?.[0]?.min_lead_minutes ?? 0);
+  const minLeadMinutes =
+    Number.isFinite(minLeadMinutesRaw) && minLeadMinutesRaw > 0
+      ? minLeadMinutesRaw
+      : 0;
+
+  if (minLeadMinutes > 0) {
+    const earliestAllowedAt = addMinutes(
+      params.baseDate instanceof Date ? params.baseDate : new Date(),
+      minLeadMinutes
+    );
+
+    if (parsed.requestedAt.getTime() < earliestAllowedAt.getTime()) {
+      const fallbackSuggestionValidation = await validateServiceScheduleForDate({
+        tenantId: params.tenantId,
+        serviceName: params.serviceName,
+        requestedAt: earliestAllowedAt,
+        channel: params.channel || "voice",
+        timeZone,
+      });
+
+      return {
+        ok: false,
+        reason: "lead_time_not_met",
+        availableTimes: [],
+        suggestedStarts: normalizeSuggestedStarts(
+          (fallbackSuggestionValidation as { suggestedStarts?: unknown }).suggestedStarts
+        ),
+        timeZone,
+      };
+    }
+  }
+  
   const scheduleValidation = await validateServiceScheduleForDate({
     tenantId: params.tenantId,
     serviceName: params.serviceName,
