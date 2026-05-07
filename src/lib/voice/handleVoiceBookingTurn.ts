@@ -276,8 +276,8 @@ export async function handleVoiceBookingTurn(
     ? "booking"
     : effectiveUserInput
       ? await resolveVoiceIntentFromUtteranceAsync(effectiveUserInput, {
-          timeoutMs: 1500,
-          minConfidence: 0.65,
+          timeoutMs: 2500,
+          minConfidence: 0.55,
         })
       : null;
 
