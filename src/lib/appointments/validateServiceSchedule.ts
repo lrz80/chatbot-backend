@@ -8,6 +8,9 @@ type ValidateServiceScheduleParams = {
   dayOfWeek: number;
   timeHHMM: string;
   channel?: string;
+  durationMin?: number;
+  bufferMin?: number;
+  includeBufferInClosingBoundary?: boolean;
 };
 
 export type ValidateServiceScheduleResult =
@@ -51,6 +54,13 @@ function hhmmToMinutes(value: string): number | null {
   return hh * 60 + mm;
 }
 
+function minutesToHHMM(totalMinutes: number): string {
+  const hh = Math.floor(totalMinutes / 60);
+  const mm = totalMinutes % 60;
+
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
 function dedupeAndSortTimes(values: string[]): string[] {
   const unique = Array.from(
     new Set(
@@ -72,10 +82,98 @@ function dedupeAndSortTimes(values: string[]): string[] {
   });
 }
 
+function buildFallbackAvailableTimes(params: {
+  start: string;
+  end: string;
+  durationMin: number;
+  bufferMin: number;
+  includeBufferInClosingBoundary: boolean;
+}): string[] {
+  const startMinutes = hhmmToMinutes(params.start);
+  const endMinutes = hhmmToMinutes(params.end);
+
+  if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) {
+    return [];
+  }
+
+  const occupiedMinutes = params.includeBufferInClosingBoundary
+    ? params.durationMin + params.bufferMin
+    : params.durationMin;
+
+  if (occupiedMinutes <= 0) {
+    return [];
+  }
+
+  const latestValidStart = endMinutes - occupiedMinutes;
+
+  if (latestValidStart < startMinutes) {
+    return [];
+  }
+
+  if (latestValidStart === startMinutes) {
+    return [minutesToHHMM(startMinutes)];
+  }
+
+  return dedupeAndSortTimes([
+    minutesToHHMM(startMinutes),
+    minutesToHHMM(latestValidStart),
+  ]);
+}
+
+function isStartValidInsideBusinessWindow(params: {
+  requestedTime: string;
+  start: string;
+  end: string;
+  durationMin: number;
+  bufferMin: number;
+  includeBufferInClosingBoundary: boolean;
+}): boolean {
+  const requestedMinutes = hhmmToMinutes(params.requestedTime);
+  const startMinutes = hhmmToMinutes(params.start);
+  const endMinutes = hhmmToMinutes(params.end);
+
+  if (
+    requestedMinutes === null ||
+    startMinutes === null ||
+    endMinutes === null ||
+    endMinutes <= startMinutes
+  ) {
+    return false;
+  }
+
+  const occupiedMinutes = params.includeBufferInClosingBoundary
+    ? params.durationMin + params.bufferMin
+    : params.durationMin;
+
+  if (occupiedMinutes <= 0) {
+    return false;
+  }
+
+  const requestedEndBoundary = requestedMinutes + occupiedMinutes;
+
+  return (
+    requestedMinutes >= startMinutes &&
+    requestedEndBoundary <= endMinutes
+  );
+}
+
 export async function validateServiceSchedule(
   params: ValidateServiceScheduleParams
 ): Promise<ValidateServiceScheduleResult> {
   const requestedTime = normalizeHHMM(params.timeHHMM);
+
+  const durationMin =
+    typeof params.durationMin === "number" && params.durationMin > 0
+      ? params.durationMin
+      : 30;
+
+  const bufferMin =
+    typeof params.bufferMin === "number" && params.bufferMin >= 0
+      ? params.bufferMin
+      : 0;
+
+  const includeBufferInClosingBoundary =
+    params.includeBufferInClosingBoundary !== false;
 
   const schedules = await getServiceSchedules({
     tenantId: params.tenantId,
@@ -117,23 +215,14 @@ export async function validateServiceSchedule(
     };
   }
 
-  const requestedMinutes = hhmmToMinutes(requestedTime);
-  const startMinutes = hhmmToMinutes(businessFallback.start);
-  const endMinutes = hhmmToMinutes(businessFallback.end);
-
-  if (
-    requestedMinutes === null ||
-    startMinutes === null ||
-    endMinutes === null
-  ) {
-    return {
-      ok: false,
-      availableTimes: [],
-    };
-  }
-
-  const isWithinBusinessRange =
-    requestedMinutes >= startMinutes && requestedMinutes < endMinutes;
+  const isWithinBusinessRange = isStartValidInsideBusinessWindow({
+    requestedTime,
+    start: businessFallback.start,
+    end: businessFallback.end,
+    durationMin,
+    bufferMin,
+    includeBufferInClosingBoundary,
+  });
 
   if (isWithinBusinessRange) {
     return { ok: true };
@@ -141,9 +230,12 @@ export async function validateServiceSchedule(
 
   return {
     ok: false,
-    availableTimes: dedupeAndSortTimes([
-      businessFallback.start,
-      businessFallback.end,
-    ]),
+    availableTimes: buildFallbackAvailableTimes({
+      start: businessFallback.start,
+      end: businessFallback.end,
+      durationMin,
+      bufferMin,
+      includeBufferInClosingBoundary,
+    }),
   };
 }

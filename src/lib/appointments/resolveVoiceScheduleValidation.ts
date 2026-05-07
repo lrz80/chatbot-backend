@@ -190,6 +190,9 @@ export async function resolveVoiceScheduleValidation(
         requestedAt: earliestAllowedAt,
         channel: params.channel || "voice",
         timeZone,
+        durationMin: defaultDurationMin,
+        bufferMin,
+        includeBufferInClosingBoundary: true,
       });
 
       const rawSuggestedStarts = normalizeSuggestedStarts(
@@ -222,6 +225,9 @@ export async function resolveVoiceScheduleValidation(
     requestedAt: parsed.requestedAt,
     channel: params.channel || "voice",
     timeZone,
+    durationMin: defaultDurationMin,
+    bufferMin,
+    includeBufferInClosingBoundary: true,
   });
 
   console.log("[VOICE][SCHEDULE_CHECK]", {

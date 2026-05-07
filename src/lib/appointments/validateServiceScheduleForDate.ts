@@ -7,6 +7,9 @@ type ValidateServiceScheduleForDateParams = {
   requestedAt: Date;
   channel?: string;
   timeZone?: string;
+  durationMin?: number;
+  bufferMin?: number;
+  includeBufferInClosingBoundary?: boolean;
 };
 
 type ValidateServiceScheduleForDateResult =
@@ -190,6 +193,9 @@ async function findSuggestedStarts(params: {
   timeZone: string;
   maxSuggestions: number;
   searchDays: number;
+  durationMin?: number;
+  bufferMin?: number;
+  includeBufferInClosingBoundary?: boolean;
 }): Promise<{ suggestedStarts: string[]; availableTimes: string[] }> {
   const suggestions: string[] = [];
   const availableTimesSeen: string[] = [];
@@ -209,6 +215,9 @@ async function findSuggestedStarts(params: {
       dayOfWeek,
       timeHHMM: "00:00",
       channel: params.channel,
+      durationMin: params.durationMin,
+      bufferMin: params.bufferMin,
+      includeBufferInClosingBoundary: params.includeBufferInClosingBoundary,
     });
 
     const rawDayAvailableTimes =
@@ -272,6 +281,9 @@ export async function validateServiceScheduleForDate(
     dayOfWeek,
     timeHHMM,
     channel,
+    durationMin: params.durationMin,
+    bufferMin: params.bufferMin,
+    includeBufferInClosingBoundary: params.includeBufferInClosingBoundary,
   });
 
   if (directValidation.ok) {
@@ -295,6 +307,9 @@ export async function validateServiceScheduleForDate(
     timeZone,
     maxSuggestions: 3,
     searchDays: 14,
+    durationMin: params.durationMin,
+    bufferMin: params.bufferMin,
+    includeBufferInClosingBoundary: params.includeBufferInClosingBoundary,
   });
 
   return {
