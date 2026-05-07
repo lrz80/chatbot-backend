@@ -67,13 +67,29 @@ function formatSuggestedStartForVoice(
   }
 
   if (locale.startsWith("es")) {
-    return new Intl.DateTimeFormat("es-ES", {
+    const weekday = new Intl.DateTimeFormat("es-ES", {
       weekday: "long",
+      timeZone,
+    }).format(date);
+
+    const parts = new Intl.DateTimeFormat("en-US", {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
       timeZone,
-    }).format(date);
+    }).formatToParts(date);
+
+    const hour = parts.find((part) => part.type === "hour")?.value || "";
+    const minute = parts.find((part) => part.type === "minute")?.value || "00";
+    const dayPeriod = (parts.find((part) => part.type === "dayPeriod")?.value || "").toLowerCase();
+
+    const spokenPeriod = dayPeriod === "am" ? "de la mañana" : "de la tarde";
+
+    if (minute === "00") {
+      return `${weekday}, ${hour} ${spokenPeriod}`;
+    }
+
+    return `${weekday}, ${hour}:${minute} ${spokenPeriod}`;
   }
 
   return new Intl.DateTimeFormat("en-US", {
