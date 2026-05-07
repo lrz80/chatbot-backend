@@ -19,6 +19,7 @@ import {
 } from "./voiceBookingHelpers";
 import { resolveVoiceMetaSignal } from "./resolveVoiceMetaSignal";
 import { twoSentencesMax } from "./speechFormatting";
+import { handleBookingSlotBusyRecovery } from "./voiceBookingBusyRecovery";
 
 function buildExtraBookingFields(
   bookingData: Record<string, any> | undefined
@@ -921,43 +922,25 @@ export async function handleVoiceBookingTurn(
           : [];
 
         if (providerError === "SLOT_BUSY") {
-          const confirmationRetryText = resolveBookingRetryText({
-            locale: currentLocale,
-            retryPrompt: currentStep.retry_prompt || "",
-            retryPromptTranslations: currentStep.retry_prompt_translations || null,
-            fallbackPrompt: currentStep.prompt || "",
-            fallbackPromptTranslations: currentStep.prompt_translations || null,
-          });
-
-          const busyPrompt = buildBusyAlternativesPrompt({
-            locale: currentLocale,
-            suggestedStarts,
-            timeZone: bookingTimeZone,
-            fallbackText: confirmationRetryText,
-          });
-
-          const gather = createBookingGather({
+          const recovered = await handleBookingSlotBusyRecovery({
             vr,
-            locale: currentLocale,
-          });
-
-          gather.say(
-            { language: currentLocale as any, voice: voiceName },
-            twoSentencesMax(busyPrompt)
-          );
-
-          logBotSay({
+            flow,
+            state,
+            tenantId: tenant.id,
             callSid,
-            to: didNumber || "ivr",
-            text: busyPrompt,
-            lang: currentLocale,
-            context: "booking_busy_alternatives",
+            currentLocale,
+            voiceName,
+            didNumber,
+            callerE164,
+            timeZone: bookingTimeZone,
+            suggestedStarts,
+            logBotSay,
           });
 
           return {
             handled: true,
-            state,
-            twiml: vr.toString(),
+            state: recovered.state,
+            twiml: recovered.twiml,
           };
         }
 
