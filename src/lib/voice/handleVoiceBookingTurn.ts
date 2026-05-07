@@ -370,6 +370,57 @@ export async function handleVoiceBookingTurn(
     throw new Error("BOOKING_STEP_NOT_FOUND");
   }
 
+  if (!effectiveUserInput && !digits) {
+    const retryText = resolveBookingRetryText({
+      locale: currentLocale,
+      retryPrompt: currentStep.retry_prompt || "",
+      retryPromptTranslations: currentStep.retry_prompt_translations || null,
+      fallbackPrompt: currentStep.prompt || "",
+      fallbackPromptTranslations: currentStep.prompt_translations || null,
+    });
+
+    const retryPromptResolved = resolveBookingFlowSpeech({
+      baseText: retryText,
+      locale: currentLocale,
+      bookingData: state.bookingData || {},
+      callerE164,
+    });
+
+    const prompt = twoSentencesMax(
+      assertNonEmptyBookingSpeech({
+        text: retryPromptResolved,
+        stepKey: currentStep.step_key,
+        field: currentStep.retry_prompt ? "retry_prompt" : "prompt",
+      })
+    );
+
+    const gather = createBookingGather({
+      vr,
+      locale: currentLocale,
+      isPhoneStep: currentStep.expected_type === "phone",
+      isConfirmationStep: currentStep.expected_type === "confirmation",
+    });
+
+    gather.say(
+      { language: currentLocale as any, voice: voiceName },
+      prompt
+    );
+
+    logBotSay({
+      callSid,
+      to: didNumber || "ivr",
+      text: prompt,
+      lang: currentLocale,
+      context: `booking_empty_input_retry:${currentStep.step_key}`,
+    });
+
+    return {
+      handled: true,
+      state,
+      twiml: vr.toString(),
+    };
+  }
+
   if (currentStep.expected_type === "confirmation") {
     const confirmationMetaSignal =
       digits === "1"
@@ -1333,6 +1384,80 @@ export async function handleVoiceBookingTurn(
     ).trim();
 
     const rawDatetime = String(resolvedStepValue || "").trim();
+
+    if (!rawDatetime) {
+      state = {
+        ...state,
+        bookingStepIndex: currentIndex,
+        bookingData: currentBookingData,
+      };
+
+      await upsertVoiceCallState({
+        callSid,
+        tenantId: tenant.id,
+        lang: state.lang ?? currentLocale,
+        turn: state.turn ?? 0,
+        awaiting: false,
+        pendingType: null,
+        awaitingNumber: false,
+        altDest: state.altDest ?? null,
+        smsSent: state.smsSent ?? false,
+        bookingStepIndex: currentIndex,
+        bookingData: currentBookingData,
+      });
+
+      const localizedRetryBase = resolveBookingRetryText({
+        locale: currentLocale,
+        retryPrompt: currentStep.retry_prompt || "",
+        retryPromptTranslations: currentStep.retry_prompt_translations || null,
+        fallbackPrompt: currentStep.prompt || "",
+        fallbackPromptTranslations: currentStep.prompt_translations || null,
+      });
+
+      const retryPromptResolved = resolveBookingFlowSpeech({
+        baseText: localizedRetryBase,
+        locale: currentLocale,
+        bookingData: {
+          ...currentBookingData,
+          requested_service: String(currentBookingData.service || "").trim(),
+          requested_datetime: rawDatetime,
+          available_times: "",
+        },
+        callerE164,
+      });
+
+      const retryPrompt = twoSentencesMax(
+        assertNonEmptyBookingSpeech({
+          text: retryPromptResolved,
+          stepKey: currentStep.step_key,
+          field: currentStep.retry_prompt ? "retry_prompt" : "prompt",
+        })
+      );
+
+      const gather = createBookingGather({
+        vr,
+        locale: currentLocale,
+      });
+
+      gather.say(
+        { language: currentLocale as any, voice: voiceName },
+        retryPrompt
+      );
+
+      logBotSay({
+        callSid,
+        to: didNumber || "ivr",
+        text: retryPrompt,
+        lang: currentLocale,
+        context: `booking_retry_empty_datetime:${currentStep.step_key}`,
+      });
+
+      return {
+        handled: true,
+        state,
+        twiml: vr.toString(),
+      };
+    }
 
     if (serviceName && rawDatetime) {
       const scheduleValidation = await resolveVoiceScheduleValidation({

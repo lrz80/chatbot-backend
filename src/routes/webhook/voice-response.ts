@@ -983,46 +983,110 @@ router.post('/', async (req: Request, res: Response) => {
       // 1) Si estamos dentro de booking, booking tiene prioridad absoluta.
       // Esto evita que un SMS pendiente viejo interrumpa el step actual.
       if (typeof state.bookingStepIndex === "number") {
-        const bookingState = {
-          ...state,
-          awaiting: false,
-          pendingType: null,
-          awaitingNumber: false,
-        };
+        const { getBookingFlow } = await import("../../lib/appointments/getBookingFlow");
+        const {
+          resolveBookingPromptText,
+          resolveBookingRetryText,
+          resolveBookingFlowSpeech,
+        } = await import("../../lib/voice/voiceBookingHelpers");
+
+        const flow = await getBookingFlow(tenant.id);
+        const currentStep = flow[state.bookingStepIndex];
+
+        if (!currentStep) {
+          await deleteVoiceCallState(callSid);
+
+          const failText = currentLocale.startsWith("es")
+            ? "No pude continuar con la reserva en este momento. ¿Te ayudo con algo más?"
+            : currentLocale.startsWith("pt")
+            ? "Não consegui continuar com a reserva neste momento. Posso te ajudar com mais alguma coisa?"
+            : "I could not continue the booking right now. Can I help you with anything else?";
+
+          const gather = vr.gather({
+            input: ["speech", "dtmf"] as any,
+            numDigits: 1,
+            action: "/webhook/voice-response",
+            method: "POST",
+            language: currentLocale as any,
+            speechTimeout: "auto",
+            timeout: 7,
+            actionOnEmptyResult: true,
+            bargeIn: true,
+          });
+
+          gather.say({ language: currentLocale as any, voice: voiceName }, failText);
+
+          return res.type("text/xml").send(vr.toString());
+        }
+
+        const retryBaseText = resolveBookingRetryText({
+          locale: currentLocale,
+          retryPrompt: currentStep.retry_prompt || "",
+          retryPromptTranslations: currentStep.retry_prompt_translations || null,
+          fallbackPrompt: currentStep.prompt || "",
+          fallbackPromptTranslations: currentStep.prompt_translations || null,
+        });
+
+        const promptResolved = resolveBookingFlowSpeech({
+          baseText: retryBaseText,
+          locale: currentLocale as any,
+          bookingData: state.bookingData || {},
+          callerE164,
+        });
+
+        const retryText = twoSentencesMax(
+          sanitizeForSay(
+            promptResolved ||
+              resolveBookingPromptText({
+                locale: currentLocale,
+                prompt: currentStep.prompt || "",
+                promptTranslations: currentStep.prompt_translations || null,
+              })
+          )
+        );
 
         await upsertVoiceCallState({
           callSid,
           tenantId: tenant.id,
-          lang: bookingState.lang ?? currentLocale,
-          turn: bookingState.turn ?? 0,
+          lang: state.lang ?? currentLocale,
+          turn: state.turn ?? 0,
           awaiting: false,
           pendingType: null,
           awaitingNumber: false,
-          altDest: bookingState.altDest ?? null,
-          smsSent: bookingState.smsSent ?? false,
-          bookingStepIndex: bookingState.bookingStepIndex ?? null,
-          bookingData: bookingState.bookingData ?? {},
+          altDest: state.altDest ?? null,
+          smsSent: state.smsSent ?? false,
+          bookingStepIndex: state.bookingStepIndex,
+          bookingData: state.bookingData ?? {},
         });
 
-        const bookingTurnResult = await handleVoiceBookingTurn({
-          vr: new twiml.VoiceResponse(),
-          tenant,
-          cfg,
+        const isPhoneStep = currentStep.expected_type === "phone";
+        const isConfirmationStep = currentStep.expected_type === "confirmation";
+
+        const gather = vr.gather({
+          input: isPhoneStep || isConfirmationStep
+            ? (["speech", "dtmf"] as any)
+            : (["speech"] as any),
+          numDigits: isPhoneStep ? 15 : isConfirmationStep ? 1 : undefined,
+          action: "/webhook/voice-response",
+          method: "POST",
+          language: currentLocale as any,
+          speechTimeout: "auto",
+          timeout: 7,
+          actionOnEmptyResult: true,
+          bargeIn: true,
+        });
+
+        gather.say({ language: currentLocale as any, voice: voiceName }, retryText);
+
+        logBotSay({
           callSid,
-          didNumber,
-          callerE164,
-          currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
-          voiceName,
-          state: bookingState,
-          userInput: "",
-          effectiveUserInput: "",
-          digits: "",
-          logBotSay,
+          to: didNumber || "ivr",
+          text: retryText,
+          lang: currentLocale,
+          context: `booking_silence_retry:${currentStep.step_key}`,
         });
 
-        if (bookingTurnResult.handled) {
-          return res.type("text/xml").send(bookingTurnResult.twiml);
-        }
+        return res.type("text/xml").send(vr.toString());
       }
 
       // 2) Solo si NO hay booking activo, re-pregunta confirmación SMS.
