@@ -20,13 +20,13 @@ export type ValidateServiceScheduleResult =
     };
 
 function normalizeHHMM(value: string): string {
-  const raw = (value || "").trim();
+  const raw = String(value || "").trim();
 
   if (!raw) return "";
 
   const parts = raw.split(":");
-  const hh = (parts[0] || "").padStart(2, "0");
-  const mm = (parts[1] || "00").padStart(2, "0");
+  const hh = String(parts[0] || "").padStart(2, "0");
+  const mm = String(parts[1] || "00").padStart(2, "0");
 
   return `${hh}:${mm}`;
 }
@@ -51,6 +51,27 @@ function hhmmToMinutes(value: string): number | null {
   return hh * 60 + mm;
 }
 
+function dedupeAndSortTimes(values: string[]): string[] {
+  const unique = Array.from(
+    new Set(
+      values
+        .map((value) => normalizeHHMM(value))
+        .filter(Boolean)
+    )
+  );
+
+  return unique.sort((a, b) => {
+    const aMinutes = hhmmToMinutes(a);
+    const bMinutes = hhmmToMinutes(b);
+
+    if (aMinutes === null && bMinutes === null) return 0;
+    if (aMinutes === null) return 1;
+    if (bMinutes === null) return -1;
+
+    return aMinutes - bMinutes;
+  });
+}
+
 export async function validateServiceSchedule(
   params: ValidateServiceScheduleParams
 ): Promise<ValidateServiceScheduleResult> {
@@ -63,26 +84,24 @@ export async function validateServiceSchedule(
 
   const enabledSchedules = schedules.filter((row) => row.enabled === true);
 
-  const tenantHasAnyVoiceServiceSchedules = enabledSchedules.length > 0;
-
-  const sameDaySchedules = enabledSchedules.filter(
+  const sameServiceSameDaySchedules = enabledSchedules.filter(
     (row) =>
       row.service_name === params.serviceName &&
       row.day_of_week === params.dayOfWeek
   );
 
-  const availableTimesSameDay = sameDaySchedules.map((row) =>
-    String(row.start_time).slice(0, 5)
+  const availableTimesSameServiceSameDay = dedupeAndSortTimes(
+    sameServiceSameDaySchedules.map((row) => String(row.start_time).slice(0, 5))
   );
 
-  if (availableTimesSameDay.includes(requestedTime)) {
+  if (availableTimesSameServiceSameDay.includes(requestedTime)) {
     return { ok: true };
   }
 
-  if (tenantHasAnyVoiceServiceSchedules) {
+  if (availableTimesSameServiceSameDay.length > 0) {
     return {
       ok: false,
-      availableTimes: availableTimesSameDay,
+      availableTimes: availableTimesSameServiceSameDay,
     };
   }
 
@@ -122,6 +141,9 @@ export async function validateServiceSchedule(
 
   return {
     ok: false,
-    availableTimes: [businessFallback.start, businessFallback.end],
+    availableTimes: dedupeAndSortTimes([
+      businessFallback.start,
+      businessFallback.end,
+    ]),
   };
 }
