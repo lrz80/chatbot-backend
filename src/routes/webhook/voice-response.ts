@@ -1133,7 +1133,16 @@ router.post('/', async (req: Request, res: Response) => {
     const isTransferCallback = (req.query && req.query.transfer === '1') || typeof req.body.DialCallStatus !== 'undefined';
     if (isTransferCallback) {
       const status = (req.body.DialCallStatus || '').toString(); // completed | no-answer | busy | failed | canceled
-      console.log('[TRANSFER CALLBACK] DialCallStatus =', status);
+      console.log("[VOICE][TRANSFER_CALLBACK]", {
+        callSid,
+        tenantId: tenant.id,
+        dialCallStatus: status,
+        dialCallSid: req.body.DialCallSid || null,
+        dialCallDuration: req.body.DialCallDuration || null,
+        dialBridged: req.body.DialBridged || null,
+        didNumber,
+        callerE164,
+      });
 
       if (['no-answer','busy','failed','canceled'].includes(status)) {
         try {
@@ -2111,30 +2120,52 @@ router.post('/', async (req: Request, res: Response) => {
       !hasActiveBookingStep &&
       resolvedVoiceIntentForTurn === "human_handoff"
     ) {
-      const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
+      const rawRepresentanteNumber = cfg?.representante_number || null;
 
-      if (REPRESENTANTE_NUMBER) {
+      const representanteNumber = rawRepresentanteNumber
+        ? normalizarNumero(String(rawRepresentanteNumber))
+        : null;
+
+      const invalidTransferTarget =
+        !representanteNumber ||
+        representanteNumber === didNumber ||
+        representanteNumber === callerE164;
+
+      console.log("[VOICE][TRANSFER_TARGET]", {
+        callSid,
+        tenantId: tenant.id,
+        didNumber,
+        callerE164,
+        rawRepresentanteNumber,
+        normalizedRepresentanteNumber: representanteNumber,
+        invalidTransferTarget,
+        source: "fast_human_handoff",
+      });
+
+      if (!invalidTransferTarget && representanteNumber) {
+        const transferText = renderVoiceReply("transfer_connecting", {
+          locale: currentLocale,
+        });
+
         vr.say(
           { language: currentLocale as any, voice: voiceName },
-          renderVoiceReply("transfer_connecting", {
-            locale: currentLocale,
-          })
+          transferText
         );
 
         const dial = vr.dial({
           action: "/webhook/voice-response?transfer=1",
           method: "POST",
-          timeout: 20,
+          timeout: 15,
+          answerOnBridge: true,
+          callerId: didNumber,
         });
 
-        dial.number(REPRESENTANTE_NUMBER);
+        dial.number(representanteNumber);
 
         logBotSay({
           callSid,
           to: didNumber || "ivr",
-          text: renderVoiceReply("transfer_connecting", {
-            locale: currentLocale,
-          }),
+          text: transferText,
           lang: currentLocale,
           context: "human_handoff_transfer",
         });
@@ -2142,11 +2173,13 @@ router.post('/', async (req: Request, res: Response) => {
         return res.type("text/xml").send(vr.toString());
       }
 
+      const unavailableText = renderVoiceReply("transfer_unavailable", {
+        locale: currentLocale,
+      });
+
       vr.say(
         { language: currentLocale as any, voice: voiceName },
-        renderVoiceReply("transfer_unavailable", {
-          locale: currentLocale,
-        })
+        unavailableText
       );
 
       await offerSms(
@@ -2162,9 +2195,7 @@ router.post('/', async (req: Request, res: Response) => {
       logBotSay({
         callSid,
         to: didNumber || "ivr",
-        text: renderVoiceReply("transfer_unavailable", {
-          locale: currentLocale,
-        }),
+        text: unavailableText,
         lang: currentLocale,
         context: "human_handoff_unavailable_offer_sms",
       });
