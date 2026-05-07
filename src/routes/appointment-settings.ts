@@ -60,9 +60,13 @@ router.post("/", authenticateUser, async (req: any, res) => {
   const buf = Number(buffer_min);
 
   const lead = Number(min_lead_minutes);
+  const MAX_MIN_LEAD_MINUTES = 43200; // 30 días
 
-  if (!Number.isFinite(lead) || lead < 0 || lead > 1440) {
-    return res.status(400).json({ ok: false, error: "min_lead_minutes inválido (0–1440)" });
+  if (!Number.isFinite(lead) || lead < 0 || lead > MAX_MIN_LEAD_MINUTES) {
+    return res.status(400).json({
+      ok: false,
+      error: `min_lead_minutes inválido (0–${MAX_MIN_LEAD_MINUTES})`,
+    });
   }
 
   if (!Number.isFinite(dur) || dur < 5 || dur > 480) {
