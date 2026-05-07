@@ -1488,6 +1488,12 @@ export async function handleVoiceBookingTurn(
           bookingData: currentBookingData,
         });
 
+        console.log("[VOICE][BOOKING][DATETIME_STEP_CONFIG]", {
+          stepKey: currentStep.step_key,
+          retry_prompt: currentStep.retry_prompt,
+          validation_config: currentStep.validation_config,
+        });
+
         const unavailablePrompt =
           typeof currentStep.validation_config?.unavailable_prompt === "string"
             ? currentStep.validation_config.unavailable_prompt.trim()
