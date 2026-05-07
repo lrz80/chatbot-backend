@@ -1493,11 +1493,6 @@ export async function handleVoiceBookingTurn(
             ? currentStep.validation_config.unavailable_prompt.trim()
             : "";
 
-        const availableTimes =
-          scheduleValidation.reason === "schedule_not_available"
-            ? scheduleValidation.availableTimes.join(", ")
-            : "";
-
         const localizedRetryBase = resolveBookingRetryText({
           locale: currentLocale,
           retryPrompt: currentStep.retry_prompt || "",
@@ -1507,24 +1502,47 @@ export async function handleVoiceBookingTurn(
         });
 
         const promptTemplate =
-          scheduleValidation.reason === "schedule_not_available" &&
-          unavailablePrompt
+          scheduleValidation.reason === "schedule_not_available" && unavailablePrompt
             ? unavailablePrompt
             : localizedRetryBase;
 
-        const retryPromptResolved = resolveBookingFlowSpeech({
+        const rawAvailableTimes =
+          scheduleValidation.reason === "schedule_not_available"
+            ? scheduleValidation.availableTimes || []
+            : [];
+
+        const availableTimesText = rawAvailableTimes.join(", ");
+
+        const suggestedStarts =
+          scheduleValidation.reason === "schedule_not_available" &&
+          Array.isArray(scheduleValidation.suggestedStarts)
+            ? scheduleValidation.suggestedStarts
+            : [];
+
+        const retryBaseResolved = resolveBookingFlowSpeech({
           baseText: promptTemplate,
           locale: currentLocale,
           bookingData: {
             ...currentBookingData,
-            requested_service: String(
-            currentBookingData.service || ""
-            ).trim(),
+            requested_service: String(currentBookingData.service || "").trim(),
             requested_datetime: rawDatetime,
-            available_times: availableTimes,
+            available_times: availableTimesText,
+            suggested_times: availableTimesText,
           },
           callerE164,
         });
+
+        const retryPromptResolved =
+          scheduleValidation.reason === "schedule_not_available" &&
+          suggestedStarts.length > 0
+            ? buildBusyAlternativesPrompt({
+                locale: currentLocale,
+                suggestedStarts,
+                timeZone:
+                  String(scheduleValidation.timeZone || "").trim() || "America/New_York",
+                fallbackText: retryBaseResolved,
+              })
+            : retryBaseResolved;
 
         const retryPrompt = twoSentencesMax(
           assertNonEmptyBookingSpeech({

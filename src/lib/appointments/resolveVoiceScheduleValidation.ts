@@ -15,22 +15,47 @@ export type ResolveVoiceScheduleValidationResult =
   | {
       ok: true;
       requestedAt: Date;
+      timeZone: string;
     }
   | {
       ok: false;
       reason: "invalid_datetime";
       availableTimes: [];
+      suggestedStarts: [];
+      timeZone: string;
     }
   | {
       ok: false;
       reason: "schedule_not_available";
       availableTimes: string[];
+      suggestedStarts: string[];
+      timeZone: string;
     };
+
+function dedupeStringArray(values: string[]): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function normalizeSuggestedStarts(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return dedupeStringArray(
+    input.filter((value): value is string => typeof value === "string")
+  );
+}
 
 export async function resolveVoiceScheduleValidation(
   params: ResolveVoiceScheduleValidationParams
 ): Promise<ResolveVoiceScheduleValidationResult> {
-  const timeZone = params.timeZone || "America/New_York";
+  const timeZone = String(params.timeZone || "America/New_York").trim() || "America/New_York";
 
   const parsed = parseVoiceRequestedDate({
     raw: params.rawDatetime,
@@ -51,6 +76,8 @@ export async function resolveVoiceScheduleValidation(
       ok: false,
       reason: "invalid_datetime",
       availableTimes: [],
+      suggestedStarts: [],
+      timeZone,
     };
   }
 
@@ -72,15 +99,28 @@ export async function resolveVoiceScheduleValidation(
   });
 
   if (!scheduleValidation.ok) {
+    const availableTimes = dedupeStringArray(
+      Array.isArray(scheduleValidation.availableTimes)
+        ? scheduleValidation.availableTimes
+        : []
+    );
+
+    const suggestedStarts = normalizeSuggestedStarts(
+      (scheduleValidation as { suggestedStarts?: unknown }).suggestedStarts
+    );
+
     return {
       ok: false,
       reason: "schedule_not_available",
-      availableTimes: scheduleValidation.availableTimes,
+      availableTimes,
+      suggestedStarts,
+      timeZone,
     };
   }
 
   return {
     ok: true,
     requestedAt: parsed.requestedAt,
+    timeZone,
   };
 }
