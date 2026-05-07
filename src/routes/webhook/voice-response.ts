@@ -1194,9 +1194,13 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // ===== Resultado de transferencia (Dial action) =====
-    const isTransferCallback = (req.query && req.query.transfer === '1') || typeof req.body.DialCallStatus !== 'undefined';
+    const isTransferCallback =
+      (req.query && req.query.transfer === "1") ||
+      typeof req.body.DialCallStatus !== "undefined";
+
     if (isTransferCallback) {
-      const status = (req.body.DialCallStatus || '').toString(); // completed | no-answer | busy | failed | canceled
+      const status = String(req.body.DialCallStatus || "").trim();
+
       console.log("[VOICE][TRANSFER_CALLBACK]", {
         callSid,
         tenantId: tenant.id,
@@ -1208,33 +1212,42 @@ router.post('/', async (req: Request, res: Response) => {
         callerE164,
       });
 
-      if (['no-answer','busy','failed','canceled'].includes(status)) {
+      if (["completed"].includes(status)) {
+        await deleteVoiceCallState(callSid);
+
+        vr.hangup();
+        return res.type("text/xml").send(vr.toString());
+      }
+
+      if (["no-answer", "busy", "failed", "canceled"].includes(status)) {
         try {
-          // Enviar link de WhatsApp por SMS (tipo 'soporte' con sinónimos de whatsapp)
-          await enviarSmsConLink('soporte', {
+          await enviarSmsConLink("soporte", {
             tenantId: tenant.id,
             callerE164,
             callerRaw,
-            smsFromCandidate: tenant.twilio_sms_number || '',
+            smsFromCandidate: tenant.twilio_sms_number || "",
             callSid,
           });
+
           vr.say(
             { language: currentLocale as any, voice: voiceName },
             renderVoiceLifecycle("transfer_failed_sms_sent", currentLocale)
           );
         } catch (e) {
-          console.error('[TRANSFER SMS FALLBACK] Error:', e);
+          console.error("[TRANSFER SMS FALLBACK] Error:", e);
+
           vr.say(
             { language: currentLocale as any, voice: voiceName },
             renderVoiceLifecycle("transfer_failed_offer_sms", currentLocale)
           );
+
           await upsertVoiceCallState({
             callSid,
             tenantId: tenant.id,
             lang: state.lang ?? currentLocale,
             turn: state.turn ?? 0,
             awaiting: true,
-            pendingType: 'soporte',
+            pendingType: "soporte",
             awaitingNumber: state.awaitingNumber ?? false,
             altDest: state.altDest ?? null,
             smsSent: state.smsSent ?? false,
@@ -1243,26 +1256,24 @@ router.post('/', async (req: Request, res: Response) => {
           });
         }
 
-        vr.gather({
-          input: ['speech','dtmf'] as any,
+        const gather = vr.gather({
+          input: ["speech", "dtmf"] as any,
           numDigits: 1,
-          action: '/webhook/voice-response',
-          method: 'POST',
+          action: "/webhook/voice-response",
+          method: "POST",
           language: currentLocale as any,
-          speechTimeout: 'auto',
-          timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
-          actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
+          speechTimeout: "auto",
+          timeout: 7,
+          actionOnEmptyResult: true,
+          bargeIn: true,
         });
-        console.log('[VOICE][BOT]', JSON.stringify({
-          callSid,
-          to: didNumber,
-          speakOut: 'No se pudo completar la transferencia...'
-        }));
 
-        return res.type('text/xml').send(vr.toString());
+        return res.type("text/xml").send(vr.toString());
       }
 
-      // Si fue "completed", simplemente retomamos flujo normal (no respondemos nada especial)
+      await deleteVoiceCallState(callSid);
+      vr.hangup();
+      return res.type("text/xml").send(vr.toString());
     }
 
     console.log("[VOICE][NUM_CAPTURE]", JSON.stringify({
