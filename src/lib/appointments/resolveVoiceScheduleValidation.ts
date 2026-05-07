@@ -2,6 +2,7 @@
 import pool from "../db";
 import { parseVoiceRequestedDate } from "./parseVoiceRequestedDate";
 import { validateServiceScheduleForDate } from "./validateServiceScheduleForDate";
+import { BookingProviderOrchestrator } from "./booking/providers/orchestrator";
 
 type ResolveVoiceScheduleValidationParams = {
   tenantId: string;
@@ -10,6 +11,8 @@ type ResolveVoiceScheduleValidationParams = {
   channel?: string;
   baseDate?: Date;
   timeZone?: string;
+  durationMin?: number;
+  bufferMin?: number;
 };
 
 export type ResolveVoiceScheduleValidationResult =
@@ -19,26 +22,26 @@ export type ResolveVoiceScheduleValidationResult =
       timeZone: string;
     }
   | {
-    ok: false;
-    reason: "invalid_datetime";
-    availableTimes: [];
-    suggestedStarts: [];
-    timeZone: string;
-  }
-| {
-    ok: false;
-    reason: "lead_time_not_met";
-    availableTimes: [];
-    suggestedStarts: string[];
-    timeZone: string;
-  }
-| {
-    ok: false;
-    reason: "schedule_not_available";
-    availableTimes: string[];
-    suggestedStarts: string[];
-    timeZone: string;
-  };
+      ok: false;
+      reason: "invalid_datetime";
+      availableTimes: [];
+      suggestedStarts: [];
+      timeZone: string;
+    }
+  | {
+      ok: false;
+      reason: "lead_time_not_met";
+      availableTimes: [];
+      suggestedStarts: string[];
+      timeZone: string;
+    }
+  | {
+      ok: false;
+      reason: "schedule_not_available";
+      availableTimes: string[];
+      suggestedStarts: string[];
+      timeZone: string;
+    };
 
 function dedupeStringArray(values: string[]): string[] {
   return Array.from(
@@ -64,10 +67,56 @@ function addMinutes(date: Date, minutes: number): Date {
   return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
+async function filterBookableSuggestedStarts(params: {
+  tenantId: string;
+  serviceName: string;
+  candidateStarts: string[];
+  durationMin: number;
+  bufferMin: number;
+  timeZone: string;
+}): Promise<string[]> {
+  const orchestrator = new BookingProviderOrchestrator();
+
+  const uniqueCandidates = dedupeStringArray(params.candidateStarts);
+
+  if (!uniqueCandidates.length) {
+    return [];
+  }
+
+  const bookable: string[] = [];
+
+  for (const startISO of uniqueCandidates) {
+    const start = new Date(startISO);
+
+    if (Number.isNaN(start.getTime())) {
+      continue;
+    }
+
+    const end = addMinutes(start, params.durationMin);
+
+    const availability = await orchestrator.checkAvailability({
+      tenantId: params.tenantId,
+      summary: params.serviceName,
+      startISO: start.toISOString(),
+      endISO: end.toISOString(),
+      timeZone: params.timeZone,
+      bufferMin: params.bufferMin,
+      calendarId: null,
+    });
+
+    if (availability.ok) {
+      bookable.push(start.toISOString());
+    }
+  }
+
+  return bookable;
+}
+
 export async function resolveVoiceScheduleValidation(
   params: ResolveVoiceScheduleValidationParams
 ): Promise<ResolveVoiceScheduleValidationResult> {
-  const timeZone = String(params.timeZone || "America/New_York").trim() || "America/New_York";
+  const timeZone =
+    String(params.timeZone || "America/New_York").trim() || "America/New_York";
 
   const parsed = parseVoiceRequestedDate({
     raw: params.rawDatetime,
@@ -93,10 +142,12 @@ export async function resolveVoiceScheduleValidation(
     };
   }
 
-    const { rows: settingsRows } = await pool.query(
+  const { rows: settingsRows } = await pool.query(
     `
       SELECT
-        min_lead_minutes
+        min_lead_minutes,
+        default_duration_min,
+        buffer_min
       FROM appointment_settings
       WHERE tenant_id = $1
       LIMIT 1
@@ -108,6 +159,22 @@ export async function resolveVoiceScheduleValidation(
   const minLeadMinutes =
     Number.isFinite(minLeadMinutesRaw) && minLeadMinutesRaw > 0
       ? minLeadMinutesRaw
+      : 0;
+
+  const defaultDurationMinRaw = Number(
+    settingsRows?.[0]?.default_duration_min ?? params.durationMin ?? 30
+  );
+  const defaultDurationMin =
+    Number.isFinite(defaultDurationMinRaw) && defaultDurationMinRaw > 0
+      ? defaultDurationMinRaw
+      : 30;
+
+  const bufferMinRaw = Number(
+    settingsRows?.[0]?.buffer_min ?? params.bufferMin ?? 0
+  );
+  const bufferMin =
+    Number.isFinite(bufferMinRaw) && bufferMinRaw >= 0
+      ? bufferMinRaw
       : 0;
 
   if (minLeadMinutes > 0) {
@@ -125,18 +192,30 @@ export async function resolveVoiceScheduleValidation(
         timeZone,
       });
 
+      const rawSuggestedStarts = normalizeSuggestedStarts(
+        (fallbackSuggestionValidation as { suggestedStarts?: unknown })
+          .suggestedStarts
+      );
+
+      const suggestedStarts = await filterBookableSuggestedStarts({
+        tenantId: params.tenantId,
+        serviceName: params.serviceName,
+        candidateStarts: rawSuggestedStarts,
+        durationMin: defaultDurationMin,
+        bufferMin,
+        timeZone,
+      });
+
       return {
         ok: false,
         reason: "lead_time_not_met",
         availableTimes: [],
-        suggestedStarts: normalizeSuggestedStarts(
-          (fallbackSuggestionValidation as { suggestedStarts?: unknown }).suggestedStarts
-        ),
+        suggestedStarts,
         timeZone,
       };
     }
   }
-  
+
   const scheduleValidation = await validateServiceScheduleForDate({
     tenantId: params.tenantId,
     serviceName: params.serviceName,
@@ -161,9 +240,18 @@ export async function resolveVoiceScheduleValidation(
         : []
     );
 
-    const suggestedStarts = normalizeSuggestedStarts(
+    const rawSuggestedStarts = normalizeSuggestedStarts(
       (scheduleValidation as { suggestedStarts?: unknown }).suggestedStarts
     );
+
+    const suggestedStarts = await filterBookableSuggestedStarts({
+      tenantId: params.tenantId,
+      serviceName: params.serviceName,
+      candidateStarts: rawSuggestedStarts,
+      durationMin: defaultDurationMin,
+      bufferMin,
+      timeZone,
+    });
 
     return {
       ok: false,

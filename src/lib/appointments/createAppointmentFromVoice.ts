@@ -141,11 +141,25 @@ export async function createAppointmentFromVoice(args: Args) {
 
   if (!externalBooking.ok) {
     if (externalBooking.error === "SLOT_BUSY") {
-       throw new Error(
-        `VOICE_SCHEDULE_NOT_AVAILABLE:${serviceName}:${externalBooking.busy
-          .map((item) => item.start)
-          .join(",")}`
-        );
+      const slotBusyError = new Error(
+        `SLOT_BUSY:${serviceName}:${start.toISOString()}`
+      ) as Error & {
+        error?: string;
+        suggestedStarts?: string[];
+        busy?: Array<{ start: string; end?: string }>;
+      };
+
+      slotBusyError.error = "SLOT_BUSY";
+      slotBusyError.suggestedStarts = Array.isArray((externalBooking as any).suggestedStarts)
+        ? (externalBooking as any).suggestedStarts
+            .map((item: unknown) => String(item || "").trim())
+            .filter(Boolean)
+        : [];
+      slotBusyError.busy = Array.isArray(externalBooking.busy)
+        ? externalBooking.busy
+        : [];
+
+      throw slotBusyError;
     }
 
     if (externalBooking.error === "PROVIDER_NOT_CONFIGURED") {
@@ -155,7 +169,7 @@ export async function createAppointmentFromVoice(args: Args) {
     throw new Error(
       `EXTERNAL_BOOKING_FAILED:${externalBooking.provider}:${externalBooking.error}`
     );
-    }
+  }
 
   const externalCalendarEventId = externalBooking.event_id;
   const googleEventId =

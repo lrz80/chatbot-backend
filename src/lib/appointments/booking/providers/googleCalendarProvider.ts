@@ -17,6 +17,7 @@ import type {
   BookingProviderAdapter,
   CreateExternalBookingInput,
   CreateExternalBookingResult,
+  CreateExternalBookingError,
 } from "./types";
 
 function addMinutes(date: Date, minutes: number): Date {
@@ -110,9 +111,21 @@ function buildDateTimeInTimeZone(params: {
 export class GoogleCalendarProvider implements BookingProviderAdapter {
   readonly provider = "google_calendar" as const;
 
-  async createExternalBooking(
-    input: CreateExternalBookingInput
-  ): Promise<CreateExternalBookingResult> {
+  async checkAvailability(input: {
+    tenantId: string;
+    summary: string;
+    startISO: string;
+    endISO: string;
+    timeZone: string;
+    bufferMin: number;
+    calendarId?: string | null;
+  }): Promise<{
+    ok: boolean;
+    provider: "google_calendar";
+    error?: CreateExternalBookingError;
+    busy: Array<{ start: string; end: string }>;
+    suggestedStarts?: string[];
+  }> {
     const effectiveRule = await getEffectiveServiceBookingRule({
       tenantId: input.tenantId,
       serviceName: input.summary,
@@ -125,7 +138,6 @@ export class GoogleCalendarProvider implements BookingProviderAdapter {
     const timeMin = addMinutes(requestedStart, -input.bufferMin).toISOString();
     const timeMax = addMinutes(requestedEnd, input.bufferMin).toISOString();
 
-    // ✅ Servicios exclusivos: validar con freeBusy y sugerir cercanas si está ocupado
     if (effectiveRule.booking_mode === "exclusive") {
       const fb = await googleFreeBusy({
         tenantId: input.tenantId,
@@ -140,10 +152,16 @@ export class GoogleCalendarProvider implements BookingProviderAdapter {
           provider: this.provider,
           error: "FREEBUSY_DEGRADED",
           busy: [],
+          suggestedStarts: [],
         };
       }
 
-      const busy = extractBusyBlocks(fb, input.calendarId ?? undefined);
+      const busy = extractBusyBlocks(fb, input.calendarId ?? undefined)
+        .map((item) => ({
+          start: String(item?.start || "").trim(),
+          end: String(item?.end || "").trim(),
+        }))
+        .filter((item) => item.start && item.end);
 
       const requestedIsFree = isRangeFree({
         start: requestedStart,
@@ -199,9 +217,15 @@ export class GoogleCalendarProvider implements BookingProviderAdapter {
           suggestedStarts,
         };
       }
+
+      return {
+        ok: true,
+        provider: this.provider,
+        busy: [],
+        suggestedStarts: [],
+      };
     }
 
-    // ✅ Servicios compartidos: validar por capacidad en DB
     if (effectiveRule.booking_mode === "shared") {
       const confirmedCount = await countConfirmedAppointmentsForSlot({
         tenantId: input.tenantId,
@@ -220,8 +244,49 @@ export class GoogleCalendarProvider implements BookingProviderAdapter {
               end: input.endISO,
             },
           ],
+          suggestedStarts: [],
         };
       }
+
+      return {
+        ok: true,
+        provider: this.provider,
+        busy: [],
+        suggestedStarts: [],
+      };
+    }
+
+    return {
+      ok: true,
+      provider: this.provider,
+      busy: [],
+      suggestedStarts: [],
+    };
+  }
+
+  async createExternalBooking(
+    input: CreateExternalBookingInput
+  ): Promise<CreateExternalBookingResult> {
+    const timeZone = input.timeZone || "America/New_York";
+
+    const availability = await this.checkAvailability({
+      tenantId: input.tenantId,
+      summary: input.summary,
+      startISO: input.startISO,
+      endISO: input.endISO,
+      timeZone,
+      bufferMin: input.bufferMin,
+      calendarId: input.calendarId ?? null,
+    });
+
+    if (!availability.ok) {
+      return {
+        ok: false,
+        provider: this.provider,
+        error: availability.error ?? "SLOT_BUSY",
+        busy: availability.busy,
+        suggestedStarts: availability.suggestedStarts || [],
+      };
     }
 
     const event = await googleCreateEvent({
