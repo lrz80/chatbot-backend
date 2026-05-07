@@ -641,8 +641,11 @@ router.post('/', async (req: Request, res: Response) => {
     !userInput && !!pendingUtterance;
 
   const resolvedInitialVoiceIntent = effectiveUserInput
-    ? await resolveVoiceIntentFromUtteranceAsync(effectiveUserInput)
-    : null;
+    ? await resolveVoiceIntentFromUtteranceAsync(effectiveUserInput, {
+        timeoutMs: 1500,
+        minConfidence: 0.55,
+      })
+    : "unknown";
 
   const hasPendingUtterance = Boolean(pendingUtterance);
 
