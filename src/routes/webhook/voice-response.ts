@@ -51,11 +51,6 @@ import { renderVoiceSmsConfirmation } from "../../lib/voice/renderVoiceSmsConfir
 import { resolveVoiceMetaSignal } from "../../lib/voice/resolveVoiceMetaSignal";
 import { resolveVoiceMenuSelection } from "../../lib/voice/resolveVoiceMenuSelection";
 import { normalizeVoiceTurnInput } from "../../lib/voice/normalizeVoiceTurnInput";
-import {
-  buildIntroByLanguage,
-  buildMainMenu,
-} from "../../lib/voice/renderVoiceMenus";
-import { getVoiceMenuCopy } from "../../lib/voice/voiceMenuCopy";
 import { detectarIdioma } from "../../lib/detectarIdioma";
 import { handleVoiceSilenceTurn } from "../../lib/voice/handlers/handleVoiceSilenceTurn";
 import {
@@ -64,6 +59,7 @@ import {
 } from "../../lib/voice/handlers/handleVoiceTransferTurn";
 import { handleVoiceInitialMenu } from "../../lib/voice/handlers/handleVoiceInitialMenu";
 import { handleVoiceBookingEntry } from "../../lib/voice/handlers/handleVoiceBookingEntry";
+import { getBookingFlow } from "../../lib/appointments/getBookingFlow";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -1013,15 +1009,32 @@ router.post('/', async (req: Request, res: Response) => {
     const hasActiveBookingFlow = typeof state.bookingStepIndex === "number";
 
     if (hasActiveBookingFlow && effectiveUserInput) {
+      const bookingFlow = await getBookingFlow(tenant.id);
+
+      const activeBookingStep =
+        typeof state.bookingStepIndex === "number"
+          ? bookingFlow[state.bookingStepIndex]
+          : null;
+
+      const activeBookingSlot =
+        typeof activeBookingStep?.validation_config?.slot === "string"
+          ? activeBookingStep.validation_config.slot.trim()
+          : "";
+
+      const isConfirmationLikeBookingStep =
+        activeBookingStep?.expected_type === "confirmation" ||
+        activeBookingStep?.step_key === "offer_booking_sms" ||
+        activeBookingSlot === "confirmation";
+
       const interruptionBusinessTopic = resolveVoiceBusinessTopic(effectiveUserInput);
 
-    const interruptionVoiceIntent = await resolveVoiceIntentFromUtteranceAsync(
-      effectiveUserInput,
-      {
-        timeoutMs: 1500,
-        minConfidence: 0.65,
-      }
-    );
+      const interruptionVoiceIntent = await resolveVoiceIntentFromUtteranceAsync(
+        effectiveUserInput,
+        {
+          timeoutMs: 1500,
+          minConfidence: 0.65,
+        }
+      );
       const interruptionClosure = await resolveVoiceConversationClosure(
         effectiveUserInput,
         currentLocale
@@ -1043,9 +1056,12 @@ router.post('/', async (req: Request, res: Response) => {
         interruptionVoiceIntent === "human_handoff";
 
       const shouldCloseBooking =
-        interruptionClosure.shouldClose ||
-        interruptionMetaSignal.intent === "close" ||
-        interruptionMetaSignal.intent === "reject";
+        isConfirmationLikeBookingStep &&
+        (
+          interruptionClosure.shouldClose ||
+          interruptionMetaSignal.intent === "close" ||
+          interruptionMetaSignal.intent === "reject"
+        );
 
       if (
         shouldLeaveBookingForBusinessTopic ||
