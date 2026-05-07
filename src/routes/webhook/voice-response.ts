@@ -1076,7 +1076,25 @@ router.post('/', async (req: Request, res: Response) => {
             locale: currentLocale,
           });
 
+      const isTransactionalBookingStep =
+        !!activeBookingStep &&
+        (
+          activeBookingSlot === "datetime" ||
+          activeBookingSlot === "service" ||
+          activeBookingSlot === "location_detail" ||
+          activeBookingSlot === "pet_weight" ||
+          activeBookingSlot === "customer_name" ||
+          activeBookingSlot === "customer_phone" ||
+          activeBookingStep.step_key === "datetime" ||
+          activeBookingStep.step_key === "service" ||
+          activeBookingStep.step_key === "location_detail" ||
+          activeBookingStep.step_key === "pet_weight" ||
+          activeBookingStep.step_key === "customer_name" ||
+          activeBookingStep.step_key === "customer_phone"
+        );
+
       const shouldLeaveBookingForBusinessTopic =
+        !isTransactionalBookingStep &&
         interruptionBusinessTopic.matched &&
         interruptionBusinessTopic.topic &&
         interruptionBusinessTopic.linkType;
