@@ -1297,7 +1297,20 @@ router.post('/', async (req: Request, res: Response) => {
         if (shouldLeaveBookingForHumanHandoff) {
           const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
 
-          if (REPRESENTANTE_NUMBER) {
+          const representanteNumber = REPRESENTANTE_NUMBER
+            ? normalizarNumero(String(REPRESENTANTE_NUMBER))
+            : null;
+
+          console.log("[VOICE][TRANSFER_TARGET]", {
+            callSid,
+            tenantId: tenant.id,
+            didNumber,
+            callerE164,
+            rawRepresentanteNumber: REPRESENTANTE_NUMBER,
+            normalizedRepresentanteNumber: representanteNumber,
+          });
+
+          if (representanteNumber) {
             vr.say(
               { language: currentLocale as any, voice: voiceName },
               renderVoiceReply("transfer_connecting", {
@@ -1308,10 +1321,12 @@ router.post('/', async (req: Request, res: Response) => {
             const dial = vr.dial({
               action: "/webhook/voice-response?transfer=1",
               method: "POST",
-              timeout: 20,
+              timeout: 15,
+              answerOnBridge: true,
+              callerId: didNumber,
             });
 
-            dial.number(REPRESENTANTE_NUMBER);
+            dial.number(representanteNumber);
 
             return res.type("text/xml").send(vr.toString());
           }
