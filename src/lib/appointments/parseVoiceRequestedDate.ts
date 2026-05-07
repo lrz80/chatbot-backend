@@ -3,6 +3,7 @@ type ParseVoiceRequestedDateParams = {
   raw: string;
   baseDate?: Date;
   timeZone?: string;
+  referenceSuggestedStarts?: string[];
 };
 
 type ParseVoiceRequestedDateResult =
@@ -36,6 +37,37 @@ const WEEKDAY_MAP: Record<string, number> = {
   saturday: 6,
 };
 
+const NUMBER_WORD_MAP: Record<string, number> = {
+  // español
+  una: 1,
+  uno: 1,
+  dos: 2,
+  tres: 3,
+  cuatro: 4,
+  cinco: 5,
+  seis: 6,
+  siete: 7,
+  ocho: 8,
+  nueve: 9,
+  diez: 10,
+  once: 11,
+  doce: 12,
+
+  // inglés
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+};
+
 type TimeZoneDateParts = {
   year: number;
   month: number;
@@ -51,6 +83,19 @@ function normalizeText(value: string): string {
     .replace(/[^\p{L}\p{N}\s:.]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function replaceHourWordsWithDigits(value: string): string {
+  let normalized = normalizeText(value);
+
+  for (const [word, numberValue] of Object.entries(NUMBER_WORD_MAP)) {
+    normalized = normalized.replace(
+      new RegExp(`\\b${word}\\b`, "gu"),
+      String(numberValue)
+    );
+  }
+
+  return normalized;
 }
 
 function getDatePartsInTimeZone(date: Date, timeZone: string): TimeZoneDateParts {
@@ -107,7 +152,6 @@ function resolveTargetDateParts(
     return baseParts;
   }
 
-  // "mañana" como día relativo, pero NO cuando aparece dentro de "de la mañana"
   const hasRelativeTomorrow =
     /\b(tomorrow)\b/u.test(normalized) ||
     /^(manana)\b/u.test(normalized) ||
@@ -137,7 +181,7 @@ function resolveTargetDateParts(
 }
 
 function parseHourMinute(text: string): { hour: number; minute: number } | null {
-  const normalized = normalizeText(text);
+  const normalized = replaceHourWordsWithDigits(text);
 
   let hour: number | null = null;
   let minute = 0;
@@ -241,6 +285,41 @@ function buildDateInTimeZone(params: {
   return new Date(utcGuess.getTime() + diffMs);
 }
 
+function resolveSuggestedStartByTime(params: {
+  referenceSuggestedStarts: string[];
+  raw: string;
+  timeZone: string;
+}): Date | null {
+  const requestedTime = parseHourMinute(params.raw);
+
+  if (!requestedTime) {
+    return null;
+  }
+
+  const candidates = params.referenceSuggestedStarts
+    .map((value) => new Date(value))
+    .filter((date) => !Number.isNaN(date.getTime()))
+    .filter((date) => {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: params.timeZone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).formatToParts(date);
+
+      const hour = Number(parts.find((p) => p.type === "hour")?.value || "0");
+      const minute = Number(parts.find((p) => p.type === "minute")?.value || "0");
+
+      return hour === requestedTime.hour && minute === requestedTime.minute;
+    });
+
+  if (candidates.length !== 1) {
+    return null;
+  }
+
+  return candidates[0];
+}
+
 export function parseVoiceRequestedDate(
   params: ParseVoiceRequestedDateParams
 ): ParseVoiceRequestedDateResult {
@@ -263,21 +342,36 @@ export function parseVoiceRequestedDate(
 
   const time = parseHourMinute(raw);
 
-  if (!targetDateParts || !time) {
-    return { ok: false };
+  if (targetDateParts && time) {
+    const requestedAt = buildDateInTimeZone({
+      year: targetDateParts.year,
+      month: targetDateParts.month,
+      day: targetDateParts.day,
+      hour: time.hour,
+      minute: time.minute,
+      timeZone,
+    });
+
+    return {
+      ok: true,
+      requestedAt,
+    };
   }
 
-  const requestedAt = buildDateInTimeZone({
-    year: targetDateParts.year,
-    month: targetDateParts.month,
-    day: targetDateParts.day,
-    hour: time.hour,
-    minute: time.minute,
+  const suggestedMatch = resolveSuggestedStartByTime({
+    referenceSuggestedStarts: Array.isArray(params.referenceSuggestedStarts)
+      ? params.referenceSuggestedStarts
+      : [],
+    raw,
     timeZone,
   });
 
-  return {
-    ok: true,
-    requestedAt,
-  };
+  if (suggestedMatch) {
+    return {
+      ok: true,
+      requestedAt: suggestedMatch,
+    };
+  }
+
+  return { ok: false };
 }

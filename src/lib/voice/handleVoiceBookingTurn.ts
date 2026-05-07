@@ -41,6 +41,7 @@ function buildExtraBookingFields(
     "__last_booking_outcome",
     "__last_assistant_text",
     "__last_booking_error",
+    "__datetime_reference_suggested_starts",
   ]);
 
   return Object.fromEntries(
@@ -1382,6 +1383,25 @@ export async function handleVoiceBookingTurn(
       [currentStep.step_key]: resolvedStepValue,
     };
 
+    const referenceSuggestedStarts =
+      typeof state.bookingData?.__datetime_reference_suggested_starts === "string"
+        ? (() => {
+            try {
+              const parsed = JSON.parse(
+                state.bookingData.__datetime_reference_suggested_starts
+              );
+
+              return Array.isArray(parsed)
+                ? parsed
+                    .map((value) => String(value || "").trim())
+                    .filter(Boolean)
+                : [];
+            } catch {
+              return [];
+            }
+          })()
+        : [];
+
     const serviceName = String(
       currentBookingData.service || currentBookingData["service"] || ""
     ).trim();
@@ -1468,13 +1488,23 @@ export async function handleVoiceBookingTurn(
         serviceName,
         rawDatetime,
         channel: "voice",
+        referenceSuggestedStarts,
       });
 
       if (!scheduleValidation.ok) {
+        const bookingDataWithSuggestedStarts = {
+          ...currentBookingData,
+          __datetime_reference_suggested_starts: JSON.stringify(
+            Array.isArray(scheduleValidation.suggestedStarts)
+              ? scheduleValidation.suggestedStarts
+              : []
+          ),
+        };
+
         state = {
           ...state,
           bookingStepIndex: currentIndex,
-          bookingData: currentBookingData,
+          bookingData: bookingDataWithSuggestedStarts,
         };
 
         await upsertVoiceCallState({
@@ -1488,7 +1518,7 @@ export async function handleVoiceBookingTurn(
           altDest: state.altDest ?? null,
           smsSent: state.smsSent ?? false,
           bookingStepIndex: currentIndex,
-          bookingData: currentBookingData,
+          bookingData: bookingDataWithSuggestedStarts,
         });
 
         console.log("[VOICE][BOOKING][DATETIME_STEP_CONFIG]", {
@@ -1579,7 +1609,7 @@ export async function handleVoiceBookingTurn(
           baseText: promptTemplate,
           locale: currentLocale,
           bookingData: {
-            ...currentBookingData,
+            ...bookingDataWithSuggestedStarts,
             requested_service: String(currentBookingData.service || "").trim(),
             requested_datetime: rawDatetime,
             available_times: availableTimesText,
@@ -1646,21 +1676,26 @@ export async function handleVoiceBookingTurn(
     }
   }
 
-  const nextData = {
+  const nextData: Record<string, string> = {
     ...(state.bookingData || {}),
-    [currentStep.step_key]: resolvedStepValue,
+    [currentStep.step_key]: String(resolvedStepValue || "").trim(),
     ...(isServiceStep
       ? {
-        service_display:
-          state.bookingData?.service_display || resolvedStepValue,
+          service_display: String(
+            state.bookingData?.service_display || resolvedStepValue || ""
+          ).trim(),
         }
       : {}),
     ...(isDatetimeStep
       ? {
-        datetime_display: String(resolvedStepValue || "").trim(),
+          datetime_display: String(resolvedStepValue || "").trim(),
         }
       : {}),
   };
+
+  if (isDatetimeStep) {
+    delete nextData.__datetime_reference_suggested_starts;
+  }
 
   const nextIndex = currentIndex + 1;
   const nextStep = flow[nextIndex];

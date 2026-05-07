@@ -13,6 +13,7 @@ type ResolveVoiceScheduleValidationParams = {
   timeZone?: string;
   durationMin?: number;
   bufferMin?: number;
+  referenceSuggestedStarts?: string[];
 };
 
 export type ResolveVoiceScheduleValidationResult =
@@ -122,6 +123,7 @@ export async function resolveVoiceScheduleValidation(
     raw: params.rawDatetime,
     baseDate: params.baseDate,
     timeZone,
+    referenceSuggestedStarts: params.referenceSuggestedStarts,
   });
 
   console.log("[VOICE][DATETIME_PARSE]", {
