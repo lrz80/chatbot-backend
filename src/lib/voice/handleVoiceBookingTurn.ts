@@ -6,7 +6,6 @@ import { createAppointmentFromVoice } from "../appointments/createAppointmentFro
 import { resolveVoiceScheduleValidation } from "../appointments/resolveVoiceScheduleValidation";
 import { upsertVoiceCallState } from "./upsertVoiceCallState";
 import { deleteVoiceCallState } from "./deleteVoiceCallState";
-import { resolveVoiceIntentFromUtteranceAsync } from "./resolveVoiceIntentFromUtterance";
 import { CallState, VoiceLocale } from "./types";
 import {
   buildAnswersBySlot,
@@ -186,6 +185,15 @@ type BookingFlowCacheEntry = {
   flow: CachedBookingFlow;
 };
 
+type ResolvedVoiceIntent =
+  | "booking"
+  | "prices"
+  | "hours"
+  | "location"
+  | "human_handoff"
+  | "unknown"
+  | null;
+
 const BOOKING_FLOW_TTL_MS = 60_000;
 const bookingFlowCache = new Map<string, BookingFlowCacheEntry>();
 
@@ -229,6 +237,7 @@ type HandleVoiceBookingTurnParams = {
   userInput: string;
   effectiveUserInput: string;
   digits: string;
+  resolvedIntent: ResolvedVoiceIntent;
   logBotSay: (input: {
     callSid: string;
     to: string;
@@ -274,12 +283,7 @@ export async function handleVoiceBookingTurn(
 
   const resolvedIntent = bookingAlreadyActive
     ? "booking"
-    : effectiveUserInput
-      ? await resolveVoiceIntentFromUtteranceAsync(effectiveUserInput, {
-          timeoutMs: 2500,
-          minConfidence: 0.55,
-        })
-      : null;
+    : params.resolvedIntent;
 
   const wantsBooking =
     bookingAlreadyActive ||

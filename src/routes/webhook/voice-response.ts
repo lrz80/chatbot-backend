@@ -649,7 +649,7 @@ router.post('/', async (req: Request, res: Response) => {
 
   const resolvedInitialVoiceIntent = effectiveUserInput
     ? await resolveVoiceIntentFromUtteranceAsync(effectiveUserInput, {
-        timeoutMs: 1500,
+        timeoutMs: 2500,
         minConfidence: 0.55,
       })
     : "unknown";

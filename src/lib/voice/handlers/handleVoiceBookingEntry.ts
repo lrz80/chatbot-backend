@@ -5,10 +5,19 @@ import type { CallState } from "../types";
 
 type VoiceLocale = "es-ES" | "en-US" | "pt-BR";
 
+type ResolvedVoiceIntent =
+  | "booking"
+  | "prices"
+  | "hours"
+  | "location"
+  | "human_handoff"
+  | "unknown"
+  | null;
+  
 type HandleVoiceBookingEntryParams = {
   vr: twiml.VoiceResponse;
   effectiveUserInput: string;
-  resolvedInitialVoiceIntent: string | null;
+  resolvedInitialVoiceIntent: ResolvedVoiceIntent;
   state: CallState;
   tenant: any;
   cfg: any;
@@ -81,8 +90,9 @@ export async function handleVoiceBookingEntry(
     userInput,
     effectiveUserInput,
     digits,
+    resolvedIntent: resolvedInitialVoiceIntent,
     logBotSay,
-  });
+    });
 
   if (bookingTurnResult.handled) {
     return {
