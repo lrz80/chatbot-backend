@@ -8,23 +8,17 @@ import { normalizarNumero } from '../../lib/senders/sms';
 import { getVoiceCallState } from "../../lib/voice/getVoiceCallState";
 import { upsertVoiceCallState } from "../../lib/voice/upsertVoiceCallState";
 import { deleteVoiceCallState } from "../../lib/voice/deleteVoiceCallState";
-import {
-  resolveVoiceIntentFromUtteranceAsync,
-} from "../../lib/voice/resolveVoiceIntentFromUtterance";
+import { resolveVoiceIntentFromUtteranceAsync } from "../../lib/voice/resolveVoiceIntentFromUtterance";
 
 import { CallState } from "../../lib/voice/types";
 
-import {
-  resolveLocaleFromQueryLang,
-  resolveVoiceLanguageSelection,
-} from "../../lib/voice/resolveVoiceLanguage";
+import { resolveLocaleFromQueryLang } from "../../lib/voice/resolveVoiceLanguage";
 import { renderVoiceLifecycle } from "../../lib/voice/renderVoiceLifecycle";
 import { resolveVoiceConversationClosure } from "../../lib/voice/resolveVoiceConversationClosure";
 import { resolveVoiceProviderVoice } from "../../lib/voice/resolveVoiceProviderVoice";
 import { resolveVoiceMetaSignal } from "../../lib/voice/resolveVoiceMetaSignal";
 import { resolveVoiceMenuSelection } from "../../lib/voice/resolveVoiceMenuSelection";
 import { normalizeVoiceTurnInput } from "../../lib/voice/normalizeVoiceTurnInput";
-import { detectarIdioma } from "../../lib/detectarIdioma";
 import { handleVoiceSilenceTurn } from "../../lib/voice/handlers/handleVoiceSilenceTurn";
 import { handleVoiceTransferTurn } from "../../lib/voice/handlers/handleVoiceTransferTurn";
 import { handleVoiceInitialMenu } from "../../lib/voice/handlers/handleVoiceInitialMenu";
@@ -47,6 +41,7 @@ import { handleVoiceSmsFlow } from "../../lib/voice/runtime/handleVoiceSmsFlow";
 import { persistVoiceTurn } from "../../lib/voice/runtime/persistVoiceTurn";
 import { renderFinalVoiceTurn } from "../../lib/voice/runtime/renderFinalVoiceTurn";
 import { resolveVoiceRequestContext } from "../../lib/voice/runtime/resolveVoiceRequestContext";
+import { handleVoiceLanguageRoute } from "../../lib/voice/runtime/handleVoiceLanguageRoute";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -55,64 +50,6 @@ const short = (s: string, n = 120) => (s.length > n ? s.slice(0, n) + '…' : s)
 
 function hasInitialVoiceIntroPlayed(state: CallState): boolean {
   return String(state.bookingData?.__voice_intro_played || "") === "1";
-}
-
-function withInitialVoiceIntroPlayed(
-  bookingData: Record<string, any> | undefined
-): Record<string, any> {
-  return {
-    ...(bookingData || {}),
-    __voice_intro_played: "1",
-  };
-}
-
-function normalizeDetectedVoiceLanguage(value: unknown): "es" | "en" | "pt" | null {
-  const candidate =
-    typeof value === "object" && value !== null
-      ? (value as any).lang ??
-        (value as any).language ??
-        (value as any).detectedLanguage ??
-        (value as any).locale ??
-        ""
-      : value;
-
-  const raw = String(candidate || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-
-  if (!raw) return null;
-
-  if (
-    raw === "es" ||
-    raw.startsWith("es-") ||
-    raw.includes("spanish") ||
-    raw.includes("espanol") ||
-    raw.includes("castellano")
-  ) {
-    return "es";
-  }
-
-  if (
-    raw === "pt" ||
-    raw.startsWith("pt-") ||
-    raw.includes("portuguese") ||
-    raw.includes("portugues")
-  ) {
-    return "pt";
-  }
-
-  if (
-    raw === "en" ||
-    raw.startsWith("en-") ||
-    raw.includes("english") ||
-    raw.includes("ingles")
-  ) {
-    return "en";
-  }
-
-  return null;
 }
 
 // ——— LOG HELPERS ———
@@ -138,154 +75,7 @@ function logBotSay({
   }));
 }
 
-router.post("/lang", async (req: Request, res: Response) => {
-  const callSid = (req.body.CallSid || "").toString();
-
-  const existingState = callSid ? await getVoiceCallState(callSid) : null;
-  const existingLang =
-    typeof existingState?.lang === "string" ? existingState.lang.trim() : "";
-
-  if (existingLang) {
-    const vr = new twiml.VoiceResponse();
-
-    const langCode = existingLang.startsWith("es")
-      ? "es"
-      : existingLang.startsWith("pt")
-      ? "pt"
-      : "en";
-
-    vr.redirect(`/webhook/voice-response?lang=${langCode}`);
-    return res.type("text/xml").send(vr.toString());
-  }
-
-  const rawDigits = (req.body.Digits || "").toString().trim();
-  const speechRaw = (req.body.SpeechResult || "").toString().trim();
-
-  const langSelection = resolveVoiceLanguageSelection({
-    digits: rawDigits,
-    speech: speechRaw,
-  });
-
-  const detectedLanguageFromSpeech =
-    langSelection.hasRealUtterance && !langSelection.explicitLanguageSelection
-      ? await detectarIdioma(langSelection.originalSpeech).catch(() => null)
-      : null;
-
-  const normalizedDetectedLanguage =
-    normalizeDetectedVoiceLanguage(detectedLanguageFromSpeech);
-
-  let selectedLanguage: "es" | "en" | "pt" =
-    langSelection.selectedLanguage === "es"
-      ? "es"
-      : langSelection.selectedLanguage === "pt"
-      ? "pt"
-      : "en";
-
-  if (normalizedDetectedLanguage) {
-    selectedLanguage = normalizedDetectedLanguage;
-  }
-
-  console.log(
-    "[VOICE][LANG]",
-    JSON.stringify({
-      digits: rawDigits,
-      speech: langSelection.normalizedSpeech,
-      detectedLanguageFromSpeech,
-      normalizedDetectedLanguage,
-      selectedLanguage,
-      bodyKeys: Object.keys(req.body || {}),
-    })
-  );
-
-  const to = (req.body.To || "").toString().replace(/^tel:/, "");
-
-  const tRes = await pool.query(
-    `
-      SELECT id
-      FROM tenants
-      WHERE twilio_voice_number = $1
-      LIMIT 1
-    `,
-    [to]
-  );
-
-  const tenant = tRes.rows[0];
-
-  const shouldCarryPendingUtterance =
-  langSelection.hasRealUtterance && !langSelection.explicitLanguageSelection;
-
-  if (tenant && callSid) {
-    await upsertVoiceCallState({
-      callSid,
-      tenantId: tenant.id,
-      lang:
-        selectedLanguage === "es"
-          ? "es-ES"
-          : selectedLanguage === "pt"
-          ? "pt-BR"
-          : "en-US",
-      turn: 0,
-      awaiting: false,
-      pendingType: null,
-      awaitingNumber: false,
-      altDest: null,
-      smsSent: false,
-      bookingStepIndex: null,
-      bookingData: shouldCarryPendingUtterance
-        ? withInitialVoiceIntroPlayed({
-            __pending_utterance: langSelection.originalSpeech,
-          })
-        : {},
-    });
-  }
-
-  const vr = new twiml.VoiceResponse();
-  const selectedLocale =
-    selectedLanguage === "es"
-      ? "es-ES"
-      : selectedLanguage === "pt"
-      ? "pt-BR"
-      : "en-US";
-
-  if (langSelection.explicitLanguageSelection) {
-    if (selectedLocale === "es-ES") {
-      vr.say(
-        { language: "es-ES", voice: resolveVoiceProviderVoice("es-ES") as any },
-        renderVoiceLifecycle("language_selected_es", "es-ES")
-      );
-      vr.redirect("/webhook/voice-response?lang=es");
-      return res.type("text/xml").send(vr.toString());
-    }
-
-    if (selectedLocale === "pt-BR") {
-      vr.redirect("/webhook/voice-response?lang=pt");
-      return res.type("text/xml").send(vr.toString());
-    }
-
-    // Inglés no necesita confirmación hablada.
-    // Sigue directo para evitar repetir saludo.
-    vr.redirect("/webhook/voice-response?lang=en");
-    return res.type("text/xml").send(vr.toString());
-  }
-
-  if (langSelection.hasRealUtterance) {
-    vr.redirect(
-      `/webhook/voice-response?lang=${
-        selectedLanguage === "es"
-          ? "es"
-          : selectedLanguage === "pt"
-          ? "pt"
-          : "en"
-      }`
-    );
-    return res.type("text/xml").send(vr.toString());
-  }
-
-  // Si no hubo selección explícita ni utterance real,
-  // por defecto sigue a inglés sin volver a hablar aquí.
-  vr.redirect("/webhook/voice-response?lang=en");
-  return res.type("text/xml").send(vr.toString());
-});
+router.post("/lang", handleVoiceLanguageRoute);
 
 //  Handler
 router.post('/', async (req: Request, res: Response) => {
