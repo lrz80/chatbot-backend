@@ -2,7 +2,6 @@
 import { Router, Request, Response } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
-import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { normalizarNumero } from '../../lib/senders/sms';
 
 import { getVoiceCallState } from "../../lib/voice/getVoiceCallState";
@@ -45,8 +44,6 @@ import { handleVoiceLanguageRoute } from "../../lib/voice/runtime/handleVoiceLan
 
 const router = Router();
 const CHANNEL_KEY = "voice";
-
-const short = (s: string, n = 120) => (s.length > n ? s.slice(0, n) + '…' : s);
 
 function hasInitialVoiceIntroPlayed(state: CallState): boolean {
   return String(state.bookingData?.__voice_intro_played || "") === "1";
@@ -369,10 +366,14 @@ router.post('/', async (req: Request, res: Response) => {
       normalizedDigits: digits,
     }));
 
-    const earlyConversationClosure = await resolveVoiceConversationClosure(
-      effectiveUserInput,
-      currentLocale
-    );
+    const hasActiveBookingStep = typeof state.bookingStepIndex === "number";
+
+    const earlyConversationClosure = hasActiveBookingStep
+      ? { shouldClose: false }
+      : await resolveVoiceConversationClosure(
+          effectiveUserInput,
+          currentLocale
+        );
 
     if (
       earlyConversationClosure.shouldClose &&
@@ -391,44 +392,46 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type("text/xml").send(vr.toString());
     }
 
-    const activeBookingInterruptionResult =
-      await handleActiveBookingInterruption({
-        vr,
-        state,
-        effectiveUserInput,
-        tenant,
-        cfg,
-        callSid,
-        didNumber,
-        callerE164,
-        callerRaw,
-        currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
-        voiceName,
-        logBotSay,
-        getBookingFlow,
-        normalizarNumero,
-        offerSms,
-        sendSupportSms: async ({
-          tenantId,
+    if (!hasActiveBookingStep) {
+      const activeBookingInterruptionResult =
+        await handleActiveBookingInterruption({
+          vr,
+          state,
+          effectiveUserInput,
+          tenant,
+          cfg,
+          callSid,
+          didNumber,
           callerE164,
           callerRaw,
-          smsFromCandidate,
-          callSid,
-        }) => {
-          await enviarSmsConLink("soporte", {
+          currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
+          voiceName,
+          logBotSay,
+          getBookingFlow,
+          normalizarNumero,
+          offerSms,
+          sendSupportSms: async ({
             tenantId,
             callerE164,
             callerRaw,
             smsFromCandidate,
             callSid,
-          });
-        },
-      });
+          }) => {
+            await enviarSmsConLink("soporte", {
+              tenantId,
+              callerE164,
+              callerRaw,
+              smsFromCandidate,
+              callSid,
+            });
+          },
+        });
 
-    state = activeBookingInterruptionResult.state;
+      state = activeBookingInterruptionResult.state;
 
-    if (activeBookingInterruptionResult.handled) {
-      return res.type("text/xml").send(activeBookingInterruptionResult.twiml);
+      if (activeBookingInterruptionResult.handled) {
+        return res.type("text/xml").send(activeBookingInterruptionResult.twiml);
+      }
     }
 
     const bookingEntryResult = await handleVoiceBookingEntry({
@@ -521,8 +524,6 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type("text/xml").send(awaitingSmsDestinationResult.twiml);
     }
 
-    const hasActiveBookingStep = typeof state.bookingStepIndex === "number";
-
     // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI
     let { respuesta } = await generateVoiceAssistantReply({
       tenantId: tenant.id,
@@ -575,8 +576,6 @@ router.post('/', async (req: Request, res: Response) => {
       didNumber: didNumber || null,
     });
 
-    await incrementarUsoPorNumero(didNumber);
-
     const finalVoiceTurnResult = await renderFinalVoiceTurn({
       vr,
       callSid,
@@ -591,7 +590,6 @@ router.post('/', async (req: Request, res: Response) => {
 
     return res.type("text/xml").send(finalVoiceTurnResult.twiml);
 
-    return res.type('text/xml').send(vr.toString());
   } catch (err) {
   console.error('❌ Error en voice-response:', err);
   const vrErr = new twiml.VoiceResponse();
