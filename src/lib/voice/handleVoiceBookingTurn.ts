@@ -1,40 +1,27 @@
 //src/lib/voice/handleVoiceBookingTurn.ts
 import { twiml } from "twilio";
-import pool from "../db";
-import { getBookingFlow } from "../appointments/getBookingFlow";
-import { createAppointmentFromVoice } from "../appointments/createAppointmentFromVoice";
-import { resolveVoiceScheduleValidation } from "../appointments/resolveVoiceScheduleValidation";
 import { upsertVoiceCallState } from "./upsertVoiceCallState";
 import { deleteVoiceCallState } from "./deleteVoiceCallState";
 import { CallState, VoiceLocale } from "./types";
 import {
-  buildAnswersBySlot,
   resolveBookingFlowSpeech,
   resolveBookingPromptText,
   resolveBookingRetryText,
-  resolveBookingSuccessStep,
-  resolvePhoneFromVoiceInput,
-  resolveVoiceBookingService,
 } from "./voiceBookingHelpers";
-import { resolveVoiceMetaSignal } from "./resolveVoiceMetaSignal";
 import { twoSentencesMax } from "./speechFormatting";
-import { handleBookingSlotBusyRecovery } from "./voiceBookingBusyRecovery";
 import { handleBookingLocationStep } from "./booking/handleBookingLocationStep";
 import { handleBookingDatetimeStep } from "./booking/handleBookingDatetimeStep";
 import {
   assertNonEmptyBookingSpeech,
-  buildExtraBookingFields,
   createBookingGather,
   resolveBookingSpeechFast,
 } from "./booking/bookingSpeech";
 import { handleBookingConfirmationStep } from "./booking/handleBookingConfirmationStep";
-
-type CachedBookingFlow = Awaited<ReturnType<typeof getBookingFlow>>;
-
-type BookingFlowCacheEntry = {
-  expiresAt: number;
-  flow: CachedBookingFlow;
-};
+import { handleBookingPhoneStep } from "./booking/handleBookingPhoneStep";
+import { handleBookingServiceStep } from "./booking/handleBookingServiceStep";
+import { handleBookingStepAdvance } from "./booking/handleBookingStepAdvance";
+import { getCachedBookingFlow } from "./booking/bookingFlowCache";
+export { clearVoiceBookingFlowCache } from "./booking/bookingFlowCache";
 
 type ResolvedVoiceIntent =
   | "booking"
@@ -44,36 +31,6 @@ type ResolvedVoiceIntent =
   | "human_handoff"
   | "unknown"
   | null;
-
-const BOOKING_FLOW_TTL_MS = 60_000;
-const bookingFlowCache = new Map<string, BookingFlowCacheEntry>();
-
-export function clearVoiceBookingFlowCache(tenantId?: string) {
-  if (!tenantId) {
-    bookingFlowCache.clear();
-    return;
-  }
-
-  bookingFlowCache.delete(tenantId);
-}
-
-async function getCachedBookingFlow(tenantId: string): Promise<CachedBookingFlow> {
-  const now = Date.now();
-  const cached = bookingFlowCache.get(tenantId);
-
-  if (cached && cached.expiresAt > now) {
-    return cached.flow;
-  }
-
-  const flow = await getBookingFlow(tenantId);
-
-  bookingFlowCache.set(tenantId, {
-    expiresAt: now + BOOKING_FLOW_TTL_MS,
-    flow,
-  });
-
-  return flow;
-}
 
 type HandleVoiceBookingTurnParams = {
   vr: twiml.VoiceResponse;
@@ -315,123 +272,22 @@ export async function handleVoiceBookingTurn(
   }
 
   if (currentStep.expected_type === "phone") {
-    const phoneResolution = resolvePhoneFromVoiceInput({
-      userInput: effectiveUserInput,
-      digits,
-      callerE164,
-      step: currentStep,
-    });
-
-    if (!phoneResolution.ok) {
-      const gather = createBookingGather({
-        vr,
-        locale: currentLocale,
-        isPhoneStep: true,
-      });
-
-      const phoneRetryText = resolveBookingRetryText({
-        locale: currentLocale,
-        retryPrompt: currentStep.retry_prompt || "",
-        retryPromptTranslations: currentStep.retry_prompt_translations || null,
-        fallbackPrompt: currentStep.prompt || "",
-        fallbackPromptTranslations: currentStep.prompt_translations || null,
-      });
-
-      const retryPromptResolved = resolveBookingFlowSpeech({
-        baseText: phoneRetryText,
-        locale: currentLocale,
-        bookingData: state.bookingData || {},
-        callerE164,
-      });
-
-      const retryPrompt = twoSentencesMax(
-        assertNonEmptyBookingSpeech({
-          text: retryPromptResolved,
-          stepKey: currentStep.step_key,
-          field: currentStep.retry_prompt ? "retry_prompt" : "prompt",
-        })
-      );
-
-      gather.say(
-        { language: currentLocale as any, voice: voiceName },
-        retryPrompt
-      );
-
-      return {
-        handled: true,
-        state,
-        twiml: vr.toString(),
-      };
-    }
-
-    const nextData: Record<string, string> = {
-      ...(state.bookingData || {}),
-      [currentStep.step_key]: phoneResolution.value,
-    };
-
-    const nextIndex = currentIndex + 1;
-    const nextStep = flow[nextIndex];
-
-    if (!nextStep) {
-      await deleteVoiceCallState(callSid);
-      throw new Error("BOOKING_CONFIRM_STEP_MISSING");
-    }
-
-    const nextStepPromptTextAfterPhone = resolveBookingPromptText({
-      locale: currentLocale,
-      prompt: nextStep.prompt || "",
-      promptTranslations: nextStep.prompt_translations || null,
-    });
-
-    const prompt = twoSentencesMax(
-      resolveBookingFlowSpeech({
-        baseText: nextStepPromptTextAfterPhone,
-        locale: currentLocale,
-        bookingData: nextData,
-        callerE164,
-      })
-    );
-
-    state = {
-      ...state,
-      bookingStepIndex: nextIndex,
-      bookingData: nextData,
-    };
-
-    await upsertVoiceCallState({
-      callSid,
-      tenantId: tenant.id,
-      lang: state.lang ?? currentLocale,
-      turn: state.turn ?? 0,
-      awaiting: state.awaiting ?? false,
-      pendingType: state.pendingType ?? null,
-      awaitingNumber: state.awaitingNumber ?? false,
-      altDest: state.altDest ?? null,
-      smsSent: state.smsSent ?? false,
-      bookingStepIndex: nextIndex,
-      bookingData: nextData,
-    });
-
-    const isPhoneStep = nextStep.expected_type === "phone";
-    const isConfirmationStep = nextStep.expected_type === "confirmation";
-
-    const gather = createBookingGather({
+    return handleBookingPhoneStep({
       vr,
-      locale: currentLocale,
-      isPhoneStep,
-      isConfirmationStep,
-    });
-
-    gather.say(
-      { language: currentLocale as any, voice: voiceName },
-      prompt
-    );
-
-    return {
-      handled: true,
+      tenantId: tenant.id,
+      flow,
+      currentStep,
+      currentIndex,
+      currentLocale,
+      voiceName,
+      callSid,
+      callerE164,
+      effectiveUserInput,
+      digits,
       state,
-      twiml: vr.toString(),
-    };
+      createBookingGather,
+      upsertVoiceCallState,
+    });
   }
 
   let resolvedStepValue = effectiveUserInput;
@@ -448,107 +304,28 @@ export async function handleVoiceBookingTurn(
     currentStep.step_key === "location_detail" || rawSlot === "location_detail";
 
   if (isServiceStep) {
-    const serviceResolution = resolveVoiceBookingService({
-      userInput: effectiveUserInput,
-      rawConfig: cfg?.booking_services_text || "",
-    });
-
-    if (serviceResolution.kind === "none") {
-      const serviceRetryText = resolveBookingRetryText({
-        locale: currentLocale,
-        retryPrompt: currentStep.retry_prompt || "",
-        retryPromptTranslations: currentStep.retry_prompt_translations || null,
-        fallbackPrompt: currentStep.prompt || "",
-        fallbackPromptTranslations: currentStep.prompt_translations || null,
-      });
-
-      const retryPromptResolved = resolveBookingFlowSpeech({
-        baseText: serviceRetryText,
-        locale: currentLocale,
-        bookingData: state.bookingData || {},
-        callerE164,
-      });
-
-      const retryPrompt = twoSentencesMax(
-        assertNonEmptyBookingSpeech({
-          text: retryPromptResolved,
-          stepKey: currentStep.step_key,
-          field: currentStep.retry_prompt ? "retry_prompt" : "prompt",
-        })
-      );
-
-      const gather = createBookingGather({
-        vr,
-        locale: currentLocale,
-      });
-
-      gather.say(
-        { language: currentLocale as any, voice: voiceName },
-        retryPrompt
-      );
-
-      return {
-        handled: true,
-        state,
-        twiml: vr.toString(),
-      };
-    }
-
-    if (serviceResolution.kind === "ambiguous") {
-      const optionsText = serviceResolution.options.join(", ");
-
-      const ambiguousBaseText = resolveBookingRetryText({
-        locale: currentLocale,
-        retryPrompt: currentStep.retry_prompt || "",
-        retryPromptTranslations: currentStep.retry_prompt_translations || null,
-        fallbackPrompt: currentStep.prompt || "",
-        fallbackPromptTranslations: currentStep.prompt_translations || null,
-      });
-
-      const ambiguousPrompt = resolveBookingFlowSpeech({
-        baseText: ambiguousBaseText,
-        locale: currentLocale,
-        bookingData: {
-          ...(state.bookingData || {}),
-          optionsText,
-          available_options: optionsText,
-        },
-        callerE164,
-      });
-
-      const gather = createBookingGather({
-        vr,
-        locale: currentLocale,
-      });
-
-      gather.say(
-        { language: currentLocale as any, voice: voiceName },
-        twoSentencesMax(ambiguousPrompt)
-      );
-
-      return {
-        handled: true,
-        state,
-        twiml: vr.toString(),
-      };
-    }
-
-    resolvedStepValue = serviceResolution.value;
-
-    const localizedServiceDisplay = resolveBookingFlowSpeech({
-      baseText: serviceResolution.value,
-      locale: currentLocale,
-      bookingData: state.bookingData || {},
+    const serviceStepResult = await handleBookingServiceStep({
+      vr,
+      currentStep,
+      currentLocale,
+      voiceName,
       callerE164,
+      effectiveUserInput,
+      state,
+      rawConfig: cfg?.booking_services_text || "",
+      createBookingGather,
     });
 
-    state = {
-      ...state,
-      bookingData: {
-        ...(state.bookingData || {}),
-        service_display: localizedServiceDisplay || serviceResolution.value,
-      },
-    };
+    if (serviceStepResult.handled) {
+      return {
+        handled: true,
+        state: serviceStepResult.state,
+        twiml: serviceStepResult.twiml,
+      };
+    }
+
+    state = serviceStepResult.state;
+    resolvedStepValue = serviceStepResult.resolvedValue;
   }
 
   if (isLocationDetailStep) {
@@ -606,94 +383,21 @@ export async function handleVoiceBookingTurn(
     resolvedStepValue = datetimeStepResult.resolvedValue;
   }
 
-  const nextData: Record<string, string> = {
-    ...(state.bookingData || {}),
-    [currentStep.step_key]: String(resolvedStepValue || "").trim(),
-    ...(isServiceStep
-      ? {
-          service_display: String(
-            state.bookingData?.service_display || resolvedStepValue || ""
-          ).trim(),
-        }
-      : {}),
-    ...(isDatetimeStep
-      ? {
-          datetime_display: String(resolvedStepValue || "").trim(),
-        }
-      : {}),
-  };
-
-  if (isDatetimeStep) {
-    delete nextData.__datetime_reference_suggested_starts;
-  }
-
-  const nextIndex = currentIndex + 1;
-  const nextStep = flow[nextIndex];
-
-  if (!nextStep) {
-    await deleteVoiceCallState(callSid);
-    throw new Error("BOOKING_CONFIRM_STEP_MISSING");
-  }
-
-  const nextStepPromptText = resolveBookingPromptText({
-    locale: currentLocale,
-    prompt: nextStep.prompt || "",
-    promptTranslations: nextStep.prompt_translations || null,
-  });
-
-  const promptResolved = resolveBookingFlowSpeech({
-    baseText: nextStepPromptText,
-    locale: currentLocale,
-    bookingData: nextData,
-    callerE164,
-  });
-
-  const prompt = twoSentencesMax(
-    assertNonEmptyBookingSpeech({
-      text: promptResolved,
-      stepKey: nextStep.step_key,
-      field: "prompt",
-    })
-  );
-
-  state = {
-    ...state,
-    bookingStepIndex: nextIndex,
-    bookingData: nextData,
-  };
-
-  await upsertVoiceCallState({
-    callSid,
-    tenantId: tenant.id,
-    lang: state.lang ?? currentLocale,
-    turn: state.turn ?? 0,
-    awaiting: state.awaiting ?? false,
-    pendingType: state.pendingType ?? null,
-    awaitingNumber: state.awaitingNumber ?? false,
-    altDest: state.altDest ?? null,
-    smsSent: state.smsSent ?? false,
-    bookingStepIndex: nextIndex,
-    bookingData: nextData,
-  });
-
-  const isPhoneStep = nextStep.expected_type === "phone";
-  const isConfirmationStep = nextStep.expected_type === "confirmation";
-
-  const gather = createBookingGather({
+  return handleBookingStepAdvance({
     vr,
-    locale: currentLocale,
-    isPhoneStep,
-    isConfirmationStep,
-  });
-
-  gather.say(
-    { language: currentLocale as any, voice: voiceName },
-    prompt
-  );
-
-  return {
-    handled: true,
+    tenantId: tenant.id,
+    flow,
+    currentStep,
+    currentIndex,
+    currentLocale,
+    voiceName,
+    callSid,
+    callerE164,
     state,
-    twiml: vr.toString(),
-  };
+    resolvedStepValue,
+    isServiceStep,
+    isDatetimeStep,
+    createBookingGather,
+    upsertVoiceCallState,
+  });
 }
