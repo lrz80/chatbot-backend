@@ -664,10 +664,16 @@ router.post('/', async (req: Request, res: Response) => {
   const consumedPendingUtterance =
     !userInput && !!pendingUtterance;
 
+  const isFirstPostWelcomeTurn =
+    (state.turn ?? 0) === 0 &&
+    !state.awaiting &&
+    !state.awaitingNumber &&
+    typeof state.bookingStepIndex !== "number";
+
   const resolvedInitialVoiceIntent = effectiveUserInput
     ? await resolveVoiceIntentFromUtteranceAsync(effectiveUserInput, {
-        timeoutMs: 2500,
-        minConfidence: 0.55,
+        timeoutMs: isFirstPostWelcomeTurn ? 3000 : 2500,
+        minConfidence: isFirstPostWelcomeTurn ? 0.45 : 0.55,
       })
     : "unknown";
 

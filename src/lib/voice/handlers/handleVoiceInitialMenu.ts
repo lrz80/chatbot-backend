@@ -134,10 +134,12 @@ export async function handleVoiceInitialMenu(
       action: "/webhook/voice-response",
       method: "POST",
       language: currentLocale as any,
-      speechTimeout: "auto",
+      speechTimeout: "1",
       timeout: 7,
       actionOnEmptyResult: true,
       bargeIn: true,
+      enhanced: true,
+      speechModel: "phone_call",
     });
 
     gather.say(
