@@ -9,15 +9,24 @@ import { renderVoiceLifecycle } from "../renderVoiceLifecycle";
 
 type VoiceLocale = "es-ES" | "en-US" | "pt-BR";
 
-type OfferSmsFn = (
-  vr: twiml.VoiceResponse,
-  locale: VoiceLocale,
-  voiceName: any,
-  callSid: string,
-  state: CallState,
-  tipo: LinkType,
-  tenantId: string
-) => Promise<void>;
+type OfferSmsParams = {
+  vr: twiml.VoiceResponse;
+  locale: VoiceLocale;
+  voiceName: any;
+  callSid: string;
+  state: CallState;
+  tipo: LinkType;
+  tenantId: string;
+  logBotSay: (params: {
+    callSid: string;
+    to: string;
+    text: string;
+    lang?: string;
+    context?: string;
+  }) => void;
+};
+
+type OfferSmsFn = (params: OfferSmsParams) => Promise<void>;
 
 type SendSupportSmsFn = (params: {
   tenantId: string;
@@ -45,6 +54,13 @@ type HandleVoiceTransferTurnParams = {
   tenantTwilioSmsNumber: string | null;
   representativeNumberRaw: string | null;
   offerSms: OfferSmsFn;
+  logBotSay: (params: {
+    callSid: string;
+    to: string;
+    text: string;
+    lang?: string;
+    context?: string;
+  }) => void;
   sendSupportSms: SendSupportSmsFn;
 };
 
@@ -74,6 +90,7 @@ export async function handleVoiceTransferTurn(
     tenantTwilioSmsNumber,
     representativeNumberRaw,
     offerSms,
+    logBotSay,
     sendSupportSms,
   } = params;
 
@@ -295,15 +312,16 @@ export async function handleHumanHandoffTurn(
     unavailableText
   );
 
-  await offerSms(
+  await offerSms({
     vr,
-    currentLocale,
+    locale: currentLocale,
     voiceName,
     callSid,
     state,
-    "soporte",
-    tenantId
-  );
+    tipo: "soporte",
+    tenantId,
+    logBotSay,
+  });
 
   logBotSay({
     callSid,

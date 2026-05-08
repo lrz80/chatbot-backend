@@ -3,9 +3,7 @@ import { Router, Request, Response } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
-import { cycleStartForNow } from '../../utils/billingCycle';
-import { sendSMS, normalizarNumero } from '../../lib/senders/sms';
-import { canUseChannel } from "../../lib/features";
+import { normalizarNumero } from '../../lib/senders/sms';
 
 import { getVoiceCallState } from "../../lib/voice/getVoiceCallState";
 import { upsertVoiceCallState } from "../../lib/voice/upsertVoiceCallState";
@@ -13,123 +11,47 @@ import { deleteVoiceCallState } from "../../lib/voice/deleteVoiceCallState";
 import {
   resolveVoiceIntentFromUtteranceAsync,
 } from "../../lib/voice/resolveVoiceIntentFromUtterance";
-import { traducirTexto } from "../../lib/traducirTexto";
 
-import { CallState, LinkType } from "../../lib/voice/types";
-import {
-  wordsToDigits,
-} from "../../lib/voice/voiceBookingHelpers";
-import { handleVoiceBookingTurn } from "../../lib/voice/handleVoiceBookingTurn";
+import { CallState } from "../../lib/voice/types";
 
 import {
-  normalizeSpeechOutput,
-  sanitizeForSay,
-  twoSentencesMax,
-} from "../../lib/voice/speechFormatting";
-
-import {
-  extractDigits,
-} from "../../lib/voice/resolveVoiceTurnSignals";
-import {
-  resolveEffectiveVoiceLocale,
   resolveLocaleFromQueryLang,
   resolveVoiceLanguageSelection,
 } from "../../lib/voice/resolveVoiceLanguage";
-import { renderVoiceReply } from "../../lib/voice/renderVoiceReply";
-
-import { resolveVoiceSmsFlow } from "../../lib/voice/resolveVoiceSmsFlow";
-import { resolveVoiceMenuIntent } from "../../lib/voice/resolveVoiceMenuIntent";
-import { generateVoiceSnippetFromKnowledge } from "../../lib/voice/generateVoiceSnippetFromKnowledge";
-import { sendVoiceLinkSms } from "../../lib/voice/sendVoiceLinkSms";
-import { resolveVoiceBusinessTopic } from "../../lib/voice/resolveVoiceBusinessTopic";
 import { renderVoiceLifecycle } from "../../lib/voice/renderVoiceLifecycle";
 import { resolveVoiceConversationClosure } from "../../lib/voice/resolveVoiceConversationClosure";
-import { generateVoiceFollowupReply } from "../../lib/voice/generateVoiceFollowupReply";
 import { resolveVoiceProviderVoice } from "../../lib/voice/resolveVoiceProviderVoice";
-import { resolveVoiceSmsDeliveryOutcome } from "../../lib/voice/resolveVoiceSmsDeliveryOutcome";
-import { renderVoiceSmsConfirmation } from "../../lib/voice/renderVoiceSmsConfirmation";
 import { resolveVoiceMetaSignal } from "../../lib/voice/resolveVoiceMetaSignal";
 import { resolveVoiceMenuSelection } from "../../lib/voice/resolveVoiceMenuSelection";
 import { normalizeVoiceTurnInput } from "../../lib/voice/normalizeVoiceTurnInput";
 import { detectarIdioma } from "../../lib/detectarIdioma";
 import { handleVoiceSilenceTurn } from "../../lib/voice/handlers/handleVoiceSilenceTurn";
-import {
-  handleVoiceTransferTurn,
-  handleHumanHandoffTurn,
-} from "../../lib/voice/handlers/handleVoiceTransferTurn";
+import { handleVoiceTransferTurn } from "../../lib/voice/handlers/handleVoiceTransferTurn";
 import { handleVoiceInitialMenu } from "../../lib/voice/handlers/handleVoiceInitialMenu";
 import { handleVoiceBookingEntry } from "../../lib/voice/handlers/handleVoiceBookingEntry";
 import { getBookingFlow } from "../../lib/appointments/getBookingFlow";
 
+import { parseBookingSmsPayload } from "../../lib/voice/runtime/voiceBookingSmsHelpers";
+
+import {
+  offerSms,
+  enviarSmsConLink,
+  getTenantBrand,
+} from "../../lib/voice/runtime/voiceSmsRuntime";
+import { sendBookingConfirmationSms } from "../../lib/voice/runtime/sendBookingConfirmationSms";
+import { resolveVoiceSmsTurnState } from "../../lib/voice/runtime/resolveVoiceSmsTurnState";
+import { generateVoiceAssistantReply } from "../../lib/voice/runtime/generateVoiceAssistantReply";
+import { handleAwaitingSmsDestinationTurn } from "../../lib/voice/runtime/handleAwaitingSmsDestinationTurn";
+import { handleActiveBookingInterruption } from "../../lib/voice/runtime/handleActiveBookingInterruption";
+import { handleVoiceSmsFlow } from "../../lib/voice/runtime/handleVoiceSmsFlow";
+import { persistVoiceTurn } from "../../lib/voice/runtime/persistVoiceTurn";
+import { renderFinalVoiceTurn } from "../../lib/voice/runtime/renderFinalVoiceTurn";
+import { resolveVoiceRequestContext } from "../../lib/voice/runtime/resolveVoiceRequestContext";
+
 const router = Router();
 const CHANNEL_KEY = "voice";
 
-const GLOBAL_ID = process.env.GLOBAL_CHANNEL_TENANT_ID!;
-
-// ——— Helpers para confirmar/capturar número destino ———
-const maskForVoice = (n: string) =>
-  (n || '')
-    .replace(/^\+?(\d{0,3})\d{0,6}(\d{2})(\d{2})$/, (_, p, a, b) =>
-      `+${p || ''} *** ** ${a} ${b}`
-    );
-
-const isValidE164 = (n?: string | null) => !!n && /^\+\d{10,15}$/.test(n);
-
 const short = (s: string, n = 120) => (s.length > n ? s.slice(0, n) + '…' : s);
-
-type BookingSmsPayload = {
-  business_name: string;
-  business_phone: string;
-  service: string;
-  datetime: string;
-  customer_name: string;
-  google_calendar_link: string;
-  extra_fields?: Record<string, string>;
-};
-
-function parseBookingSmsPayload(
-  bookingData: Record<string, any> | undefined
-): BookingSmsPayload | null {
-  const raw = bookingData?.booking_sms_payload;
-
-  if (!raw || typeof raw !== "string") {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-
-    const extraFields =
-      parsed?.extra_fields &&
-      typeof parsed.extra_fields === "object" &&
-      !Array.isArray(parsed.extra_fields)
-        ? Object.fromEntries(
-            Object.entries(parsed.extra_fields)
-              .map(([key, value]) => [
-                String(key || "").trim(),
-                String(value || "").trim(),
-              ])
-              .filter(([key, value]) => key && value)
-          )
-        : {};
-
-    return {
-      business_name: String(parsed?.business_name || "").trim(),
-      business_phone: String(parsed?.business_phone || "").trim(),
-      service: String(parsed?.service || "").trim(),
-      datetime: String(parsed?.datetime || "").trim(),
-      customer_name: String(parsed?.customer_name || "").trim(),
-      google_calendar_link: String(parsed?.google_calendar_link || "").trim(),
-      extra_fields: extraFields,
-    };
-  } catch (error) {
-    console.error("[VOICE][BOOKING_SMS][PARSE_ERROR]", {
-      error,
-      raw,
-    });
-    return null;
-  }
-}
 
 function hasInitialVoiceIntroPlayed(state: CallState): boolean {
   return String(state.bookingData?.__voice_intro_played || "") === "1";
@@ -191,253 +113,6 @@ function normalizeDetectedVoiceLanguage(value: unknown): "es" | "en" | "pt" | nu
   }
 
   return null;
-}
-
-function buildBookingConfirmationSmsBody(
-  payload: BookingSmsPayload,
-  locale: "es-ES" | "en-US" | "pt-BR"
-): string {
-  if (locale.startsWith("es")) {
-    const lines = [
-      "Tu reserva quedó confirmada ✅",
-      "",
-      `Servicio: ${payload.service || "No especificado"}`,
-      `Fecha y hora: ${payload.datetime || "No especificada"}`,
-      `Cliente: ${payload.customer_name || "No especificado"}`,
-      ...buildBookingExtraFieldLines(payload.extra_fields),
-    ];
-
-    if (payload.business_phone) {
-      lines.push(
-        "",
-        `Si necesitas cambiar tu reserva contáctanos al Tel: ${payload.business_phone}.`
-      );
-    }
-
-    if (payload.google_calendar_link) {
-      lines.push(
-        "",
-        "Guarda esta cita en tu Google Calendar:",
-        payload.google_calendar_link
-      );
-    }
-
-    return lines.join("\n").trim();
-  }
-
-  if (locale.startsWith("pt")) {
-    const lines = [
-      "Sua reserva foi confirmada ✅",
-      "",
-      `Serviço: ${payload.service || "Não especificado"}`,
-      `Data e hora: ${payload.datetime || "Não especificada"}`,
-      `Cliente: ${payload.customer_name || "Não especificado"}`,
-      ...buildBookingExtraFieldLines(payload.extra_fields),
-    ];
-
-    if (payload.business_phone) {
-      lines.push(
-        "",
-        `Se precisar alterar sua reserva, entre em contato pelo Tel: ${payload.business_phone}.`
-      );
-    }
-
-    if (payload.google_calendar_link) {
-      lines.push(
-        "",
-        "Salve este compromisso no seu Google Calendar:",
-        payload.google_calendar_link
-      );
-    }
-
-    return lines.join("\n").trim();
-  }
-
-  const lines = [
-    "Your booking is confirmed ✅",
-    "",
-    `Service: ${payload.service || "Not specified"}`,
-    `Date and time: ${payload.datetime || "Not specified"}`,
-    `Customer: ${payload.customer_name || "Not specified"}`,
-    ...buildBookingExtraFieldLines(payload.extra_fields),
-  ];
-
-  if (payload.business_phone) {
-    lines.push(
-      "",
-      `If you need to change your booking, contact us at: ${payload.business_phone}.`
-    );
-  }
-
-  if (payload.google_calendar_link) {
-    lines.push(
-      "",
-      "Save this booking to your Google Calendar:",
-      payload.google_calendar_link
-    );
-  }
-
-  return lines.join("\n").trim();
-}
-
-function humanizeBookingFieldName(key: string): string {
-  return String(key || "")
-    .replace(/_/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function buildBookingExtraFieldLines(
-  extraFields?: Record<string, string>
-): string[] {
-  return Object.entries(extraFields || {})
-    .filter(([key, value]) => String(key).trim() && String(value).trim())
-    .map(([key, value]) => {
-      return `${humanizeBookingFieldName(key)}: ${String(value).trim()}`;
-    });
-}
-
-//  Marca dinámica del tenant (solo `name`)
-async function getTenantBrand(tenantId: string): Promise<string> {
-  const { rows } = await pool.query(
-    `SELECT NULLIF(TRIM(name), '') AS brand
-       FROM tenants
-      WHERE id = $1
-      LIMIT 1`,
-    [tenantId]
-  );
-  const brand = (rows?.[0]?.brand || '').toString().trim();
-  return brand || 'Aamy';
-}
-
-async function enviarSmsConLink(
-  tipo: LinkType,
-  {
-    tenantId,
-    callerE164,
-    callerRaw,
-    smsFromCandidate,
-    callSid,
-    overrideDestE164,
-  }: {
-    tenantId: string;
-    callerE164: string | null;
-    callerRaw: string;
-    smsFromCandidate: string | null;
-    callSid: string;
-    overrideDestE164?: string | null;
-  }
-) {
-  const brand = await getTenantBrand(tenantId);
-
-  const result = await sendVoiceLinkSms({
-    tenantId,
-    smsType: tipo,
-    callerRaw,
-    callerE164,
-    overrideDestE164,
-    smsFromCandidate,
-    brand,
-  });
-
-  if (!result.ok) {
-    throw new Error(result.message);
-  }
-
-  console.log("[VOICE/SMS] DEBUG about to send", {
-    tipo,
-    toDest: result.toDest,
-    smsFrom: result.smsFrom,
-    tenantId,
-    callSid,
-    chosen: {
-      nombre: result.linkName,
-      url: result.linkUrl,
-    },
-  });
-
-  console.log("[VOICE/SMS] sendSMS -> enviados =", result.sentCount);
-
-  console.log(
-    "[VOICE][SMS_SENT]",
-    JSON.stringify({
-      callSid,
-      sent: result.sentCount,
-      to: result.toDest,
-    })
-  );
-
-  const prevState = await getVoiceCallState(callSid);
-
-  await upsertVoiceCallState({
-    callSid,
-    tenantId,
-    lang: prevState?.lang ?? null,
-    turn: prevState?.turn ?? 0,
-    awaiting: false,
-    pendingType: null,
-    awaitingNumber: prevState?.awaiting_number ?? false,
-    altDest: prevState?.alt_dest ?? null,
-    smsSent: true,
-    bookingStepIndex: prevState?.booking_step_index ?? null,
-    bookingData: prevState?.booking_data ?? {},
-  });
-
-  await pool.query(
-    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-     VALUES ($1, 'system', $2, NOW(), $3, $4)`,
-    [tenantId, "SMS enviado con link único.", CHANNEL_KEY, result.smsFrom || "sms"]
-  );
-}
-
-//  Helper global: ofrecer SMS + setear estado
-async function offerSms(
-  vr: twiml.VoiceResponse,
-  locale: 'es-ES' | 'en-US' | 'pt-BR',
-  voiceName: any,
-  callSid: string,
-  state: CallState,
-  tipo: LinkType,
-  tenantId: string
-) {
-  const ask = renderVoiceReply("sms_offer_confirmation", {
-    locale,
-    linkType: tipo,
-  });
-
-  const gather = vr.gather({
-    input: ['speech','dtmf'] as any,
-    numDigits: 1,
-    action: '/webhook/voice-response',
-    method: 'POST',
-    language: locale as any,
-    speechTimeout: 'auto',
-    timeout: 7,
-    actionOnEmptyResult: true,
-    bargeIn: true,
-    // 👇 ayuda al ASR a captar “sí/yes/1”
-    hints: locale.startsWith('es') ? 'sí, si, uno, 1' : 'yes, one, 1',
-  });
-
-  gather.say({ language: locale as any, voice: voiceName }, ask);
-
-  await upsertVoiceCallState({
-    callSid,
-    tenantId,
-    lang: state.lang ?? locale,
-    turn: state.turn ?? 0,
-    awaiting: true,
-    pendingType: tipo,
-    awaitingNumber: state.awaitingNumber ?? false,
-    altDest: state.altDest ?? null,
-    smsSent: state.smsSent ?? false,
-    bookingStepIndex: state.bookingStepIndex ?? null,
-    bookingData: state.bookingData ?? {},
-  });
-
-  // 👉 log del prompt de confirmación SMS
-  logBotSay({ callSid, to: 'ivr', text: ask, lang: locale, context: `offer-sms:${tipo}` });
 }
 
 // ——— LOG HELPERS ———
@@ -718,21 +393,25 @@ router.post('/', async (req: Request, res: Response) => {
   });
 
   try {
-    const tRes = await pool.query(
-      `SELECT id, name,
-              membresia_activa, membresia_inicio,
-              twilio_sms_number, twilio_voice_number
-         FROM tenants
-        WHERE twilio_voice_number = $1
-        LIMIT 1`,
-      [didNumber]
-    );
+    const voiceRequestContext = await resolveVoiceRequestContext({
+      callSid,
+      didNumber,
+      state,
+      langParam,
+      channelKey: CHANNEL_KEY,
+    });
 
-    const tenant = tRes.rows[0];
-    if (!tenant) {
-      console.error("[VOICE] tenant no encontrado para twilio_voice_number:", didNumber);
-      return res.status(404).type("text/plain").send("tenant_not_found");
+    if (!voiceRequestContext.ok) {
+      return res.type("text/xml").send(voiceRequestContext.twiml);
     }
+
+    const {
+      tenant,
+      cfg,
+      brand,
+      currentLocale,
+      voiceName,
+    } = voiceRequestContext;
 
     if (langParam) {
       const chosen =
@@ -782,126 +461,6 @@ router.post('/', async (req: Request, res: Response) => {
         ),
       };
     }
-
-    // Nombre de marca del tenant (para hablar en la intro)
-    const brand = await getTenantBrand(tenant.id);
-
-    // ✅ Gate VOZ por plan + toggles + pausa (igual que el front)
-    try {
-      const gate = await canUseChannel(tenant.id, "voice");
-
-      if (!gate.enabled) {
-        // Limpia estado de la llamada
-        await deleteVoiceCallState(callSid);
-
-        const bye = new twiml.VoiceResponse();
-        const lang =
-          ((state.lang as any) ||
-            (typeof req.query.lang === 'string' && req.query.lang === 'es'
-              ? 'es-ES'
-              : 'en-US')) as any;
-
-        // ✅ Mensaje 100% neutro para el cliente (no menciona plan ni membresía)
-        const msg = renderVoiceReply("voice_channel_unavailable", {
-          locale: lang,
-        });
-
-        console.log("🛑 VOZ bloqueado por plan/toggle/pausa", {
-          tenantId: tenant.id,
-          plan_enabled: gate.plan_enabled,
-          settings_enabled: gate.settings_enabled,
-          paused_until: gate.paused_until,
-          reason: gate.reason,
-        });
-
-        bye.say({ language: lang, voice: resolveVoiceProviderVoice(lang) as any }, msg);
-        bye.hangup();
-        return res.type("text/xml").send(bye.toString());
-      }
-    } catch (e) {
-      console.warn("Guard VOZ: error en canUseChannel('voice'); bloquea por seguridad:", e);
-      await deleteVoiceCallState(callSid);
-      const bye = new twiml.VoiceResponse();
-      bye.say(
-        { language: "es-ES", voice: resolveVoiceProviderVoice("es-ES") as any },
-        renderVoiceLifecycle("generic_voice_unavailable", "es-ES")
-      );
-      bye.hangup();
-      return res.type("text/xml").send(bye.toString());
-    }
-
-    if (!tenant.membresia_activa) {
-      // idioma según lo que ya eligió la persona (o inglés por defecto)
-      const lang =
-        ((state.lang as any) ||
-          (typeof req.query.lang === 'string' && req.query.lang === 'es'
-            ? 'es-ES'
-            : 'en-US')) as any;
-
-      const text = renderVoiceReply("assistant_unavailable", {
-        locale: lang,
-      });
-
-      vr.say({ voice: resolveVoiceProviderVoice(lang) as any, language: lang }, text);
-      vr.hangup();
-      return res.type('text/xml').send(vr.toString());
-    }
-
-    const currentLocale = resolveEffectiveVoiceLocale({
-      persistedLang: state.lang,
-      queryLang: langParam,
-      fallback: "en-US",
-    });
-
-    let cfgRes = await pool.query(
-      `SELECT *
-        FROM voice_configs
-        WHERE tenant_id = $1
-          AND canal = $2
-          AND idioma = $3
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT 1`,
-      [tenant.id, CHANNEL_KEY, currentLocale]
-    );
-
-    let cfg = cfgRes.rows[0];
-
-    if (!cfg) {
-      cfgRes = await pool.query(
-        `SELECT *
-          FROM voice_configs
-          WHERE tenant_id = $1
-            AND canal = $2
-          ORDER BY
-            CASE
-              WHEN idioma = 'en-US' THEN 0
-              WHEN idioma = 'es-ES' THEN 1
-              WHEN idioma = 'pt-BR' THEN 2
-              ELSE 3
-            END,
-            updated_at DESC,
-            created_at DESC
-          LIMIT 1`,
-        [tenant.id, CHANNEL_KEY]
-      );
-
-      cfg = cfgRes.rows[0];
-    }
-
-    if (!cfg) {
-      console.error("[VOICE] voice_config no encontrada para tenant:", tenant.id, "locale:", currentLocale);
-      return res.status(404).type("text/plain").send("voice_config_not_found");
-    }
-
-    const cfgLocale = String(cfg?.idioma || "").trim();
-
-    const localeCompatibleVoiceName =
-      cfgLocale === currentLocale ? cfg?.voice_name : undefined;
-
-    const voiceName: any = resolveVoiceProviderVoice(
-      currentLocale,
-      localeCompatibleVoiceName
-    );
 
     // 👉 Primer hit de la llamada: intro en inglés + “para español oprima 2” con nombre del negocio
     const initialMenuResult = await handleVoiceInitialMenu({
@@ -990,6 +549,7 @@ router.post('/', async (req: Request, res: Response) => {
       tenantTwilioSmsNumber: tenant.twilio_sms_number || null,
       representativeNumberRaw: cfg?.representante_number || null,
       offerSms,
+      logBotSay,
       sendSupportSms: async ({
         tenantId,
         callerE164,
@@ -1033,7 +593,7 @@ router.post('/', async (req: Request, res: Response) => {
       await deleteVoiceCallState(callSid);
 
       vr.say(
-        { language: currentLocale as any, voice: voiceName },
+        { language: currentLocale as any, voice: voiceName as any },
         renderVoiceLifecycle("call_goodbye", currentLocale)
       );
 
@@ -1041,198 +601,44 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type("text/xml").send(vr.toString());
     }
 
-    const hasActiveBookingFlow = typeof state.bookingStepIndex === "number";
-
-    if (hasActiveBookingFlow && effectiveUserInput) {
-      const bookingFlow = await getBookingFlow(tenant.id);
-
-      const activeBookingStep =
-        typeof state.bookingStepIndex === "number"
-          ? bookingFlow[state.bookingStepIndex]
-          : null;
-
-      const activeBookingSlot =
-        typeof activeBookingStep?.validation_config?.slot === "string"
-          ? activeBookingStep.validation_config.slot.trim()
-          : "";
-
-      const isConfirmationLikeBookingStep =
-        activeBookingStep?.expected_type === "confirmation" ||
-        activeBookingStep?.step_key === "offer_booking_sms" ||
-        activeBookingSlot === "confirmation";
-
-      const interruptionBusinessTopic = resolveVoiceBusinessTopic(effectiveUserInput);
-
-      const interruptionVoiceIntent = await resolveVoiceIntentFromUtteranceAsync(
+    const activeBookingInterruptionResult =
+      await handleActiveBookingInterruption({
+        vr,
+        state,
         effectiveUserInput,
-        {
-          timeoutMs: 1500,
-          minConfidence: 0.65,
-        }
-      );
-      const interruptionClosure = await resolveVoiceConversationClosure(
-        effectiveUserInput,
-        currentLocale
-      );
-
-      const interruptionMetaSignal = interruptionBusinessTopic.matched
-        ? { intent: "none" as const, confidence: 0 }
-        : await resolveVoiceMetaSignal({
-            utterance: effectiveUserInput,
-            locale: currentLocale,
-          });
-
-      const isTransactionalBookingStep =
-        !!activeBookingStep &&
-        (
-          activeBookingSlot === "datetime" ||
-          activeBookingSlot === "service" ||
-          activeBookingSlot === "location_detail" ||
-          activeBookingSlot === "pet_weight" ||
-          activeBookingSlot === "customer_name" ||
-          activeBookingSlot === "customer_phone" ||
-          activeBookingStep.step_key === "datetime" ||
-          activeBookingStep.step_key === "service" ||
-          activeBookingStep.step_key === "location_detail" ||
-          activeBookingStep.step_key === "pet_weight" ||
-          activeBookingStep.step_key === "customer_name" ||
-          activeBookingStep.step_key === "customer_phone"
-        );
-
-      const shouldLeaveBookingForBusinessTopic =
-        !isTransactionalBookingStep &&
-        interruptionBusinessTopic.matched &&
-        interruptionBusinessTopic.topic &&
-        interruptionBusinessTopic.linkType;
-
-      const shouldLeaveBookingForHumanHandoff =
-        interruptionVoiceIntent === "human_handoff";
-
-      const shouldCloseBooking =
-        isConfirmationLikeBookingStep &&
-        (
-          interruptionClosure.shouldClose ||
-          interruptionMetaSignal.intent === "close" ||
-          interruptionMetaSignal.intent === "reject"
-        );
-
-      if (
-        shouldLeaveBookingForBusinessTopic ||
-        shouldLeaveBookingForHumanHandoff ||
-        shouldCloseBooking
-      ) {
-        const preservedBookingData: Record<string, any> = {};
-
-        if (state.bookingData?.__voice_intro_played) {
-          preservedBookingData.__voice_intro_played =
-            state.bookingData.__voice_intro_played;
-        }
-
-        state = {
-          ...state,
-          awaiting: false,
-          pendingType: null,
-          awaitingNumber: false,
-          bookingStepIndex: undefined,
-          bookingData: preservedBookingData,
-        };
-
-        await upsertVoiceCallState({
+        tenant,
+        cfg,
+        callSid,
+        didNumber,
+        callerE164,
+        callerRaw,
+        currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
+        voiceName,
+        logBotSay,
+        getBookingFlow,
+        normalizarNumero,
+        offerSms,
+        sendSupportSms: async ({
+          tenantId,
+          callerE164,
+          callerRaw,
+          smsFromCandidate,
           callSid,
-          tenantId: tenant.id,
-          lang: state.lang ?? currentLocale,
-          turn: state.turn ?? 0,
-          awaiting: false,
-          pendingType: null,
-          awaitingNumber: false,
-          altDest: state.altDest ?? null,
-          smsSent: state.smsSent ?? false,
-          bookingStepIndex: null,
-          bookingData: preservedBookingData,
-        });
-
-        if (shouldLeaveBookingForHumanHandoff) {
-          const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
-
-          const representanteNumber = REPRESENTANTE_NUMBER
-            ? normalizarNumero(String(REPRESENTANTE_NUMBER))
-            : null;
-
-          console.log("[VOICE][TRANSFER_TARGET]", {
-            callSid,
-            tenantId: tenant.id,
-            didNumber,
+        }) => {
+          await enviarSmsConLink("soporte", {
+            tenantId,
             callerE164,
-            rawRepresentanteNumber: REPRESENTANTE_NUMBER,
-            normalizedRepresentanteNumber: representanteNumber,
-          });
-
-          if (representanteNumber) {
-            vr.say(
-              { language: currentLocale as any, voice: voiceName },
-              renderVoiceReply("transfer_connecting", {
-                locale: currentLocale,
-              })
-            );
-
-            const dial = vr.dial({
-              action: "/webhook/voice-response?transfer=1",
-              method: "POST",
-              timeout: 15,
-              answerOnBridge: true,
-              callerId: didNumber,
-            });
-
-            dial.number(representanteNumber);
-
-            return res.type("text/xml").send(vr.toString());
-          }
-
-          vr.say(
-            { language: currentLocale as any, voice: voiceName },
-            renderVoiceReply("transfer_unavailable", {
-              locale: currentLocale,
-            })
-          );
-
-          await offerSms(
-            vr,
-            currentLocale as any,
-            voiceName,
+            callerRaw,
+            smsFromCandidate,
             callSid,
-            state,
-            "soporte",
-            tenant.id
-          );
+          });
+        },
+      });
 
-          return res.type("text/xml").send(vr.toString());
-        }
+    state = activeBookingInterruptionResult.state;
 
-        console.log("[VOICE][BOOKING_INTERRUPTED]", {
-          callSid,
-          tenantId: tenant.id,
-          reason: shouldLeaveBookingForBusinessTopic
-            ? "business_topic"
-            : shouldLeaveBookingForHumanHandoff
-            ? "human_handoff"
-            : "close_or_reject",
-          userInput: effectiveUserInput,
-          businessTopic: interruptionBusinessTopic,
-          metaSignal: interruptionMetaSignal,
-        });
-
-        if (shouldCloseBooking && !shouldLeaveBookingForBusinessTopic) {
-          await deleteVoiceCallState(callSid);
-
-          vr.say(
-            { language: currentLocale as any, voice: voiceName },
-            renderVoiceLifecycle("call_goodbye", currentLocale)
-          );
-
-          vr.hangup();
-          return res.type("text/xml").send(vr.toString());
-        }
-      }
+    if (activeBookingInterruptionResult.handled) {
+      return res.type("text/xml").send(activeBookingInterruptionResult.twiml);
     }
 
     const bookingEntryResult = await handleVoiceBookingEntry({
@@ -1283,1255 +689,117 @@ router.post('/', async (req: Request, res: Response) => {
         ).intent === "affirm";
 
       if (bookingSmsPayload && confirmedBookingSms) {
-        const smsFrom =
-          tenant.twilio_sms_number || tenant.twilio_voice_number || "";
-
-        const toDest =
-          (state.altDest && isValidE164(state.altDest) ? state.altDest : null) ||
-          callerE164;
-
-        const body = buildBookingConfirmationSmsBody(
-          bookingSmsPayload,
-          currentLocale
-        );
-
-        console.log("[VOICE][BOOKING_SMS][DIRECT_SEND_ATTEMPT]", {
-          callSid,
-          tenantId: tenant.id,
-          smsFrom,
-          toDest,
-          body,
-          bookingSmsPayload,
-        });
-
         const vrSms = new twiml.VoiceResponse();
 
-        if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
-          const bad = currentLocale.startsWith("es")
-            ? "No pude validar tu número para enviarte el SMS. ¿Te ayudo con algo más?"
-            : currentLocale.startsWith("pt")
-            ? "Não consegui validar seu número para enviar o SMS. Posso te ajudar com mais alguma coisa?"
-            : "I could not validate your number to send the SMS. Can I help you with anything else?";
+        const result = await sendBookingConfirmationSms({
+          tenant,
+          callSid,
+          currentLocale,
+          voiceName,
+          state,
+          bookingSmsPayload,
+          callerE164,
+          didNumber,
+          vr: vrSms,
+          logBotSay,
+          successMode: "direct_followup",
+        });
 
-          const gather = vrSms.gather({
-            input: ["speech", "dtmf"] as any,
-            numDigits: 1,
-            action: "/webhook/voice-response",
-            method: "POST",
-            language: currentLocale as any,
-            speechTimeout: "auto",
-            timeout: 7,
-            actionOnEmptyResult: true,
-            bargeIn: true,
-          });
+        state = result.updatedState;
 
-          gather.say({ language: currentLocale as any, voice: voiceName }, bad);
-
-          return res.type("text/xml").send(vrSms.toString());
+        if (result.twiml) {
+          return res.type("text/xml").send(result.twiml);
         }
-
-        if (!smsFrom || smsFrom.startsWith("whatsapp:")) {
-          const bad = currentLocale.startsWith("es")
-            ? "No hay un número SMS válido configurado para enviar la confirmación. ¿Te ayudo con algo más?"
-            : currentLocale.startsWith("pt")
-            ? "Não há um número SMS válido configurado para enviar a confirmação. Posso te ajudar com mais alguma coisa?"
-            : "There is no valid SMS number configured to send the confirmation. Can I help you with anything else?";
-
-          const gather = vrSms.gather({
-            input: ["speech", "dtmf"] as any,
-            numDigits: 1,
-            action: "/webhook/voice-response",
-            method: "POST",
-            language: currentLocale as any,
-            speechTimeout: "auto",
-            timeout: 7,
-            actionOnEmptyResult: true,
-            bargeIn: true,
-          });
-
-          gather.say({ language: currentLocale as any, voice: voiceName }, bad);
-
-          return res.type("text/xml").send(vrSms.toString());
-        }
-
-        const sentCount = await sendSMS({
-          mensaje: body,
-          destinatarios: [toDest],
-          fromNumber: smsFrom || undefined,
-          tenantId: tenant.id,
-          campaignId: null,
-        });
-
-        console.log("[VOICE][BOOKING_SMS][DIRECT_SENT]", {
-          callSid,
-          tenantId: tenant.id,
-          sentCount,
-          toDest,
-        });
-
-        state = {
-          ...state,
-          awaiting: false,
-          pendingType: null,
-          smsSent: true,
-        };
-
-        await upsertVoiceCallState({
-          callSid,
-          tenantId: tenant.id,
-          lang: state.lang ?? currentLocale,
-          turn: state.turn ?? 0,
-          awaiting: false,
-          pendingType: null,
-          awaitingNumber: state.awaitingNumber ?? false,
-          altDest: state.altDest ?? null,
-          smsSent: true,
-          bookingStepIndex: null,
-          bookingData: state.bookingData ?? {},
-        });
-
-        const ok = currentLocale.startsWith("es")
-          ? "Te acabo de enviar los detalles de tu reserva por SMS. ¿Necesitas algo más?"
-          : currentLocale.startsWith("pt")
-          ? "Acabei de te enviar os detalhes da sua reserva por SMS. Posso te ajudar com mais alguma coisa?"
-          : "I just sent your booking details by SMS. Do you need anything else?";
-
-        const gather = vrSms.gather({
-          input: ["speech", "dtmf"] as any,
-          numDigits: 1,
-          action: "/webhook/voice-response",
-          method: "POST",
-          language: currentLocale as any,
-          speechTimeout: "auto",
-          timeout: 7,
-          actionOnEmptyResult: true,
-          bargeIn: true,
-        });
-
-        gather.say({ language: currentLocale as any, voice: voiceName }, ok);
-
-        logBotSay({
-          callSid,
-          to: didNumber || "ivr",
-          text: ok,
-          lang: currentLocale,
-          context: "booking_sms_direct_sent_followup",
-        });
-
-        return res.type("text/xml").send(vrSms.toString());
       }
+    }
+
+    const awaitingSmsDestinationResult = await handleAwaitingSmsDestinationTurn({
+      effectiveUserInput,
+      digits,
+      state,
+      tenant,
+      callSid,
+      callerE164,
+      callerRaw,
+      currentLocale,
+      voiceName,
+    });
+
+    state = awaitingSmsDestinationResult.updatedState;
+
+    if (awaitingSmsDestinationResult.handled) {
+      return res.type("text/xml").send(awaitingSmsDestinationResult.twiml);
     }
 
     const hasActiveBookingStep = typeof state.bookingStepIndex === "number";
 
-    // ✅ capturar número cuando estábamos esperando uno
-    if (!hasActiveBookingStep && state.awaitingNumber && (effectiveUserInput || digits)) {
-      let rawDigits = digits || extractDigits(effectiveUserInput);
-
-      if (!rawDigits) {
-        const spoken = wordsToDigits(effectiveUserInput);
-        rawDigits = extractDigits(spoken) || "";
-      }
-      let candidate = rawDigits ? `+${rawDigits.replace(/^\+/, '')}` : null;
-
-      try {
-        if (candidate) candidate = normalizarNumero(candidate);
-      } catch {}
-
-      if (!candidate || !isValidE164(candidate)) {
-        const askAgain = renderVoiceReply("sms_invalid_destination_number", {
-          locale: currentLocale,
-        });
-        const vrNum = new twiml.VoiceResponse();
-        vrNum.say({ language: currentLocale as any, voice: voiceName }, askAgain);
-        vrNum.gather({
-        input: ['speech','dtmf'] as any,
-        numDigits: 15,
-        action: '/webhook/voice-response',
-        method: 'POST',
-        language: currentLocale as any,
-        speechTimeout: 'auto',
-        timeout: 10,               // un poco más de tiempo
-        actionOnEmptyResult: true,
-        bargeIn: true,
-        enhanced: true,            // mejora el ASR
-        speechModel: 'phone_call', // modelo recomendado para llamadas
-        hints: currentLocale.startsWith('es')
-          ? 'más, mas, signo, uno, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, cero, guion, espacio'
-          : 'plus, one, two, three, four, five, six, seven, eight, nine, zero, dash, space'
-      });
-        return res.type('text/xml').send(vrNum.toString());
-      }
-
-      // guardamos destino y dejamos de esperar número
-      const nextState = { ...state, altDest: candidate, awaitingNumber: false };
-
-      await upsertVoiceCallState({
-        callSid,
-        tenantId: tenant.id,
-        lang: nextState.lang ?? currentLocale,
-        turn: nextState.turn ?? 0,
-        awaiting: nextState.awaiting ?? false,
-        pendingType: nextState.pendingType ?? null,
-        awaitingNumber: false,
-        altDest: candidate,
-        smsSent: nextState.smsSent ?? false,
-        bookingStepIndex: nextState.bookingStepIndex ?? null,
-        bookingData: nextState.bookingData ?? {},
-      });
-
-      // si había tipo pendiente, enviamos ya
-      const tipo = nextState.pendingType || 'web';
-      try {
-        await enviarSmsConLink(tipo, {
-          tenantId: tenant.id,
-          callerE164,
-          callerRaw,
-          smsFromCandidate: tenant.twilio_sms_number || '',
-          callSid,
-          overrideDestE164: candidate,
-        });
-        const ok = renderVoiceReply("sms_sent_success", {
-          locale: currentLocale,
-          linkType: tipo,
-        });
-
-        const vrOk = new twiml.VoiceResponse();
-        vrOk.say({ language: currentLocale as any, voice: voiceName }, ok);
-        vrOk.gather({
-          input: ['speech','dtmf'] as any,
-          numDigits: 1,
-          action: '/webhook/voice-response',
-          method: 'POST',
-          language: currentLocale as any,
-          speechTimeout: 'auto',
-          timeout: 7,
-          actionOnEmptyResult: true,
-        });
-        return res.type('text/xml').send(vrOk.toString());
-      } catch (e) {
-        const bad = renderVoiceReply("sms_send_error", {
-          locale: currentLocale,
-        });
-        const vrBad = new twiml.VoiceResponse();
-        vrBad.say({ language: currentLocale as any, voice: voiceName }, bad);
-        return res.type('text/xml').send(vrBad.toString());
-      }
-    }
-
     // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI
-    let earlySmsType: LinkType | null = null;
-
-    const earlyMetaSignal = !hasActiveBookingStep
-      ? await resolveVoiceMetaSignal({
-          utterance: effectiveUserInput,
-          locale: currentLocale,
-        })
-      : { intent: "other", confidence: 0 };
-
-    if (
-      state.awaiting &&
-      effectiveUserInput &&
-      earlyMetaSignal.intent !== "affirm" &&
-      earlyMetaSignal.intent !== "reject"
-    ) {
-      const nextDigit = await resolveVoiceMenuSelection({
-        utterance: effectiveUserInput,
-        locale: currentLocale,
-      });
-
-      state = {
-        ...state,
-        awaiting: false,
-        pendingType: null,
-      };
-
-      await upsertVoiceCallState({
-        callSid,
-        tenantId: tenant.id,
-        lang: state.lang ?? currentLocale,
-        turn: state.turn ?? 0,
-        awaiting: false,
-        pendingType: null,
-        awaitingNumber: state.awaitingNumber ?? false,
-        altDest: state.altDest ?? null,
-        smsSent: state.smsSent ?? false,
-        bookingStepIndex: state.bookingStepIndex ?? null,
-        bookingData: state.bookingData ?? {},
-      });
-
-      if (nextDigit) {
-        digits = nextDigit;
-      }
-    }
-
-    const earlySmsFlow = !hasActiveBookingStep
-      ? await resolveVoiceSmsFlow({
-          effectiveUserInput,
-          digits,
-          awaiting: !!state.awaiting,
-          pendingType: state.pendingType ?? null,
-          assistantReply: null,
-        })
-      : {
-          confirmed: false,
-          rejected: false,
-          shouldSendNow: false,
-          resolvedType: null,
-          newlyRequested: false,
-          shouldKeepPending: false,
-          nextPendingType: null,
-        };
-
-    if (state.awaiting && (earlySmsFlow.confirmed || earlySmsFlow.rejected)) {
-      state = {
-        ...state,
-        awaiting: false,
-        pendingType: null,
-      };
-
-      await upsertVoiceCallState({
-        callSid,
-        tenantId: tenant.id,
-        lang: state.lang ?? currentLocale,
-        turn: state.turn ?? 0,
-        awaiting: false,
-        pendingType: null,
-        awaitingNumber: state.awaitingNumber ?? false,
-        altDest: state.altDest ?? null,
-        smsSent: state.smsSent ?? false,
-        bookingStepIndex: state.bookingStepIndex ?? null,
-        bookingData: state.bookingData ?? {},
-      });
-    }
-
-    if (earlySmsFlow.confirmed && earlySmsFlow.shouldSendNow) {
-      earlySmsType = earlySmsFlow.resolvedType;
-    }
-
-    if (earlySmsFlow.rejected) {
-      const replyRaw = await generateVoiceFollowupReply({
-        userInput: effectiveUserInput,
-        step: "fallback",
-        locale: currentLocale,
-        cfg,
-      });
-
-      const localizedReply = currentLocale.startsWith("es")
-        ? replyRaw
-        : await traducirTexto(replyRaw, currentLocale);
-
-      const reply = twoSentencesMax(localizedReply);
-
-      const gather = vr.gather({
-        input: ["speech", "dtmf"] as any,
-        numDigits: 1,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: currentLocale as any,
-        speechTimeout: "auto",
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
-      });
-
-      gather.say({ language: currentLocale as any, voice: voiceName }, reply);
-
-      return res.type("text/xml").send(vr.toString());
-    }
-
-    if (earlySmsType) {
-      const bookingSmsPayload =
-        earlySmsType === "reservar"
-          ? parseBookingSmsPayload(state.bookingData || {})
-          : null;
-
-      if (bookingSmsPayload) {
-        const smsFrom =
-          tenant.twilio_sms_number || tenant.twilio_voice_number || "";
-
-        const toDest =
-          (state.altDest && isValidE164(state.altDest) ? state.altDest : null) ||
-          callerE164;
-
-        const body = buildBookingConfirmationSmsBody(
-          bookingSmsPayload,
-          currentLocale
-        );
-
-        console.log("[VOICE][BOOKING_SMS][EARLY_SEND_ATTEMPT]", {
-          callSid,
-          tenantId: tenant.id,
-          smsFrom,
-          toDest,
-          body,
-          bookingSmsPayload,
-        });
-
-        if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
-          const bad = currentLocale.startsWith("es")
-            ? "No pude validar tu número para enviarte el SMS."
-            : currentLocale.startsWith("pt")
-            ? "Não consegui validar seu número para enviar o SMS."
-            : "I could not validate your number to send the SMS.";
-
-          vr.say({ language: currentLocale as any, voice: voiceName }, bad);
-          vr.gather({
-            input: ['speech', 'dtmf'] as any,
-            numDigits: 1,
-            action: '/webhook/voice-response',
-            method: 'POST',
-            language: currentLocale as any,
-            speechTimeout: 'auto',
-            timeout: 7,
-            actionOnEmptyResult: true,
-          });
-
-          return res.type('text/xml').send(vr.toString());
-        }
-
-        if (!smsFrom) {
-          const bad = currentLocale.startsWith("es")
-            ? "No hay un número SMS configurado para enviar la confirmación."
-            : currentLocale.startsWith("pt")
-            ? "Não há um número SMS configurado para enviar a confirmação."
-            : "There is no SMS number configured to send the confirmation.";
-
-          vr.say({ language: currentLocale as any, voice: voiceName }, bad);
-          vr.gather({
-            input: ['speech', 'dtmf'] as any,
-            numDigits: 1,
-            action: '/webhook/voice-response',
-            method: 'POST',
-            language: currentLocale as any,
-            speechTimeout: 'auto',
-            timeout: 7,
-            actionOnEmptyResult: true,
-          });
-
-          return res.type('text/xml').send(vr.toString());
-        }
-
-        if (smsFrom.startsWith("whatsapp:")) {
-          const bad = currentLocale.startsWith("es")
-            ? "El número configurado es WhatsApp y no puede enviar SMS."
-            : currentLocale.startsWith("pt")
-            ? "O número configurado é apenas WhatsApp e não pode enviar SMS."
-            : "The configured number is WhatsApp-only and cannot send SMS.";
-
-          vr.say({ language: currentLocale as any, voice: voiceName }, bad);
-          vr.gather({
-            input: ['speech', 'dtmf'] as any,
-            numDigits: 1,
-            action: '/webhook/voice-response',
-            method: 'POST',
-            language: currentLocale as any,
-            speechTimeout: 'auto',
-            timeout: 7,
-            actionOnEmptyResult: true,
-          });
-
-          return res.type('text/xml').send(vr.toString());
-        }
-
-        const sentCount = await sendSMS({
-          mensaje: body,
-          destinatarios: [toDest],
-          fromNumber: smsFrom || undefined,
-          tenantId: tenant.id,
-          campaignId: null,
-        });
-
-        console.log("[VOICE][BOOKING_SMS][EARLY_SENT]", {
-          callSid,
-          tenantId: tenant.id,
-          sentCount,
-          toDest,
-        });
-
-        state = {
-          ...state,
-          awaiting: false,
-          pendingType: null,
-          smsSent: true,
-        };
-
-        await upsertVoiceCallState({
-          callSid,
-          tenantId: tenant.id,
-          lang: state.lang ?? currentLocale,
-          turn: state.turn ?? 0,
-          awaiting: false,
-          pendingType: null,
-          awaitingNumber: state.awaitingNumber ?? false,
-          altDest: state.altDest ?? null,
-          smsSent: true,
-          bookingStepIndex: state.bookingStepIndex ?? null,
-          bookingData: state.bookingData ?? {},
-        });
-
-        await pool.query(
-          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-          VALUES ($1, 'user', $2, NOW(), $3, $4)`,
-          [tenant.id, effectiveUserInput, CHANNEL_KEY, callerE164 || 'anónimo']
-        );
-
-        await pool.query(
-          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-          VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
-          [tenant.id, "SMS enviado con confirmación de reserva.", CHANNEL_KEY, didNumber || 'sistema']
-        );
-
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, created_at)
-          VALUES ($1, $2, NOW())`,
-          [tenant.id, CHANNEL_KEY]
-        );
-
-        const ok = currentLocale.startsWith("es")
-          ? "Te acabo de enviar los detalles de tu reserva por SMS. ¿Necesitas algo más?"
-          : currentLocale.startsWith("pt")
-          ? "Acabei de te enviar os detalhes da sua reserva por SMS. Posso te ajudar com mais alguma coisa?"
-          : "I just sent your booking details by SMS. Do you need anything else?";
-
-        const gather = vr.gather({
-          input: ["speech", "dtmf"] as any,
-          numDigits: 1,
-          action: "/webhook/voice-response",
-          method: "POST",
-          language: currentLocale as any,
-          speechTimeout: "1",
-          timeout: 4,
-          actionOnEmptyResult: true,
-          bargeIn: true,
-        });
-
-        gather.say(
-          { language: currentLocale as any, voice: voiceName },
-          ok
-        );
-
-        logBotSay({
-          callSid,
-          to: didNumber || "ivr",
-          text: ok,
-          lang: currentLocale,
-          context: "booking_sms_sent_followup",
-        });
-
-        await incrementarUsoPorNumero(didNumber);
-        return res.type("text/xml").send(vr.toString());
-      }
-
-      await enviarSmsConLink(earlySmsType, {
-        tenantId: tenant.id,
-        callerE164,
-        callerRaw,
-        smsFromCandidate: tenant.twilio_sms_number || '',
-        callSid,
-        overrideDestE164: (state.altDest && isValidE164(state.altDest)) ? state.altDest : undefined,
-      });
-
-      const ok = renderVoiceReply("sms_sent_success", {
-        locale: currentLocale,
-        linkType: earlySmsType,
-      });
-
-      vr.say({ language: currentLocale as any, voice: voiceName }, ok);
-      vr.gather({
-        input: ['speech', 'dtmf'] as any,
-        numDigits: 1,
-        action: '/webhook/voice-response',
-        method: 'POST',
-        language: currentLocale as any,
-        speechTimeout: 'auto',
-        timeout: 7,
-        actionOnEmptyResult: true,
-      });
-
-      await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-        VALUES ($1, 'user', $2, NOW(), $3, $4)`,
-        [tenant.id, effectiveUserInput, CHANNEL_KEY, callerE164 || 'anónimo']
-      );
-
-      await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-        VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
-        [tenant.id, ok, CHANNEL_KEY, didNumber || 'sistema']
-      );
-
-      await pool.query(
-        `INSERT INTO interactions (tenant_id, canal, created_at)
-        VALUES ($1, $2, NOW())`,
-        [tenant.id, CHANNEL_KEY]
-      );
-
-      await incrementarUsoPorNumero(didNumber);
-      return res.type('text/xml').send(vr.toString());
-    }
-
-    // ===== IVR simple por dígito (1/2/3/4) =====
-    const resolvedVoiceIntentForTurn = effectiveUserInput
-      ? await resolveVoiceIntentFromUtteranceAsync(effectiveUserInput)
-      : null;
-
-    if (
-      digits &&
-      !effectiveUserInput &&
-      !hasActiveBookingStep &&
-      !state.awaiting &&
-      resolvedVoiceIntentForTurn !== "booking"
-    ) {
-      const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
-      const menuIntent = resolveVoiceMenuIntent(digits, currentLocale);
-
-      if (menuIntent?.kind === "snippet") {
-        const brand = await getTenantBrand(tenant.id);
-        const spoken = await generateVoiceSnippetFromKnowledge({
-          topic: menuIntent.topic,
-          cfg,
-          locale: currentLocale as any,
-          brand,
-        });
-
-        vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
-
-        await offerSms(
-          vr,
-          currentLocale as any,
-          voiceName,
-          callSid,
-          state,
-          menuIntent.linkType,
-          tenant.id
-        );
-
-        return res.type("text/xml").send(vr.toString());
-      }
-
-      if (menuIntent?.kind === "transfer") {
-        if (REPRESENTANTE_NUMBER) {
-          vr.say(
-            { language: currentLocale as any, voice: voiceName },
-            renderVoiceReply("transfer_connecting", {
-              locale: currentLocale,
-            })
-          );
-
-          const dial = vr.dial({
-            action: "/webhook/voice-response?transfer=1",
-            method: "POST",
-            timeout: 20,
-          });
-
-          dial.number(REPRESENTANTE_NUMBER);
-          return res.type("text/xml").send(vr.toString());
-        }
-
-        vr.say(
-          { language: currentLocale as any, voice: voiceName },
-          renderVoiceReply("transfer_unavailable", {
-            locale: currentLocale,
-          })
-        );
-
-        await offerSms(
-          vr,
-          currentLocale as any,
-          voiceName,
-          callSid,
-          state,
-          "soporte",
-          tenant.id
-        );
-
-        return res.type("text/xml").send(vr.toString());
-      }
-
-      vr.say(
-        { language: currentLocale as any, voice: voiceName },
-        renderVoiceLifecycle("menu_option_not_recognized", currentLocale)
-      );
-    }
-
-    // ——— FAST INTENT: transferencia a humano ———
-    const humanHandoffTurnResult = await handleHumanHandoffTurn({
-      vr,
-      effectiveUserInput,
-      hasActiveBookingStep,
-      resolvedVoiceIntentForTurn,
-      callSid,
+    let { respuesta } = await generateVoiceAssistantReply({
       tenantId: tenant.id,
-      currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
-      voiceName,
+      membershipStart: tenant.membresia_inicio ?? null,
+      channelKey: CHANNEL_KEY,
+      currentLocale,
+      effectiveUserInput,
+      systemPrompt: (cfg.system_prompt as string)?.trim() || "",
+      brand,
+    });
+
+    console.log(
+      '[VOICE][OPENAI_RAW]',
+      JSON.stringify({ callSid, lang: currentLocale, respuestaRaw: respuesta })
+    );
+
+    const voiceSmsFlowResult = await handleVoiceSmsFlow({
+      vr,
+      tenant,
+      callSid,
       state,
-      didNumber,
-      callerE164,
-      representativeNumberRaw: cfg?.representante_number || null,
-      offerSms,
-      logBotSay,
-    });
-
-    if (humanHandoffTurnResult.handled) {
-      return res.type("text/xml").send(humanHandoffTurnResult.twiml);
-    }
-
-    // ——— FAST INTENT: si el usuario pidió algo directo (sin DTMF), lee desde prompt y luego ofrece SMS ———
-    if (effectiveUserInput && !hasActiveBookingStep) {
-      const businessTopic = resolveVoiceBusinessTopic(effectiveUserInput);
-
-      const sayAndOffer = async (
-        topic: "precios" | "horarios" | "ubicacion" | "pagos",
-        tipoLink: LinkType
-      ) => {
-        const spokenRaw = await generateVoiceSnippetFromKnowledge({
-          topic,
-          cfg,
-          locale: currentLocale as any,
-          brand,
-        });
-
-        const spoken = sanitizeForSay(
-          normalizeSpeechOutput(twoSentencesMax(spokenRaw), currentLocale as any)
-        );
-
-        const smsAsk = renderVoiceReply("sms_offer_confirmation", {
-          locale: currentLocale,
-          linkType: tipoLink,
-        });
-
-        const combinedText = twoSentencesMax(
-          sanitizeForSay(`${spoken} ${smsAsk}`)
-        );
-
-        const gather = vr.gather({
-          input: ["speech", "dtmf"] as any,
-          numDigits: 1,
-          action: "/webhook/voice-response",
-          method: "POST",
-          language: currentLocale as any,
-          speechTimeout: "auto",
-          timeout: 7,
-          actionOnEmptyResult: true,
-          bargeIn: true,
-          hints: currentLocale.startsWith("es") ? "sí, si, no, uno, 1" : "yes, no, one, 1",
-        });
-
-        gather.say(
-          { language: currentLocale as any, voice: voiceName },
-          combinedText
-        );
-
-        await upsertVoiceCallState({
-          callSid,
-          tenantId: tenant.id,
-          lang: state.lang ?? currentLocale,
-          turn: state.turn ?? 0,
-          awaiting: true,
-          pendingType: tipoLink,
-          awaitingNumber: state.awaitingNumber ?? false,
-          altDest: state.altDest ?? null,
-          smsSent: state.smsSent ?? false,
-          bookingStepIndex: state.bookingStepIndex ?? null,
-          bookingData: state.bookingData ?? {},
-        });
-
-        logBotSay({
-          callSid,
-          to: didNumber || "ivr",
-          text: combinedText,
-          lang: currentLocale,
-          context: `business_topic_with_sms_offer:${topic}`,
-        });
-
-        return res.type("text/xml").send(vr.toString());
-      };
-
-      if (businessTopic.matched && businessTopic.topic && businessTopic.linkType) {
-        return await sayAndOffer(businessTopic.topic, businessTopic.linkType);
-      }
-    }
-
-    // ——— OpenAI ———
-    let respuesta = renderVoiceReply("fallback_not_understood", {
-      locale: currentLocale,
-    });
-    try {
-      const { default: OpenAI } = await import('openai');
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-      const brand = await getTenantBrand(tenant.id);
-
-      // ✅ timeout de 6s para evitar cuelgues
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6000);
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        temperature: 0, // 👈 evita alucinaciones
-        messages: [
-          {
-            role: 'system',
-            content:
-              (cfg.system_prompt as string)?.trim() ||
-              `Eres Amy, asistente telefónica del negocio ${brand}. 
-              REGLAS:
-              - NO menciones precios ni montos al hablar, nunca inventes números.
-              - Si el usuario pregunta por precios, horarios, ubicación o pagos, ofrece enviar un SMS con el enlace correspondiente (no los leas en voz).
-              - Jamás leas URL en voz. 
-              - Responde breve y natural.`
-          },
-          { role: 'user', content: effectiveUserInput },
-        ],
-      }, { signal: controller.signal as any });
-      clearTimeout(timer);
-
-      respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
-      console.log('[VOICE][OPENAI_RAW]', JSON.stringify({ callSid, lang: currentLocale, respuestaRaw: respuesta }));
-
-      const usage = (completion as any).usage ?? {};
-      const totalTokens =
-        typeof usage.total_tokens === 'number'
-          ? usage.total_tokens
-          : (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
-
-      const cicloInicio = cycleStartForNow(tenant.membresia_inicio);
-      if (totalTokens > 0) {
-        await pool.query(
-          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-          VALUES ($1, $2, $3::date, $4)
-          ON CONFLICT (tenant_id, canal, mes)
-          DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-          [tenant.id, CHANNEL_KEY, cicloInicio, totalTokens]
-        );
-      }
-    } catch (e) {
-      console.warn('⚠️ OpenAI falló, usando fallback:', e);
-    }
-
-    // ——— Decidir si hay que ENVIAR SMS con link útil ———
-    const tagMatch = respuesta.match(/\[\[SMS:(reservar|comprar|soporte|web)\]\]/i);
-    let smsType: LinkType | null = tagMatch ? (tagMatch[1].toLowerCase() as LinkType) : null;
-
-    if (tagMatch) {
-      respuesta = respuesta.replace(tagMatch[0], "").trim();
-    }
-
-    const resolvedSmsFlow = await resolveVoiceSmsFlow({
+      currentLocale,
+      voiceName,
       effectiveUserInput,
       digits,
-      awaiting: !!state.awaiting,
-      pendingType: state.pendingType ?? null,
-      assistantReply: respuesta,
+      respuesta,
+      callerRaw,
+      callerE164,
+      didNumber,
+      channelKey: CHANNEL_KEY,
+      logBotSay,
+      getTenantBrand,
+      resolveVoiceSmsTurnState,
     });
 
-    if (!smsType && resolvedSmsFlow.shouldSendNow) {
-      smsType = resolvedSmsFlow.resolvedType;
-    }
+    state = voiceSmsFlowResult.state;
+    digits = voiceSmsFlowResult.digits;
+    respuesta = voiceSmsFlowResult.respuesta;
 
-    if (!smsType && resolvedSmsFlow.rejected && state.awaiting) {
-      console.log("[VOICE/SMS] Usuario rechazó el SMS (estado).");
-
-      state = {
-        ...state,
-        awaiting: false,
-        pendingType: null,
-      };
-
-      await upsertVoiceCallState({
-        callSid,
-        tenantId: tenant.id,
-        lang: state.lang ?? currentLocale,
-        turn: state.turn ?? 0,
-        awaiting: false,
-        pendingType: null,
-        awaitingNumber: state.awaitingNumber ?? false,
-        altDest: state.altDest ?? null,
-        smsSent: state.smsSent ?? false,
-        bookingStepIndex: state.bookingStepIndex ?? null,
-        bookingData: state.bookingData ?? {},
-      });
-    }
-
-    if (!smsType && resolvedSmsFlow.newlyRequested) {
-      smsType = resolvedSmsFlow.resolvedType;
-      console.log("[VOICE/SMS] Usuario solicitó SMS → tipo inferido =", smsType);
-    }
-
-    if (!smsType && resolvedSmsFlow.shouldKeepPending && resolvedSmsFlow.nextPendingType) {
-      const ask = renderVoiceReply("sms_offer_confirmation", {
-        locale: currentLocale,
-        linkType: resolvedSmsFlow.nextPendingType,
-      });
-
-      respuesta = `${respuesta} ${ask} <SMS_PENDING:${resolvedSmsFlow.nextPendingType}>`.trim();
-
-      await upsertVoiceCallState({
-        callSid,
-        tenantId: tenant.id,
-        lang: state.lang ?? currentLocale,
-        turn: state.turn ?? 0,
-        awaiting: true,
-        pendingType: resolvedSmsFlow.nextPendingType,
-        awaitingNumber: state.awaitingNumber ?? false,
-        altDest: state.altDest ?? null,
-        smsSent: state.smsSent ?? false,
-        bookingStepIndex: state.bookingStepIndex ?? null,
-        bookingData: state.bookingData ?? {},
-      });
-    }
-
-    const thisTurnMetaSignal = await resolveVoiceMetaSignal({
-      utterance: effectiveUserInput,
-      locale: currentLocale,
-    });
-
-    console.log('[VOICE/SMS] dbg', {
-      awaiting: state.awaiting,
-      pendingType: state.pendingType,
-      digits,
-      metaIntent: thisTurnMetaSignal.intent,
-      metaConfidence: thisTurnMetaSignal.confidence,
-      tagMatch: !!tagMatch,
-      pendingMatch: !!state.pendingType,
-      smsType,
-    });
-
-    // ——— Confirmación/Captura de número destino antes de enviar ———
-    if (smsType) {
-      // número preferido: alterno confirmado > callerE164
-      const preferred = (state.altDest && isValidE164(state.altDest)) ? state.altDest : callerE164;
-
-      const thisTurnYes =
-        thisTurnMetaSignal.intent === "affirm" || digits === "1";
-
-      if (!thisTurnYes) {
-        if (!isValidE164(preferred)) {
-          const askNum = renderVoiceReply("sms_ask_destination_number", {
-            locale: currentLocale,
-            linkType: smsType,
-          });
-
-          await upsertVoiceCallState({
-            callSid,
-            tenantId: tenant.id,
-            lang: state.lang ?? currentLocale,
-            turn: state.turn ?? 0,
-            awaiting: false,
-            pendingType: smsType,
-            awaitingNumber: true,
-            altDest: state.altDest ?? null,
-            smsSent: state.smsSent ?? false,
-            bookingStepIndex: state.bookingStepIndex ?? null,
-            bookingData: state.bookingData ?? {},
-          });
-
-          vr.say({ language: currentLocale as any, voice: voiceName }, askNum);
-          vr.gather({
-            input: ['speech','dtmf'] as any,
-            numDigits: 15,
-            action: '/webhook/voice-response',
-            method: 'POST',
-            language: currentLocale as any,
-            speechTimeout: 'auto',
-            timeout: 10,
-            actionOnEmptyResult: true,
-            bargeIn: true,
-            enhanced: true,
-            speechModel: 'phone_call',
-            hints: currentLocale.startsWith('es')
-              ? 'más, mas, signo, uno, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, cero, guion, espacio'
-              : 'plus, one, two, three, four, five, six, seven, eight, nine, zero, dash, space'
-          });
-
-          return res.type('text/xml').send(vr.toString());
-        }
-
-        const confirm = renderVoiceSmsConfirmation(
-          currentLocale,
-          maskForVoice(preferred)
-        );
-
-        await upsertVoiceCallState({
-          callSid,
-          tenantId: tenant.id,
-          lang: state.lang ?? currentLocale,
-          turn: state.turn ?? 0,
-          awaiting: true,
-          pendingType: smsType,
-          awaitingNumber: false,
-          altDest: state.altDest ?? null,
-          smsSent: state.smsSent ?? false,
-          bookingStepIndex: state.bookingStepIndex ?? null,
-          bookingData: state.bookingData ?? {},
-        });
-
-        vr.say({ language: currentLocale as any, voice: voiceName }, confirm);
-        vr.gather({
-          input: ['speech','dtmf'] as any,
-          numDigits: 15,
-          action: '/webhook/voice-response',
-          method: 'POST',
-          language: currentLocale as any,
-          speechTimeout: 'auto',
-          timeout: 7,
-          actionOnEmptyResult: true,
-        });
-
-        return res.type('text/xml').send(vr.toString());
-      }
-
-      // Si thisTurnYes === true, seguimos abajo al bloque de envío
-    }
-
-    // ——— Si hay que mandar SMS ———
-    if (smsType) {
-      if (state.smsSent) {
-        console.log("[VOICE/SMS] SMS ya enviado en esta llamada, se omite reintento.");
-      } else {
-        try {
-          const smsFrom =
-            tenant.twilio_sms_number || tenant.twilio_voice_number || "";
-
-          const toDest =
-            (state.altDest && isValidE164(state.altDest) ? state.altDest : null) ||
-            callerE164;
-
-          const bookingSmsPayload =
-            smsType === "reservar"
-              ? parseBookingSmsPayload(state.bookingData || {})
-              : null;
-
-          if (bookingSmsPayload) {
-            const body = buildBookingConfirmationSmsBody(
-              bookingSmsPayload,
-              currentLocale
-            );
-
-            console.log("[VOICE][BOOKING_SMS][SEND_ATTEMPT]", {
-              callSid,
-              tenantId: tenant.id,
-              smsFrom,
-              toDest,
-              body,
-            });
-
-            if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
-              console.warn("[VOICE][BOOKING_SMS] Número destino inválido:", {
-                callerRaw,
-                toDest,
-              });
-
-              respuesta += currentLocale.startsWith("es")
-                ? " No pude validar tu número para enviarte el SMS."
-                : currentLocale.startsWith("pt")
-                ? " Não consegui validar seu número para enviar o SMS."
-                : " I could not validate your number to send the SMS.";
-            } else if (!smsFrom) {
-              console.warn("[VOICE][BOOKING_SMS] No hay número SMS configurado.");
-              respuesta += currentLocale.startsWith("es")
-                ? " No hay un número SMS configurado para enviar la confirmación."
-                : currentLocale.startsWith("pt")
-                ? " Não há um número SMS configurado para enviar a confirmação."
-                : " There is no SMS number configured to send the confirmation.";
-            } else if (smsFrom.startsWith("whatsapp:")) {
-              console.warn("[VOICE][BOOKING_SMS] El número configurado es WhatsApp-only.");
-              respuesta += currentLocale.startsWith("es")
-                ? " El número configurado es WhatsApp y no puede enviar SMS."
-                : currentLocale.startsWith("pt")
-                ? " O número configurado é apenas WhatsApp e não pode enviar SMS."
-                : " The configured number is WhatsApp-only and cannot send SMS.";
-            } else {
-              const sentCount = await sendSMS({
-                mensaje: body,
-                destinatarios: [toDest],
-                fromNumber: smsFrom || undefined,
-                tenantId: tenant.id,
-                campaignId: null,
-              });
-
-              console.log("[VOICE][BOOKING_SMS][SENT]", {
-                callSid,
-                tenantId: tenant.id,
-                sentCount,
-                toDest,
-              });
-
-              state = {
-                ...state,
-                awaiting: false,
-                pendingType: null,
-                smsSent: true,
-              };
-
-              await upsertVoiceCallState({
-                callSid,
-                tenantId: tenant.id,
-                lang: state.lang ?? currentLocale,
-                turn: state.turn ?? 0,
-                awaiting: false,
-                pendingType: null,
-                awaitingNumber: state.awaitingNumber ?? false,
-                altDest: state.altDest ?? null,
-                smsSent: true,
-                bookingStepIndex: state.bookingStepIndex ?? null,
-                bookingData: state.bookingData ?? {},
-              });
-
-              await pool.query(
-                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-                VALUES ($1, 'system', $2, NOW(), $3, $4)`,
-                [tenant.id, "SMS enviado con confirmación de reserva.", CHANNEL_KEY, smsFrom]
-              );
-
-              respuesta += currentLocale.startsWith("es")
-                ? " Te acabo de enviar los detalles por SMS."
-                : currentLocale.startsWith("pt")
-                ? " Acabei de te enviar os detalhes por SMS."
-                : " I just sent you the booking details by SMS.";
-            }
-          } else {
-            const brand = await getTenantBrand(tenant.id);
-
-            const result = await sendVoiceLinkSms({
-              tenantId: tenant.id,
-              smsType,
-              callerRaw,
-              callerE164,
-              overrideDestE164:
-                state.altDest && isValidE164(state.altDest) ? state.altDest : null,
-              smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || "",
-              brand,
-            });
-
-            const smsDeliveryOutcome = resolveVoiceSmsDeliveryOutcome(result, currentLocale);
-
-            if (!result.ok) {
-              console.warn("[VOICE/SMS] No se pudo enviar el SMS:", result.code, result.message);
-              respuesta += smsDeliveryOutcome.appendText;
-            } else {
-              console.log("[VOICE/SMS] sendSMS -> enviados =", result.sentCount);
-
-              state = {
-                ...state,
-                awaiting: false,
-                pendingType: null,
-                smsSent: true,
-              };
-
-              await upsertVoiceCallState({
-                callSid,
-                tenantId: tenant.id,
-                lang: state.lang ?? currentLocale,
-                turn: state.turn ?? 0,
-                awaiting: false,
-                pendingType: null,
-                awaitingNumber: state.awaitingNumber ?? false,
-                altDest: state.altDest ?? null,
-                smsSent: true,
-                bookingStepIndex: state.bookingStepIndex ?? null,
-                bookingData: state.bookingData ?? {},
-              });
-
-              await pool.query(
-                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-                VALUES ($1, 'system', $2, NOW(), $3, $4)`,
-                [tenant.id, "SMS enviado con link único.", CHANNEL_KEY, result.smsFrom]
-              );
-
-              respuesta += smsDeliveryOutcome.appendText;
-            }
-          }
-        } catch (e: any) {
-          console.error("[VOICE/SMS] Error enviando SMS:", e?.message || e);
-          respuesta += resolveVoiceSmsDeliveryOutcome(
-            {
-              ok: false,
-              code: "SEND_FAILED",
-              message: e?.message || "Error enviando SMS.",
-            },
-            currentLocale
-          ).appendText;
-        }
-      }
-    } else {
-      console.log(
-        "[VOICE/SMS] No se detectó condición para enviar SMS.",
-        "userInput=",
-        short(effectiveUserInput),
-        "respuesta=",
-        short(respuesta)
-      );
+    if (voiceSmsFlowResult.handled && voiceSmsFlowResult.twiml) {
+      return res.type("text/xml").send(voiceSmsFlowResult.twiml);
     }
 
     // ——— Guardar conversación ———
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-       VALUES ($1, 'user', $2, NOW(), 'voz', $3)`,
-      [tenant.id, userInput, callerE164 || 'anónimo']
-    );
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-       VALUES ($1, 'assistant', $2, NOW(), 'voz', $3)`,
-      [tenant.id, respuesta, didNumber || 'sistema']
-    );
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, created_at)
-       VALUES ($1, 'voz', NOW())`,
-      [tenant.id]
-    );
+    await persistVoiceTurn({
+      tenantId: tenant.id,
+      userText: userInput,
+      assistantText: respuesta,
+      callerE164: callerE164 || null,
+      didNumber: didNumber || null,
+    });
 
     await incrementarUsoPorNumero(didNumber);
 
-    // ——— ¿Terminamos? ———
-    const conversationClosure = await resolveVoiceConversationClosure(
-      effectiveUserInput,
-      currentLocale
-    );
-    const fin =
-      !hasActiveBookingStep &&
-      conversationClosure.shouldClose;
-
-    // ✅ recorte a 2 frases y normalización de horas antes de locutar
-    const speakOut = sanitizeForSay(
-      normalizeSpeechOutput(twoSentencesMax(respuesta), currentLocale as any)
-    );
-
-    // ⬇️ LOG — lo que dirá el bot (lo que Twilio locuta)
-    logBotSay({
+    const finalVoiceTurnResult = await renderFinalVoiceTurn({
+      vr,
       callSid,
-      to: didNumber,
-      text: speakOut,
-      lang: currentLocale as any,
-      context: 'final-say'
+      state,
+      currentLocale,
+      voiceName,
+      didNumber,
+      effectiveUserInput,
+      respuesta,
+      logBotSay,
     });
 
-    if (!fin) {
-      const contGather = vr.gather({
-        input: ['speech','dtmf'] as any,
-        numDigits: 1,
-        action: '/webhook/voice-response',
-        method: 'POST',
-        language: currentLocale as any,
-        speechTimeout: 'auto',
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
-      });
-
-      contGather.say(
-        { language: currentLocale as any, voice: voiceName },
-        speakOut
-      );
-    } else {
-      await deleteVoiceCallState(callSid);
-
-      vr.say(
-        { language: currentLocale as any, voice: voiceName },
-        renderVoiceLifecycle("call_goodbye", currentLocale)
-      );
-
-      vr.hangup();
-    }
+    return res.type("text/xml").send(finalVoiceTurnResult.twiml);
 
     return res.type('text/xml').send(vr.toString());
   } catch (err) {
