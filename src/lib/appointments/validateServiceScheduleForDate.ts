@@ -175,6 +175,17 @@ function parseHHMM(value: string): { hour: number; minute: number } | null {
   return { hour, minute };
 }
 
+function getMinutesForDateInTimeZone(date: Date, timeZone: string): number {
+  const hhmm = getHHMMInTimeZone(date, timeZone);
+  const minutes = parseHHMM(hhmm);
+
+  if (!minutes) {
+    return 0;
+  }
+
+  return minutes.hour * 60 + minutes.minute;
+}
+
 function dedupeStrings(values: string[]): string[] {
   return Array.from(
     new Set(
@@ -197,8 +208,10 @@ async function findSuggestedStarts(params: {
   bufferMin?: number;
   includeBufferInClosingBoundary?: boolean;
 }): Promise<{ suggestedStarts: string[]; availableTimes: string[] }> {
-  const suggestions: string[] = [];
-  const availableTimesSeen: string[] = [];
+  const requestedMinutes = getMinutesForDateInTimeZone(
+    params.requestedAt,
+    params.timeZone
+  );
 
   for (let offset = 0; offset < params.searchDays; offset += 1) {
     const dateForDay = addDaysKeepingTimeZoneBase(
@@ -231,38 +244,67 @@ async function findSuggestedStarts(params: {
       continue;
     }
 
-    for (const hhmm of dayAvailableTimes) {
-      const parsedTime = parseHHMM(hhmm);
-      if (!parsedTime) {
-        continue;
-      }
+    const rankedCandidates = dayAvailableTimes
+      .map((hhmm) => {
+        const parsedTime = parseHHMM(hhmm);
+        if (!parsedTime) {
+          return null;
+        }
 
-      const candidate = buildZonedDateFromParts({
-        ...getDatePartsInTimeZone(dateForDay, params.timeZone),
-        hour: parsedTime.hour,
-        minute: parsedTime.minute,
-        timeZone: params.timeZone,
+        const candidate = buildZonedDateFromParts({
+          ...getDatePartsInTimeZone(dateForDay, params.timeZone),
+          hour: parsedTime.hour,
+          minute: parsedTime.minute,
+          timeZone: params.timeZone,
+        });
+
+        if (offset === 0 && candidate.getTime() < params.requestedAt.getTime()) {
+          return null;
+        }
+
+        const candidateMinutes = parsedTime.hour * 60 + parsedTime.minute;
+        const distanceToRequestedMinutes = Math.abs(candidateMinutes - requestedMinutes);
+
+        return {
+          iso: candidate.toISOString(),
+          hhmm,
+          distanceToRequestedMinutes,
+          candidateTimeMs: candidate.getTime(),
+        };
+      })
+      .filter(
+        (
+          item
+        ): item is {
+          iso: string;
+          hhmm: string;
+          distanceToRequestedMinutes: number;
+          candidateTimeMs: number;
+        } => Boolean(item)
+      )
+      .sort((a, b) => {
+        if (a.distanceToRequestedMinutes !== b.distanceToRequestedMinutes) {
+          return a.distanceToRequestedMinutes - b.distanceToRequestedMinutes;
+        }
+
+        return a.candidateTimeMs - b.candidateTimeMs;
       });
 
-      if (candidate.getTime() < params.requestedAt.getTime()) {
-        continue;
-      }
-
-      suggestions.push(candidate.toISOString());
-      availableTimesSeen.push(hhmm);
-
-      if (suggestions.length >= params.maxSuggestions) {
-        return {
-          suggestedStarts: dedupeStrings(suggestions),
-          availableTimes: dedupeStrings(availableTimesSeen),
-        };
-      }
+    if (!rankedCandidates.length) {
+      continue;
     }
+
+    const topCandidates = rankedCandidates.slice(0, params.maxSuggestions);
+
+    return {
+      suggestedStarts: topCandidates.map((item) => item.iso),
+      availableTimes: topCandidates.map((item) => item.hhmm),
+    };
   }
 
   return {
-    suggestedStarts: dedupeStrings(suggestions),
-    availableTimes: dedupeStrings(availableTimesSeen),
+    suggestedStarts: [],
+    availableTimes: [],
   };
 }
 
@@ -305,7 +347,7 @@ export async function validateServiceScheduleForDate(
     requestedAt: params.requestedAt,
     channel,
     timeZone,
-    maxSuggestions: 3,
+    maxSuggestions: 12,
     searchDays: 14,
     durationMin: params.durationMin,
     bufferMin: params.bufferMin,

@@ -110,14 +110,22 @@ function buildFallbackAvailableTimes(params: {
     return [];
   }
 
-  if (latestValidStart === startMinutes) {
-    return [minutesToHHMM(startMinutes)];
+  const stepMinutes = params.durationMin > 0 ? params.durationMin : occupiedMinutes;
+  const slots: string[] = [];
+
+  for (
+    let currentMinutes = startMinutes;
+    currentMinutes <= latestValidStart;
+    currentMinutes += stepMinutes
+  ) {
+    slots.push(minutesToHHMM(currentMinutes));
   }
 
-  return dedupeAndSortTimes([
-    minutesToHHMM(startMinutes),
-    minutesToHHMM(latestValidStart),
-  ]);
+  if (!slots.length) {
+    slots.push(minutesToHHMM(startMinutes));
+  }
+
+  return dedupeAndSortTimes(slots);
 }
 
 function isStartValidInsideBusinessWindow(params: {

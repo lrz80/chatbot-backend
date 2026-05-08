@@ -202,7 +202,7 @@ export class GoogleCalendarProvider implements BookingProviderAdapter {
               durationMin: effectiveRule.duration_min,
               bufferMin: input.bufferMin,
               stepMin: 15,
-              maxSuggestions: 3,
+              maxSuggestions: 12,
             });
 
             suggestedStarts = nearest.map((d) => d.toISOString());

@@ -202,14 +202,16 @@ export async function resolveVoiceScheduleValidation(
           .suggestedStarts
       );
 
-      const suggestedStarts = await filterBookableSuggestedStarts({
-        tenantId: params.tenantId,
-        serviceName: params.serviceName,
-        candidateStarts: rawSuggestedStarts,
-        durationMin: defaultDurationMin,
-        bufferMin,
-        timeZone,
-      });
+      const suggestedStarts = (
+        await filterBookableSuggestedStarts({
+          tenantId: params.tenantId,
+          serviceName: params.serviceName,
+          candidateStarts: rawSuggestedStarts,
+          durationMin: defaultDurationMin,
+          bufferMin,
+          timeZone,
+        })
+      ).slice(0, 3);
 
       return {
         ok: false,
@@ -252,14 +254,16 @@ export async function resolveVoiceScheduleValidation(
       (scheduleValidation as { suggestedStarts?: unknown }).suggestedStarts
     );
 
-    const suggestedStarts = await filterBookableSuggestedStarts({
-      tenantId: params.tenantId,
-      serviceName: params.serviceName,
-      candidateStarts: rawSuggestedStarts,
-      durationMin: defaultDurationMin,
-      bufferMin,
-      timeZone,
-    });
+    const suggestedStarts = (
+      await filterBookableSuggestedStarts({
+        tenantId: params.tenantId,
+        serviceName: params.serviceName,
+        candidateStarts: rawSuggestedStarts,
+        durationMin: defaultDurationMin,
+        bufferMin,
+        timeZone,
+      })
+    ).slice(0, 3);
 
     return {
       ok: false,
