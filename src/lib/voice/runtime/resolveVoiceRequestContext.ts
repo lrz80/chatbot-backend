@@ -15,6 +15,7 @@ import type { CallState, VoiceLocale } from "../types";
 type TenantRow = {
   id: string;
   name?: string | null;
+  info_clave?: string | null;
   membresia_activa?: boolean | null;
   membresia_inicio?: string | Date | null;
   twilio_sms_number?: string | null;
@@ -63,12 +64,12 @@ export async function resolveVoiceRequestContext({
   channelKey,
 }: ResolveVoiceRequestContextParams): Promise<ResolveVoiceRequestContextResult> {
   const tenantRes = await pool.query(
-    `SELECT id, name,
+    `SELECT id, name, info_clave,
             membresia_activa, membresia_inicio,
             twilio_sms_number, twilio_voice_number
-       FROM tenants
-      WHERE twilio_voice_number = $1
-      LIMIT 1`,
+     FROM tenants
+    WHERE twilio_voice_number = $1
+    LIMIT 1`,
     [didNumber]
   );
 
