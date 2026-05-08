@@ -1,5 +1,5 @@
 //src/lib/voice/runtime/voiceBookingSmsHelpers.ts
-import type { VoiceLocale } from "../voice/types";
+import type { VoiceLocale } from "../types";
 
 export type BookingSmsPayload = {
   business_name: string;
