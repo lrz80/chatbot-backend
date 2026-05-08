@@ -37,11 +37,30 @@ const transporter = nodemailer.createTransport({
 
 // ✅ Registro corregido
 router.post('/register', async (req: Request, res: Response) => {
-  const { nombre, apellido, email, telefono, password } = req.body;
+  const {
+    nombre,
+    apellido,
+    email,
+    telefono,
+    password,
+    sms_opt_in,
+    timezone,
+  } = req.body;
 
   if (!nombre || !apellido || !email || !telefono || !password) {
     return res.status(400).json({ error: 'Todos los campos son requeridos' });
   }
+
+  const normalizedSmsOptIn =
+    sms_opt_in === true ||
+    sms_opt_in === "true" ||
+    sms_opt_in === 1 ||
+    sms_opt_in === "1";
+
+  const normalizedTimezone =
+    typeof timezone === "string" && timezone.trim()
+      ? timezone.trim()
+      : "UTC";
 
   try {
     const exists = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
@@ -60,16 +79,72 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // ✅ Crear tenant antes del usuario
     await pool.query(
-      `INSERT INTO tenants (id, name, slug, created_at, membresia_activa, membresia_vigencia)
-      VALUES ($1, $2, $3, NOW(), false, NULL)`,
-      [uid, owner_name, slug]
+      `INSERT INTO tenants (
+        id,
+        name,
+        slug,
+        created_at,
+        membresia_activa,
+        membresia_vigencia,
+        settings
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        NOW(),
+        false,
+        NULL,
+        jsonb_build_object('timezone', $4)
+      )`,
+      [uid, owner_name, slug, normalizedTimezone]
     );
 
     // ✅ Crear usuario con tenant_id
     await pool.query(
-      `INSERT INTO users (uid, tenant_id, email, password, role, owner_name, telefono, created_at, verificado, token_verificacion)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), false, $8)`,
-      [uid, uid, email, password_hash, 'admin', owner_name, telefono, token_verificacion]
+      `INSERT INTO users (
+        uid,
+        tenant_id,
+        email,
+        password,
+        role,
+        owner_name,
+        telefono,
+        created_at,
+        verificado,
+        token_verificacion,
+        sms_opt_in,
+        sms_opt_in_at,
+        sms_opt_in_source,
+        sms_phone_number
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        NOW(),
+        false,
+        $8,
+        $9,
+        CASE WHEN $9 = true THEN NOW() ELSE NULL END,
+        CASE WHEN $9 = true THEN 'registration' ELSE NULL END,
+        CASE WHEN $9 = true THEN $7 ELSE NULL END
+      )`,
+      [
+        uid,
+        uid,
+        email,
+        password_hash,
+        'admin',
+        owner_name,
+        telefono,
+        token_verificacion,
+        normalizedSmsOptIn,
+      ]
     );
 
     try {
