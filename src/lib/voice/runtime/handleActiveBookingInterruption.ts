@@ -10,7 +10,7 @@ import { resolveVoiceMetaSignal } from "../resolveVoiceMetaSignal";
 import { renderVoiceReply } from "../renderVoiceReply";
 import { renderVoiceLifecycle } from "../renderVoiceLifecycle";
 
-import type { CallState, VoiceLocale } from "../types";
+import type { CallState, LinkType, VoiceLocale } from "../types";
 
 type TenantLike = {
   id: string;
@@ -42,13 +42,13 @@ type HandleActiveBookingInterruptionParams = {
   }) => void;
   getBookingFlow: (tenantId: string) => Promise<any[]>;
   normalizarNumero: (value: string) => string;
-  offerSms: (args: {
+    offerSms: (args: {
     vr: twiml.VoiceResponse;
     locale: VoiceLocale;
     voiceName: string;
     callSid: string;
     state: CallState;
-    tipo: "soporte" | "ubicacion" | "horarios" | "reservar";
+    tipo: LinkType;
     tenantId: string;
     logBotSay: (args: {
       callSid: string;
