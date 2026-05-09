@@ -83,15 +83,27 @@ router.post('/', async (req: Request, res: Response) => {
   const callerRaw  = from.replace(/^tel:/, '');
   const callerE164 = normalizarNumero(callerRaw);
 
+  const rawSpeechResult = (req.body.SpeechResult || "").toString().trim();
+  const rawDigits = (req.body.Digits || "").toString().trim();
+
   const normalizedTurnInput = normalizeVoiceTurnInput({
-    speech: (req.body.SpeechResult || "").toString(),
-    digits: (req.body.Digits || "").toString(),
+    speech: rawSpeechResult,
+    digits: rawDigits,
   });
 
-  const userInputRaw = normalizedTurnInput.text;
-  const userInput = userInputRaw.trim();
+  const normalizedUserInput = String(normalizedTurnInput.text || "").trim();
 
-  let digits = normalizedTurnInput.digits;
+  const fallbackNormalizedSpeech = rawSpeechResult
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const userInput =
+    normalizedUserInput || fallbackNormalizedSpeech;
+
+  let digits = String(normalizedTurnInput.digits || "").trim();
 
   // UNA SOLA instancia de VoiceResponse
   const vr = new twiml.VoiceResponse();
@@ -360,10 +372,12 @@ router.post('/', async (req: Request, res: Response) => {
 
     console.log("[VOICE][NUM_CAPTURE]", JSON.stringify({
       callSid,
-      rawSpeechResult: req.body.SpeechResult,
-      rawDigits: req.body.Digits,
+      rawSpeechResult,
+      rawDigits,
       normalizedText: userInput,
       normalizedDigits: digits,
+      normalizationSource:
+        normalizedUserInput ? "normalizeVoiceTurnInput" : "rawSpeechFallback",
     }));
 
     const hasActiveBookingStep = typeof state.bookingStepIndex === "number";
