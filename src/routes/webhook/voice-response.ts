@@ -41,6 +41,7 @@ import { persistVoiceTurn } from "../../lib/voice/runtime/persistVoiceTurn";
 import { renderFinalVoiceTurn } from "../../lib/voice/runtime/renderFinalVoiceTurn";
 import { resolveVoiceRequestContext } from "../../lib/voice/runtime/resolveVoiceRequestContext";
 import { handleVoiceLanguageRoute } from "../../lib/voice/runtime/handleVoiceLanguageRoute";
+import { resolveVoiceTurnControlSignal } from "../../lib/voice/runtime/resolveVoiceTurnControlSignal";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -536,6 +537,70 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (awaitingSmsDestinationResult.handled) {
       return res.type("text/xml").send(awaitingSmsDestinationResult.twiml);
+    }
+
+    const turnControlSignal = await resolveVoiceTurnControlSignal({
+      utterance: effectiveUserInput,
+      currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
+    });
+
+    if (
+      turnControlSignal.type === "language_switch" &&
+      turnControlSignal.locale !== (state.lang ?? currentLocale)
+    ) {
+      const switchedLocale = turnControlSignal.locale;
+      const switchedVoiceName = resolveVoiceProviderVoice(switchedLocale);
+
+      state = {
+        ...state,
+        lang: switchedLocale,
+      };
+
+      await upsertVoiceCallState({
+        callSid,
+        tenantId: tenant.id,
+        lang: switchedLocale,
+        turn: state.turn ?? 0,
+        awaiting: state.awaiting ?? false,
+        pendingType: state.pendingType ?? null,
+        awaitingNumber: state.awaitingNumber ?? false,
+        altDest: state.altDest ?? null,
+        smsSent: state.smsSent ?? false,
+        bookingStepIndex: state.bookingStepIndex ?? null,
+        bookingData: state.bookingData ?? {},
+      });
+
+      const confirmationText = renderVoiceLifecycle(
+        "language_switch_confirmation",
+        switchedLocale
+      );
+
+      logBotSay({
+        callSid,
+        to: didNumber,
+        text: confirmationText,
+        lang: switchedLocale,
+        context: "language_switch_confirmation",
+      });
+
+      vr.say(
+        {
+          language: switchedLocale as any,
+          voice: switchedVoiceName as any,
+        },
+        confirmationText
+      );
+
+      vr.gather({
+        input: ["speech", "dtmf"] as any,
+        numDigits: 1,
+        action: "/webhook/voice-response",
+        method: "POST",
+        language: switchedLocale as any,
+        speechTimeout: "auto",
+      });
+
+      return res.type("text/xml").send(vr.toString());
     }
 
     // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI

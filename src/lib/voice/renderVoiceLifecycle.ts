@@ -5,6 +5,7 @@ import { SupportedVoiceLocale } from "./resolveVoiceLanguage";
 export type VoiceLifecycleKey =
   | "language_selected_es"
   | "language_continue_en"
+  | "language_switch_confirmation"
   | "menu_option_not_recognized"
   | "call_goodbye"
   | "generic_voice_unavailable"
@@ -31,6 +32,9 @@ export function renderVoiceLifecycle(
 
       case "language_continue_en":
         return "Continuamos en inglés.";
+
+      case "language_switch_confirmation":
+        return "Claro, puedo continuar en español. ¿En qué puedo ayudarte hoy?";
 
       case "menu_option_not_recognized":
         return "No reconocí esa opción.";
@@ -63,6 +67,9 @@ export function renderVoiceLifecycle(
       case "language_continue_en":
         return "Continuando em inglês.";
 
+      case "language_switch_confirmation":
+        return "Claro, posso continuar em português. Como posso te ajudar hoje?";
+
       case "menu_option_not_recognized":
         return "Não reconheci essa opção.";
 
@@ -92,6 +99,9 @@ export function renderVoiceLifecycle(
 
     case "language_continue_en":
       return "Continuing in English.";
+
+    case "language_switch_confirmation":
+      return "Sure, I can continue in English. How can I help you today?";
 
     case "menu_option_not_recognized":
       return "I didn’t recognize that option.";
