@@ -34,6 +34,39 @@ type HandleBookingServiceStepResult =
       resolvedValue: string;
     };
 
+function buildServiceSpeechHints(rawConfig: string): string | undefined {
+  const text = String(rawConfig || "").trim();
+  if (!text) return undefined;
+
+  const tokens = text
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const cleanLine = line.trim();
+      if (!cleanLine) return [];
+
+      const [canonicalRaw, aliasesRaw = ""] = cleanLine.split("|");
+      const canonical = String(canonicalRaw || "").trim();
+      const aliases = String(aliasesRaw || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+      return [canonical, ...aliases].filter(Boolean);
+    });
+
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+
+  for (const token of tokens) {
+    const normalized = token.toLowerCase().trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(token);
+  }
+
+  return deduped.length ? deduped.join(", ") : undefined;
+}
+
 export async function handleBookingServiceStep(
   params: HandleBookingServiceStepParams
 ): Promise<HandleBookingServiceStepResult> {
@@ -48,6 +81,8 @@ export async function handleBookingServiceStep(
     rawConfig,
     createBookingGather,
   } = params;
+
+  const serviceHints = buildServiceSpeechHints(rawConfig);
 
   const serviceResolution = resolveVoiceBookingService({
     userInput: effectiveUserInput,
@@ -81,6 +116,8 @@ export async function handleBookingServiceStep(
     const gather = createBookingGather({
       vr,
       locale: currentLocale,
+      step: currentStep,
+      hints: serviceHints,
     });
 
     gather.say(
@@ -120,6 +157,8 @@ export async function handleBookingServiceStep(
     const gather = createBookingGather({
       vr,
       locale: currentLocale,
+      step: currentStep,
+      hints: serviceHints,
     });
 
     gather.say(

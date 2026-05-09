@@ -21,8 +21,12 @@ export type BookingStepHandlerResult =
 export type CreateBookingGatherFn = (params: {
   vr: twiml.VoiceResponse;
   locale: VoiceLocale;
+  step?: BookingStep | null;
   isPhoneStep?: boolean;
   isConfirmationStep?: boolean;
+  hints?: string;
+  timeout?: number;
+  bargeIn?: boolean;
 }) => ReturnType<twiml.VoiceResponse["gather"]>;
 
 export type VoiceBotSayLogger = (input: {
