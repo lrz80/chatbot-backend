@@ -72,6 +72,27 @@ function normalizeDetectedVoiceLanguage(
   return null;
 }
 
+function extractDetectionConfidence(value: unknown): number | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+
+  const candidate = (value as any).confidence;
+
+  if (typeof candidate === "number" && Number.isFinite(candidate)) {
+    return candidate;
+  }
+
+  if (typeof candidate === "string") {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 export async function handleVoiceLanguageRoute(
   req: Request,
   res: Response
@@ -111,6 +132,9 @@ export async function handleVoiceLanguageRoute(
   const normalizedDetectedLanguage =
     normalizeDetectedVoiceLanguage(detectedLanguageFromSpeech);
 
+  const detectedLanguageConfidence =
+    extractDetectionConfidence(detectedLanguageFromSpeech);
+
   let selectedLanguage: "es" | "en" | "pt" =
     langSelection.selectedLanguage === "es"
       ? "es"
@@ -118,7 +142,12 @@ export async function handleVoiceLanguageRoute(
       ? "pt"
       : "en";
 
-  if (normalizedDetectedLanguage) {
+  const canOverrideLanguageFromDetection =
+    Boolean(normalizedDetectedLanguage) &&
+    detectedLanguageConfidence !== null &&
+    detectedLanguageConfidence >= 0.93;
+
+  if (canOverrideLanguageFromDetection && normalizedDetectedLanguage) {
     selectedLanguage = normalizedDetectedLanguage;
   }
 
@@ -129,6 +158,8 @@ export async function handleVoiceLanguageRoute(
       speech: langSelection.normalizedSpeech,
       detectedLanguageFromSpeech,
       normalizedDetectedLanguage,
+      detectedLanguageConfidence,
+      canOverrideLanguageFromDetection,
       selectedLanguage,
       bodyKeys: Object.keys(req.body || {}),
     })
