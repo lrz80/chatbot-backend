@@ -20,9 +20,9 @@ type GenerateVoiceAssistantReplyResult = {
 };
 
 const OPENAI_TIMEOUT_MS = 3500;
-const MAX_SYSTEM_PROMPT_CHARS = 2200;
+const MAX_SYSTEM_PROMPT_CHARS = 700;
 const MAX_USER_INPUT_CHARS = 500;
-const MAX_COMPLETION_TOKENS = 90;
+const MAX_COMPLETION_TOKENS = 50;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "",
@@ -52,13 +52,12 @@ function buildVoiceSystemPrompt({
   }
 
   return normalizeCompactText(
-    `Eres Amy, asistente telefónica del negocio ${brand}.
-Responde breve, natural y útil.
-Máximo 2 frases.
-No inventes información.
-No leas URLs en voz.
-Si no estás segura, pide enviar el enlace por SMS en vez de improvisar.`,
-    MAX_SYSTEM_PROMPT_CHARS
+    `Eres Amy, asistente telefónica de ${brand}.
+  Responde natural y breve.
+  Máximo 2 frases.
+  No inventes.
+  No leas URLs en voz.`,
+  MAX_SYSTEM_PROMPT_CHARS
   );
 }
 
