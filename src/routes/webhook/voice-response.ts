@@ -41,7 +41,6 @@ import { persistVoiceTurn } from "../../lib/voice/runtime/persistVoiceTurn";
 import { renderFinalVoiceTurn } from "../../lib/voice/runtime/renderFinalVoiceTurn";
 import { resolveVoiceRequestContext } from "../../lib/voice/runtime/resolveVoiceRequestContext";
 import { handleVoiceLanguageRoute } from "../../lib/voice/runtime/handleVoiceLanguageRoute";
-import { resolveVoiceBusinessInfoFastpath } from "../../lib/voice/runtime/resolveVoiceBusinessInfoFastpath";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -525,48 +524,21 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type("text/xml").send(awaitingSmsDestinationResult.twiml);
     }
 
-    let respuesta: string;
-
-    const businessInfoFastpathResult = await resolveVoiceBusinessInfoFastpath({
+    // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI
+    let { respuesta } = await generateVoiceAssistantReply({
       tenantId: tenant.id,
+      membershipStart: tenant.membresia_inicio ?? null,
+      channelKey: CHANNEL_KEY,
       currentLocale,
-      intent: resolvedInitialVoiceIntent,
-      userInput: effectiveUserInput,
-      infoClave: String(tenant.info_clave || ""),
-      promptBaseMem: "",
+      effectiveUserInput,
+      systemPrompt: (cfg.system_prompt as string)?.trim() || "",
+      brand,
     });
 
-    if (businessInfoFastpathResult.handled) {
-      respuesta = businessInfoFastpathResult.respuesta;
-
-      console.log(
-        "[VOICE][BUSINESS_INFO_FASTPATH]",
-        JSON.stringify({
-          callSid,
-          lang: currentLocale,
-          source: businessInfoFastpathResult.source,
-          intent: businessInfoFastpathResult.intent,
-          respuesta,
-        })
-      );
-    } else {
-      const llmResult = await generateVoiceAssistantReply({
-        tenantId: tenant.id,
-        membershipStart: tenant.membresia_inicio ?? null,
-        channelKey: CHANNEL_KEY,
-        currentLocale,
-        effectiveUserInput,
-        systemPrompt: (cfg.system_prompt as string)?.trim() || "",
-        brand,
-      });
-
-      respuesta = llmResult.respuesta;
-
-      console.log(
-        "[VOICE][OPENAI_RAW]",
-        JSON.stringify({ callSid, lang: currentLocale, respuestaRaw: respuesta })
-      );
-    }
+    console.log(
+      '[VOICE][OPENAI_RAW]',
+      JSON.stringify({ callSid, lang: currentLocale, respuestaRaw: respuesta })
+    );
 
     const voiceSmsFlowResult = await handleVoiceSmsFlow({
       vr,
