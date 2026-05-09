@@ -172,6 +172,7 @@ export async function handleVoiceBookingTurn(
     const gather = createBookingGather({
       vr,
       locale: currentLocale,
+      step: firstStep,
     });
 
     gather.say({ language: currentLocale as any, voice: voiceName }, ask);
@@ -226,6 +227,7 @@ export async function handleVoiceBookingTurn(
     const gather = createBookingGather({
       vr,
       locale: currentLocale,
+      step: currentStep,
       isPhoneStep: currentStep.expected_type === "phone",
       isConfirmationStep: currentStep.expected_type === "confirmation",
     });

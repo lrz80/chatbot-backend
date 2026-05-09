@@ -2,6 +2,12 @@
 import { twiml } from "twilio";
 import { VoiceLocale } from "../types";
 
+type BookingFlowStepLike = {
+  step_key?: string | null;
+  expected_type?: string | null;
+  validation_config?: Record<string, any> | null;
+};
+
 export function buildExtraBookingFields(
   bookingData: Record<string, any> | undefined
 ): Record<string, string> {
@@ -139,26 +145,128 @@ export function resolveBookingSpeechFast(params: {
   return null;
 }
 
+function normalizeHintToken(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => normalizeHintToken(item));
+  }
+
+  if (!value || typeof value === "boolean") {
+    return [];
+  }
+
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+
+    return [
+      ...normalizeHintToken(obj.label),
+      ...normalizeHintToken(obj.value),
+      ...normalizeHintToken(obj.name),
+      ...normalizeHintToken(obj.title),
+      ...normalizeHintToken(obj.synonyms),
+      ...normalizeHintToken(obj.aliases),
+      ...normalizeHintToken(obj.keywords),
+      ...normalizeHintToken(obj.phrases),
+    ];
+  }
+
+  const clean = String(value).trim();
+  if (!clean) return [];
+
+  return [clean];
+}
+
+function dedupeHintTokens(tokens: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const token of tokens) {
+    const normalized = token.toLowerCase().trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(token.trim());
+  }
+
+  return result;
+}
+
+export function buildBookingStepSpeechHints(
+  step?: BookingFlowStepLike | null
+): string | undefined {
+  const validationConfig =
+    step?.validation_config && typeof step.validation_config === "object"
+      ? step.validation_config
+      : null;
+
+  if (!validationConfig) {
+    return undefined;
+  }
+
+  const explicitHintTokens = dedupeHintTokens([
+    ...normalizeHintToken(validationConfig.speech_hints),
+    ...normalizeHintToken(validationConfig.hints),
+  ]);
+
+  if (explicitHintTokens.length > 0) {
+    return explicitHintTokens.join(", ");
+  }
+
+  const optionHintTokens = dedupeHintTokens(
+    normalizeHintToken(validationConfig.options)
+  );
+
+  if (optionHintTokens.length > 0) {
+    return optionHintTokens.join(", ");
+  }
+
+  return undefined;
+}
+
 export function createBookingGather(params: {
   vr: twiml.VoiceResponse;
   locale: VoiceLocale;
+  step?: BookingFlowStepLike | null;
   isPhoneStep?: boolean;
   isConfirmationStep?: boolean;
+  hints?: string;
+  timeout?: number;
+  bargeIn?: boolean;
 }) {
+  const expectedType =
+    typeof params.step?.expected_type === "string"
+      ? params.step.expected_type.trim()
+      : params.isPhoneStep
+      ? "phone"
+      : params.isConfirmationStep
+      ? "confirmation"
+      : "";
+
   const input =
-    params.isPhoneStep || params.isConfirmationStep
+    expectedType === "phone" || expectedType === "confirmation"
       ? (["speech", "dtmf"] as const)
       : (["speech"] as const);
 
+  const numDigits =
+    expectedType === "phone" ? 15 : expectedType === "confirmation" ? 1 : undefined;
+
+  const resolvedHints =
+    (params.hints || "").trim() || buildBookingStepSpeechHints(params.step);
+
   return params.vr.gather({
     input: input as any,
-    numDigits: params.isPhoneStep ? 15 : params.isConfirmationStep ? 1 : undefined,
+    ...(typeof numDigits === "number" ? { numDigits } : {}),
     action: "/webhook/voice-response",
     method: "POST",
     language: params.locale as any,
+    speechModel: "phone_call",
     speechTimeout: "1",
-    timeout: 5,
+    timeout:
+      typeof params.timeout === "number"
+        ? params.timeout
+        : expectedType === "phone"
+        ? 10
+        : 5,
     actionOnEmptyResult: true,
-    bargeIn: true,
+    bargeIn: typeof params.bargeIn === "boolean" ? params.bargeIn : true,
+    ...(resolvedHints ? { hints: resolvedHints } : {}),
   });
 }
