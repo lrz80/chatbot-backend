@@ -1,4 +1,5 @@
 //src/lib/voice/runtime/generateVoiceAssistantReply.ts
+import OpenAI from "openai";
 import pool from "../../db";
 import { cycleStartForNow } from "../../../utils/billingCycle";
 import { renderVoiceReply } from "../renderVoiceReply";
@@ -18,6 +19,49 @@ type GenerateVoiceAssistantReplyResult = {
   respuesta: string;
 };
 
+const OPENAI_TIMEOUT_MS = 3500;
+const MAX_SYSTEM_PROMPT_CHARS = 2200;
+const MAX_USER_INPUT_CHARS = 500;
+const MAX_COMPLETION_TOKENS = 90;
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || "",
+});
+
+function normalizeCompactText(value: string, maxChars: number): string {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxChars);
+}
+
+function buildVoiceSystemPrompt({
+  systemPrompt,
+  brand,
+}: {
+  systemPrompt: string;
+  brand: string;
+}): string {
+  const normalizedCustomPrompt = normalizeCompactText(
+    systemPrompt,
+    MAX_SYSTEM_PROMPT_CHARS
+  );
+
+  if (normalizedCustomPrompt) {
+    return normalizedCustomPrompt;
+  }
+
+  return normalizeCompactText(
+    `Eres Amy, asistente telefónica del negocio ${brand}.
+Responde breve, natural y útil.
+Máximo 2 frases.
+No inventes información.
+No leas URLs en voz.
+Si no estás segura, pide enviar el enlace por SMS en vez de improvisar.`,
+    MAX_SYSTEM_PROMPT_CHARS
+  );
+}
+
 export async function generateVoiceAssistantReply(
   params: GenerateVoiceAssistantReplyParams
 ): Promise<GenerateVoiceAssistantReplyResult> {
@@ -35,36 +79,43 @@ export async function generateVoiceAssistantReply(
     locale: currentLocale,
   });
 
+  const normalizedUserInput = normalizeCompactText(
+    effectiveUserInput,
+    MAX_USER_INPUT_CHARS
+  );
+
+  if (!normalizedUserInput) {
+    return { respuesta };
+  }
+
+  const finalSystemPrompt = buildVoiceSystemPrompt({
+    systemPrompt,
+    brand,
+  });
+
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+
   try {
-    const { default: OpenAI } = await import("openai");
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
-
     const completion = await openai.chat.completions.create(
       {
         model: "gpt-4o-mini",
         temperature: 0,
+        max_completion_tokens: MAX_COMPLETION_TOKENS,
         messages: [
           {
             role: "system",
-            content:
-              systemPrompt ||
-              `Eres Amy, asistente telefónica del negocio ${brand}. 
-REGLAS:
-- NO menciones precios ni montos al hablar, nunca inventes números.
-- Si el usuario pregunta por precios, horarios, ubicación o pagos, ofrece enviar un SMS con el enlace correspondiente (no los leas en voz).
-- Jamás leas URL en voz.
-- Responde breve y natural.`,
+            content: finalSystemPrompt,
           },
-          { role: "user", content: effectiveUserInput },
+          {
+            role: "user",
+            content: normalizedUserInput,
+          },
         ],
       },
       { signal: controller.signal as any }
     );
-
-    clearTimeout(timer);
 
     respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
 
@@ -77,16 +128,40 @@ REGLAS:
     const cicloInicio = cycleStartForNow(membershipStart ?? new Date());
 
     if (totalTokens > 0) {
-      await pool.query(
-        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-         VALUES ($1, $2, $3::date, $4)
-         ON CONFLICT (tenant_id, canal, mes)
-         DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-        [tenantId, channelKey, cicloInicio, totalTokens]
-      );
+      void pool
+        .query(
+          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+           VALUES ($1, $2, $3::date, $4)
+           ON CONFLICT (tenant_id, canal, mes)
+           DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+          [tenantId, channelKey, cicloInicio, totalTokens]
+        )
+        .catch((error) => {
+          console.warn("[VOICE][OPENAI_USAGE_LOG_FAILED]", {
+            tenantId,
+            channelKey,
+            error: error?.message || error,
+          });
+        });
     }
-  } catch (e) {
-    console.warn("[VOICE][OPENAI_FALLBACK]", e);
+
+    console.log("[VOICE][OPENAI_LATENCY_MS]", {
+      tenantId,
+      channelKey,
+      elapsedMs: Date.now() - startedAt,
+      promptChars: finalSystemPrompt.length,
+      userChars: normalizedUserInput.length,
+      totalTokens,
+    });
+  } catch (e: any) {
+    console.warn("[VOICE][OPENAI_FALLBACK]", {
+      tenantId,
+      channelKey,
+      elapsedMs: Date.now() - startedAt,
+      error: e?.message || e,
+    });
+  } finally {
+    clearTimeout(timer);
   }
 
   return { respuesta };
