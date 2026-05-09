@@ -419,9 +419,32 @@ export async function handleBookingDatetimeStep(
     };
   }
 
+  const resolvedDatetimeIso = scheduleValidation.requestedAt.toISOString();
+
+  const resolvedDatetimeDisplay =
+    formatSuggestedStartForVoice(
+      resolvedDatetimeIso,
+      currentLocale,
+      String(scheduleValidation.timeZone || "").trim() || "America/New_York"
+    ) || rawDatetime;
+
+  const nextBookingData = {
+    ...currentBookingData,
+    [currentStep.step_key]: rawDatetime,
+    datetime: rawDatetime,
+    datetime_iso: resolvedDatetimeIso,
+    datetime_display: resolvedDatetimeDisplay,
+    __datetime_reference_suggested_starts: JSON.stringify([]),
+  };
+
+  const nextState: CallState = {
+    ...state,
+    bookingData: nextBookingData,
+  };
+
   return {
     handled: false,
-    nextState: state,
-    resolvedValue: resolvedStepValue,
+    nextState,
+    resolvedValue: rawDatetime,
   };
 }

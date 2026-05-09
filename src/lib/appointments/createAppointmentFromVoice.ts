@@ -41,6 +41,8 @@ function buildExtraBookingDescriptionLines(
   const excludedKeys = new Set([
     "service",
     "datetime",
+    "datetime_iso",
+    "datetime_display",
     "customer_name",
     "customer_phone",
     "customer_email",
@@ -59,9 +61,20 @@ function buildExtraBookingDescriptionLines(
     });
 }
 
+function parseIsoDate(value: string | null | undefined): Date | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  return parsed;
+}
+
 export async function createAppointmentFromVoice(args: Args) {
   const serviceName = String(args.answersBySlot.service || "").trim();
-  const datetimeText = args.answersBySlot.datetime || "";
+  const datetimeText = String(args.answersBySlot.datetime || "").trim();
+  const datetimeIsoText = String(args.answersBySlot.datetime_iso || "").trim();
   const customerPhone = args.answersBySlot.customer_phone || null;
   const customerName = args.answersBySlot.customer_name || "Cliente Voz";
   const customerEmail = args.answersBySlot.customer_email || null;
@@ -76,24 +89,28 @@ export async function createAppointmentFromVoice(args: Args) {
     throw new Error("APPOINTMENTS_DISABLED");
   }
 
-  const scheduleValidation = await resolveVoiceScheduleValidation({
-    tenantId: args.tenantId,
-    serviceName,
-    rawDatetime: datetimeText,
-    channel: "voice",
-  });
+  let start: Date | null = parseIsoDate(datetimeIsoText);
 
-  if (!scheduleValidation.ok) {
-    if (scheduleValidation.reason === "invalid_datetime") {
-      throw new Error(`INVALID_VOICE_DATETIME: ${datetimeText}`);
+  if (!start) {
+    const scheduleValidation = await resolveVoiceScheduleValidation({
+      tenantId: args.tenantId,
+      serviceName,
+      rawDatetime: datetimeText,
+      channel: "voice",
+    });
+
+    if (!scheduleValidation.ok) {
+      if (scheduleValidation.reason === "invalid_datetime") {
+        throw new Error(`INVALID_VOICE_DATETIME: ${datetimeText}`);
+      }
+
+      throw new Error(
+        `VOICE_SCHEDULE_NOT_AVAILABLE:${serviceName}:${scheduleValidation.availableTimes.join(",")}`
+      );
     }
 
-    throw new Error(
-      `VOICE_SCHEDULE_NOT_AVAILABLE:${serviceName}:${scheduleValidation.availableTimes.join(",")}`
-    );
+    start = scheduleValidation.requestedAt;
   }
-
-  const start = scheduleValidation.requestedAt;
 
   const duration = args.settings.default_duration_min;
   const end = new Date(start.getTime() + duration * 60 * 1000);

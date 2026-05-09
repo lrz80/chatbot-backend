@@ -286,9 +286,35 @@ export async function handleBookingConfirmationStep(
       bookingTimeZone =
         String(appointmentSettings?.timezone || "").trim() || bookingTimeZone;
 
-      const answersBySlot = buildAnswersBySlot({
+      const rawBookingData = state.bookingData || {};
+
+      const answersBySlotBase = buildAnswersBySlot({
         flow,
-        bookingData: state.bookingData || {},
+        bookingData: rawBookingData,
+      });
+
+      const answersBySlot: Record<string, string | null | undefined> = {
+        ...answersBySlotBase,
+      };
+
+      if (
+        typeof rawBookingData.datetime_iso === "string" &&
+        rawBookingData.datetime_iso.trim()
+      ) {
+        answersBySlot.datetime_iso = rawBookingData.datetime_iso.trim();
+      }
+
+      if (
+        typeof rawBookingData.datetime_display === "string" &&
+        rawBookingData.datetime_display.trim()
+      ) {
+        answersBySlot.datetime_display = rawBookingData.datetime_display.trim();
+      }
+
+      console.log("[VOICE][BOOKING][ANSWERS_BY_SLOT]", {
+        callSid,
+        answersBySlot,
+        bookingData: rawBookingData,
       });
 
       console.log("[VOICE][BOOKING][ANSWERS_BY_SLOT]", {
@@ -362,6 +388,14 @@ export async function handleBookingConfirmationStep(
           state.bookingData?.datetime_display ||
           state.bookingData?.datetime ||
           "",
+        datetime_display:
+          state.bookingData?.datetime_display ||
+          state.bookingData?.datetime ||
+          "",
+        datetime_iso:
+          typeof state.bookingData?.datetime_iso === "string"
+            ? state.bookingData.datetime_iso
+            : "",
       };
 
       const successPromptText = resolveBookingPromptText({
