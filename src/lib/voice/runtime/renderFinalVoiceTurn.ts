@@ -11,6 +11,7 @@ import {
 } from "../speechFormatting";
 
 import type { CallState, VoiceLocale } from "../types";
+import { buildVoiceGatherConfig } from "../buildVoiceGatherConfig";
 
 type RenderFinalVoiceTurnParams = {
   vr: twiml.VoiceResponse;
@@ -70,17 +71,15 @@ export async function renderFinalVoiceTurn({
   });
 
   if (!shouldEndCall) {
-    const contGather = vr.gather({
-      input: ["speech", "dtmf"] as any,
-      numDigits: 1,
-      action: "/webhook/voice-response",
-      method: "POST",
-      language: currentLocale as any,
-      speechTimeout: "auto",
-      timeout: 7,
-      actionOnEmptyResult: true,
-      bargeIn: true,
-    });
+        const contGather = vr.gather(
+      buildVoiceGatherConfig({
+        locale: currentLocale,
+        action: "/webhook/voice-response",
+        numDigits: 1,
+        timeout: 7,
+        bargeIn: true,
+      })
+    );
 
     contGather.say(
       { language: currentLocale as any, voice: voiceName as any },

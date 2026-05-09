@@ -42,6 +42,7 @@ import { renderFinalVoiceTurn } from "../../lib/voice/runtime/renderFinalVoiceTu
 import { resolveVoiceRequestContext } from "../../lib/voice/runtime/resolveVoiceRequestContext";
 import { handleVoiceLanguageRoute } from "../../lib/voice/runtime/handleVoiceLanguageRoute";
 import { resolveVoiceTurnControlSignal } from "../../lib/voice/runtime/resolveVoiceTurnControlSignal";
+import { buildVoiceGatherConfig } from "../../lib/voice/buildVoiceGatherConfig";
 
 const router = Router();
 const CHANNEL_KEY = "voice";
@@ -591,14 +592,13 @@ router.post('/', async (req: Request, res: Response) => {
         confirmationText
       );
 
-      vr.gather({
-        input: ["speech", "dtmf"] as any,
-        numDigits: 1,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: switchedLocale as any,
-        speechTimeout: "auto",
-      });
+      vr.gather(
+        buildVoiceGatherConfig({
+          locale: switchedLocale,
+          action: "/webhook/voice-response",
+          numDigits: 1,
+        })
+      );
 
       return res.type("text/xml").send(vr.toString());
     }
@@ -675,14 +675,13 @@ router.post('/', async (req: Request, res: Response) => {
   const errLocale = ((state.lang as any) || 'es-ES') as any; // ⛔ no usar cfgLocale aquí
   const errText = renderVoiceLifecycle("fatal_error_offer_sms", errLocale);
   vrErr.say({ language: errLocale as any, voice: resolveVoiceProviderVoice(errLocale) as any }, errText);
-  vrErr.gather({
-    input: ['speech','dtmf'] as any,
-    numDigits: 1,
-    action: '/webhook/voice-response',
-    method: 'POST',
-    language: errLocale as any,
-    speechTimeout: 'auto',
-  });
+  vrErr.gather(
+    buildVoiceGatherConfig({
+      locale: errLocale,
+      action: "/webhook/voice-response",
+      numDigits: 1,
+    })
+  );
 
   return res.type('text/xml').send(vrErr.toString());  // ✅ mantener la llamada viva
 }

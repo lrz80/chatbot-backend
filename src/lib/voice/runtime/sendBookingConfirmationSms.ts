@@ -1,5 +1,6 @@
 //src/lib/voice/runtime/sendBookingConfirmationSms.ts
 import { twiml } from "twilio";
+import { buildVoiceGatherConfig } from "../buildVoiceGatherConfig";
 import { sendSMS } from "../../senders/sms";
 import { upsertVoiceCallState } from "../upsertVoiceCallState";
 import type { CallState, VoiceLocale } from "../types";
@@ -200,17 +201,15 @@ export async function sendBookingConfirmationSms(
     const bad = buildInvalidNumberText(currentLocale, withFollowup);
 
     if (successMode === "direct_followup") {
-      const gather = vr.gather({
-        input: ["speech", "dtmf"] as any,
-        numDigits: 1,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: currentLocale as any,
-        speechTimeout: "auto",
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
-      });
+      const gather = vr.gather(
+        buildVoiceGatherConfig({
+          locale: currentLocale,
+          action: "/webhook/voice-response",
+          numDigits: 1,
+          timeout: 7,
+          bargeIn: true,
+        })
+      );
 
       gather.say({ language: currentLocale as any, voice: voiceName }, bad);
 
@@ -232,17 +231,15 @@ export async function sendBookingConfirmationSms(
     const bad = buildInvalidFromText(currentLocale, withFollowup);
 
     if (successMode === "direct_followup") {
-      const gather = vr.gather({
-        input: ["speech", "dtmf"] as any,
-        numDigits: 1,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: currentLocale as any,
-        speechTimeout: "auto",
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
-      });
+      const gather = vr.gather(
+        buildVoiceGatherConfig({
+          locale: currentLocale,
+          action: "/webhook/voice-response",
+          numDigits: 1,
+          timeout: 7,
+          bargeIn: true,
+        })
+      );
 
       gather.say({ language: currentLocale as any, voice: voiceName }, bad);
 
@@ -264,17 +261,15 @@ export async function sendBookingConfirmationSms(
     const bad = buildWhatsappOnlyText(currentLocale, withFollowup);
 
     if (successMode === "direct_followup") {
-      const gather = vr.gather({
-        input: ["speech", "dtmf"] as any,
-        numDigits: 1,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: currentLocale as any,
-        speechTimeout: "auto",
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
-      });
+      const gather = vr.gather(
+        buildVoiceGatherConfig({
+          locale: currentLocale,
+          action: "/webhook/voice-response",
+          numDigits: 1,
+          timeout: 7,
+          bargeIn: true,
+        })
+      );
 
       gather.say({ language: currentLocale as any, voice: voiceName }, bad);
 
@@ -317,17 +312,15 @@ export async function sendBookingConfirmationSms(
   if (successMode === "direct_followup") {
     const ok = buildSuccessFollowupText(currentLocale);
 
-    const gather = vr.gather({
-      input: ["speech", "dtmf"] as any,
-      numDigits: 1,
-      action: "/webhook/voice-response",
-      method: "POST",
-      language: currentLocale as any,
-      speechTimeout: "auto",
-      timeout: 7,
-      actionOnEmptyResult: true,
-      bargeIn: true,
-    });
+    const gather = vr.gather(
+      buildVoiceGatherConfig({
+        locale: currentLocale,
+        action: "/webhook/voice-response",
+        numDigits: 1,
+        timeout: 7,
+        bargeIn: true,
+      })
+    );
 
     gather.say({ language: currentLocale as any, voice: voiceName }, ok);
 

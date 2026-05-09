@@ -6,6 +6,7 @@ import { deleteVoiceCallState } from "../deleteVoiceCallState";
 import { upsertVoiceCallState } from "../upsertVoiceCallState";
 import { renderVoiceReply } from "../renderVoiceReply";
 import { renderVoiceLifecycle } from "../renderVoiceLifecycle";
+import { buildVoiceGatherConfig } from "../buildVoiceGatherConfig";
 
 type VoiceLocale = "es-ES" | "en-US" | "pt-BR";
 
@@ -165,17 +166,15 @@ export async function handleVoiceTransferTurn(
         bookingData: state.bookingData ?? {},
       });
 
-      const gather = vr.gather({
-        input: ["speech", "dtmf"] as any,
-        numDigits: 1,
-        action: "/webhook/voice-response",
-        method: "POST",
-        language: currentLocale as any,
-        speechTimeout: "auto",
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
-      });
+      vr.gather(
+        buildVoiceGatherConfig({
+          locale: currentLocale,
+          action: "/webhook/voice-response",
+          numDigits: 1,
+          timeout: 7,
+          bargeIn: true,
+        })
+      );
 
       return {
         handled: true,

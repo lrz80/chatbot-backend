@@ -1,5 +1,6 @@
 //src/lib/voice/runtime/voiceSmsDestinationRuntime.ts
 import { twiml } from "twilio";
+import { buildVoiceGatherConfig } from "../buildVoiceGatherConfig";
 import { upsertVoiceCallState } from "../upsertVoiceCallState";
 import { renderVoiceReply } from "../renderVoiceReply";
 import { renderVoiceSmsConfirmation } from "../renderVoiceSmsConfirmation";
@@ -60,22 +61,18 @@ export async function askForSmsDestinationNumber(
   });
 
   vr.say({ language: currentLocale as any, voice: voiceName }, askNum);
-  vr.gather({
-    input: ["speech", "dtmf"] as any,
-    numDigits: 15,
-    action: "/webhook/voice-response",
-    method: "POST",
-    language: currentLocale as any,
-    speechTimeout: "auto",
-    timeout: 10,
-    actionOnEmptyResult: true,
-    bargeIn: true,
-    enhanced: true,
-    speechModel: "phone_call",
-    hints: currentLocale.startsWith("es")
-      ? "más, mas, signo, uno, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, cero, guion, espacio"
-      : "plus, one, two, three, four, five, six, seven, eight, nine, zero, dash, space",
-  });
+  vr.gather(
+    buildVoiceGatherConfig({
+      locale: currentLocale,
+      action: "/webhook/voice-response",
+      numDigits: 15,
+      timeout: 10,
+      bargeIn: true,
+      hints: currentLocale.startsWith("es")
+        ? "más, mas, signo, uno, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, cero, guion, espacio"
+        : "plus, one, two, three, four, five, six, seven, eight, nine, zero, dash, space",
+    })
+  );
 
   return vr.toString();
 }
@@ -114,16 +111,14 @@ export async function confirmSmsDestinationNumber(
   });
 
   vr.say({ language: currentLocale as any, voice: voiceName }, confirm);
-  vr.gather({
-    input: ["speech", "dtmf"] as any,
-    numDigits: 15,
-    action: "/webhook/voice-response",
-    method: "POST",
-    language: currentLocale as any,
-    speechTimeout: "auto",
-    timeout: 7,
-    actionOnEmptyResult: true,
-  });
+  vr.gather(
+    buildVoiceGatherConfig({
+      locale: currentLocale,
+      action: "/webhook/voice-response",
+      numDigits: 15,
+      timeout: 7,
+    })
+  );
 
   return vr.toString();
 }

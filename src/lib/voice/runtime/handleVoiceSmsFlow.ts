@@ -1,6 +1,6 @@
 //src/lib/voice/runtime/handleVoiceSmsFlow.ts
 import { twiml } from "twilio";
-
+import { buildVoiceGatherConfig } from "../buildVoiceGatherConfig";
 import { parseBookingSmsPayload } from "./voiceBookingSmsHelpers";
 import { sendBookingConfirmationSms } from "./sendBookingConfirmationSms";
 import { sendVoiceLinkWithState } from "./sendVoiceLinkRuntime";
@@ -127,17 +127,15 @@ export async function handleVoiceSmsFlow(
   if (smsStateResult.rejectedReplyText && !smsType) {
     const rejectedText = smsStateResult.rejectedReplyText;
 
-    const gather = vr.gather({
-      input: ["speech", "dtmf"] as any,
-      numDigits: 1,
-      action: "/webhook/voice-response",
-      method: "POST",
-      language: currentLocale as any,
-      speechTimeout: "auto",
-      timeout: 7,
-      actionOnEmptyResult: true,
-      bargeIn: true,
-    });
+    const gather = vr.gather(
+      buildVoiceGatherConfig({
+        locale: currentLocale,
+        action: "/webhook/voice-response",
+        numDigits: 1,
+        timeout: 7,
+        bargeIn: true,
+      })
+    );
 
     gather.say(
       { language: currentLocale as any, voice: voiceName as any },

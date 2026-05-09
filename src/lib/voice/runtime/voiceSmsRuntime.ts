@@ -1,5 +1,6 @@
 //src/lib/voice/runtime/voiceSmsRuntime.ts
 import { twiml } from "twilio";
+import { buildVoiceGatherConfig } from "../buildVoiceGatherConfig";
 import pool from '../../../lib/db';
 import { sendVoiceLinkSms } from "../sendVoiceLinkSms";
 import { getVoiceCallState } from "../getVoiceCallState";
@@ -145,18 +146,16 @@ export async function offerSms({
     linkType: tipo,
   });
 
-  const gather = vr.gather({
-    input: ["speech", "dtmf"] as any,
-    numDigits: 1,
-    action: "/webhook/voice-response",
-    method: "POST",
-    language: locale as any,
-    speechTimeout: "auto",
-    timeout: 7,
-    actionOnEmptyResult: true,
-    bargeIn: true,
-    hints: locale.startsWith("es") ? "sí, si, uno, 1" : "yes, one, 1",
-  });
+  const gather = vr.gather(
+    buildVoiceGatherConfig({
+      locale,
+      action: "/webhook/voice-response",
+      numDigits: 1,
+      timeout: 7,
+      bargeIn: true,
+      hints: locale.startsWith("es") ? "sí, si, uno, 1" : "yes, one, 1",
+    })
+  );
 
   gather.say({ language: locale as any, voice: voiceName }, ask);
 

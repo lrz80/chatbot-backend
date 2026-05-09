@@ -1,5 +1,6 @@
 //src/lib/voice/runtime/handleAwaitingSmsDestinationTurn.ts
 import { twiml } from "twilio";
+import { buildVoiceGatherConfig } from "../buildVoiceGatherConfig";
 import { normalizarNumero } from "../../senders/sms";
 import { extractDigits } from "../resolveVoiceTurnSignals";
 import { renderVoiceReply } from "../renderVoiceReply";
@@ -86,22 +87,18 @@ export async function handleAwaitingSmsDestinationTurn(
 
     vrNum.say({ language: currentLocale as any, voice: voiceName }, askAgain);
 
-    vrNum.gather({
-      input: ["speech", "dtmf"] as any,
-      numDigits: 15,
-      action: "/webhook/voice-response",
-      method: "POST",
-      language: currentLocale as any,
-      speechTimeout: "auto",
-      timeout: 10,
-      actionOnEmptyResult: true,
-      bargeIn: true,
-      enhanced: true,
-      speechModel: "phone_call",
-      hints: currentLocale.startsWith("es")
-        ? "más, mas, signo, uno, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, cero, guion, espacio"
-        : "plus, one, two, three, four, five, six, seven, eight, nine, zero, dash, space",
-    });
+    vrNum.gather(
+      buildVoiceGatherConfig({
+        locale: currentLocale,
+        action: "/webhook/voice-response",
+        numDigits: 15,
+        timeout: 10,
+        bargeIn: true,
+        hints: currentLocale.startsWith("es")
+          ? "más, mas, signo, uno, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, cero, guion, espacio"
+          : "plus, one, two, three, four, five, six, seven, eight, nine, zero, dash, space",
+      })
+    );
 
     return {
       handled: true,
@@ -151,16 +148,14 @@ export async function handleAwaitingSmsDestinationTurn(
 
     vrOk.say({ language: currentLocale as any, voice: voiceName }, ok);
 
-    vrOk.gather({
-      input: ["speech", "dtmf"] as any,
-      numDigits: 1,
-      action: "/webhook/voice-response",
-      method: "POST",
-      language: currentLocale as any,
-      speechTimeout: "auto",
-      timeout: 7,
-      actionOnEmptyResult: true,
-    });
+    vrOk.gather(
+      buildVoiceGatherConfig({
+        locale: currentLocale,
+        action: "/webhook/voice-response",
+        numDigits: 1,
+        timeout: 7,
+      })
+    );
 
     return {
       handled: true,
