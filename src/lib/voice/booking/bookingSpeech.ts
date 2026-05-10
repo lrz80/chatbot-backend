@@ -30,6 +30,13 @@ export function buildExtraBookingFields(
     "__last_assistant_text",
     "__last_booking_error",
     "__datetime_reference_suggested_starts",
+    "__booking_busy_retry",
+    "__booking_busy_suggested_starts",
+    "__last_booking_error",
+    "appointment_type",
+    "location_detail",
+    "subject_detail",
+    "datetime_iso",
   ]);
 
   return Object.fromEntries(

@@ -51,7 +51,14 @@ export async function renderFinalVoiceTurn({
 
   const conversationClosure = await resolveVoiceConversationClosure(
     effectiveUserInput,
-    currentLocale
+    currentLocale,
+    {
+      allowRejectAsClose:
+        state.smsSent === true &&
+        !state.awaiting &&
+        !state.awaitingNumber &&
+        typeof state.bookingStepIndex !== "number",
+    }
   );
 
   const shouldEndCall =

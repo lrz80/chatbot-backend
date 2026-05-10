@@ -74,6 +74,30 @@ function logBotSay({
   }));
 }
 
+function buildVoiceIntentRescueText(input: string): string {
+  const normalized = String(input || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return "";
+
+  return normalized;
+}
+
+function normalizeVoiceClosureText(input: string): string {
+  return String(input || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 router.post("/lang", handleVoiceLanguageRoute);
 
 //  Handler
@@ -384,11 +408,20 @@ router.post('/', async (req: Request, res: Response) => {
 
     const hasActiveBookingStep = typeof state.bookingStepIndex === "number";
 
+    const allowRejectAsClose =
+      state.smsSent === true &&
+      !state.awaiting &&
+      !state.awaitingNumber &&
+      typeof state.bookingStepIndex !== "number";
+
     const earlyConversationClosure = hasActiveBookingStep
       ? { shouldClose: false }
       : await resolveVoiceConversationClosure(
           effectiveUserInput,
-          currentLocale
+          currentLocale,
+          {
+            allowRejectAsClose,
+          }
         );
 
     if (
@@ -473,6 +506,51 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type("text/xml").send(bookingEntryResult.twiml);
     }
 
+    const shouldTryBookingIntentRescue =
+      isFirstPostWelcomeTurn &&
+      !!effectiveUserInput &&
+      !digits &&
+      !state.awaiting &&
+      !state.awaitingNumber &&
+      typeof state.bookingStepIndex !== "number" &&
+      resolvedInitialVoiceIntent !== "booking";
+
+    if (shouldTryBookingIntentRescue) {
+      const rescuedUtterance = buildVoiceIntentRescueText(effectiveUserInput);
+
+      const rescuedIntent = rescuedUtterance
+        ? await resolveVoiceIntentFromUtteranceAsync(rescuedUtterance, {
+            timeoutMs: 2200,
+            minConfidence: 0.35,
+          })
+        : "unknown";
+
+      if (rescuedIntent === "booking") {
+        const rescuedBookingEntryResult = await handleVoiceBookingEntry({
+          vr,
+          effectiveUserInput: rescuedUtterance,
+          resolvedInitialVoiceIntent: "booking",
+          state,
+          tenant,
+          cfg,
+          callSid,
+          didNumber,
+          callerE164,
+          currentLocale: currentLocale as "es-ES" | "en-US" | "pt-BR",
+          voiceName,
+          userInput: rescuedUtterance,
+          digits,
+          logBotSay,
+        });
+
+        state = rescuedBookingEntryResult.state;
+
+        if (rescuedBookingEntryResult.handled) {
+          return res.type("text/xml").send(rescuedBookingEntryResult.twiml);
+        }
+      }
+    }
+
     if (
       state.awaiting &&
       state.pendingType === "reservar" &&
@@ -538,6 +616,63 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (awaitingSmsDestinationResult.handled) {
       return res.type("text/xml").send(awaitingSmsDestinationResult.twiml);
+    }
+
+    if (
+      state.smsSent === true &&
+      !state.awaiting &&
+      !state.awaitingNumber &&
+      typeof state.bookingStepIndex !== "number" &&
+      effectiveUserInput
+    ) {
+      const normalizedClosureText = normalizeVoiceClosureText(effectiveUserInput);
+
+      const metaSignal = await resolveVoiceMetaSignal({
+        utterance: effectiveUserInput,
+        locale: currentLocale,
+      });
+
+      const explicitClosePhrases = new Set([
+        "no",
+        "no thank you",
+        "no thanks",
+        "thats all",
+        "that s all",
+        "nothing else",
+        "im good",
+        "i m good",
+        "all good",
+        "thats it",
+        "that s it",
+      ]);
+
+      const shouldCloseAfterSms =
+        digits === "2" ||
+        metaSignal.intent === "reject" ||
+        metaSignal.intent === "close" ||
+        explicitClosePhrases.has(normalizedClosureText);
+
+      if (shouldCloseAfterSms) {
+        await deleteVoiceCallState(callSid);
+
+        const goodbyeText = renderVoiceLifecycle("call_goodbye", currentLocale);
+
+        logBotSay({
+          callSid,
+          to: didNumber,
+          text: goodbyeText,
+          lang: currentLocale,
+          context: "post_sms_close",
+        });
+
+        vr.say(
+          { language: currentLocale as any, voice: voiceName as any },
+          goodbyeText
+        );
+
+        vr.hangup();
+        return res.type("text/xml").send(vr.toString());
+      }
     }
 
     const turnControlSignal = await resolveVoiceTurnControlSignal({

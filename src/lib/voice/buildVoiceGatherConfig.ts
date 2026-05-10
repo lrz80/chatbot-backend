@@ -13,21 +13,23 @@ export function buildVoiceGatherConfig({
   locale,
   action = "/webhook/voice-response",
   numDigits,
-  timeout = 3,
+  timeout = 4,
   bargeIn,
   hints,
 }: BuildVoiceGatherConfigParams) {
   return {
-    input: ["speech", "dtmf"] as any,
+    input: ["speech", "dtmf"] as any[],
     action,
     method: "POST" as const,
     language: locale as any,
     actionOnEmptyResult: true,
     speechModel: "phone_call" as const,
-    speechTimeout: "1",
+    speechTimeout: "auto",
     timeout,
     ...(typeof numDigits === "number" ? { numDigits } : {}),
     ...(typeof bargeIn === "boolean" ? { bargeIn } : {}),
-    ...(typeof hints === "string" && hints.trim() ? { hints } : {}),
+    ...(typeof hints === "string" && hints.trim()
+      ? { hints: hints.trim() }
+      : {}),
   };
 }
