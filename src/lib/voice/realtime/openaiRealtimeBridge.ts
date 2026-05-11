@@ -316,7 +316,6 @@ export async function createOpenAiRealtimeBridge({
   const openAiSocket = new WebSocket(getOpenAiRealtimeUrl(model), {
     headers: {
       Authorization: `Bearer ${apiKey}`,
-      "OpenAI-Beta": "realtime=v1",
     },
   });
 
@@ -356,6 +355,9 @@ export async function createOpenAiRealtimeBridge({
       locale: currentLocale,
     });
 
+    if (openAiSocket.readyState !== WebSocket.OPEN) return;
+    if (twilioSocket.readyState !== WebSocket.OPEN) return;
+
     sendJson(
       openAiSocket,
       buildOpenAiSessionUpdate({
@@ -364,6 +366,9 @@ export async function createOpenAiRealtimeBridge({
         transcriptionLanguage: getRealtimeTranscriptionLanguage(currentLocale),
       })
     );
+
+    if (openAiSocket.readyState !== WebSocket.OPEN) return;
+    if (twilioSocket.readyState !== WebSocket.OPEN) return;
 
     sendJson(openAiSocket, {
       type: "response.create",
