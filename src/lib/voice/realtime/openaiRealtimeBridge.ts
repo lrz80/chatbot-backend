@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import { buildRealtimeVoiceSession } from "./buildRealtimeVoiceSession";
 import { resolveVoiceRequestContext } from "../runtime/resolveVoiceRequestContext";
 import type { CallState } from "../types";
+import { executeRealtimeTool } from "./realtimeToolExecutor";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -101,6 +102,49 @@ function buildOpenAiSessionUpdate(params: {
         model: "gpt-4o-mini-transcribe",
         language: "en",
       },
+      tools: [
+        {
+          type: "function",
+          name: "create_appointment",
+          description:
+            "Create a real appointment only after the caller has provided service, date/time, and name. This tool checks the configured provider and creates the appointment.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              service: {
+                type: "string",
+                description: "The service requested by the caller.",
+              },
+              datetime: {
+                type: "string",
+                description:
+                  "The requested appointment date and time in natural language, for example 'tomorrow at 10 AM'.",
+              },
+              datetime_iso: {
+                type: "string",
+                description:
+                  "Optional ISO datetime if already known. Leave empty if uncertain.",
+              },
+              customer_name: {
+                type: "string",
+                description: "The caller or customer name.",
+              },
+              customer_phone: {
+                type: "string",
+                description:
+                  "The customer phone number. Use the caller phone if not provided.",
+              },
+              customer_email: {
+                type: "string",
+                description: "Optional customer email.",
+              },
+            },
+            required: ["service", "datetime", "customer_name"],
+          },
+        },
+      ],
+      tool_choice: "auto",
     },
   };
 }
@@ -131,6 +175,8 @@ export async function createOpenAiRealtimeBridge({
   let streamSid: string | null = null;
   let callSid: string | null = null;
   let didNumber: string | null = null;
+  let callerPhone: string | null = null;
+  let tenantId: string | null = null;
   let openAiReady = false;
   let sessionConfigured = false;
 
@@ -192,6 +238,8 @@ export async function createOpenAiRealtimeBridge({
       },
     });
 
+    tenantId = context.tenant.id;
+
     sessionConfigured = true;
 
     console.log("[VOICE_REALTIME][SESSION_CONFIGURED]", {
@@ -224,6 +272,111 @@ export async function createOpenAiRealtimeBridge({
 
     if (event.type === "error") {
       console.error("[VOICE_REALTIME][OPENAI_ERROR]", JSON.stringify(event));
+      return;
+    }
+
+    if (event.type === "response.function_call_arguments.done") {
+      const toolName = String(event.name || "").trim();
+      const callId = String(event.call_id || "").trim();
+
+      let toolArgs: Record<string, any> = {};
+
+      try {
+        toolArgs = JSON.parse(String(event.arguments || "{}"));
+      } catch {
+        toolArgs = {};
+      }
+
+      console.log("[VOICE_REALTIME][TOOL_CALL]", {
+        callSid,
+        toolName,
+        callId,
+        toolArgs,
+      });
+
+      if (!tenantId) {
+        sendJson(openAiSocket, {
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: callId,
+            output: JSON.stringify({
+              ok: false,
+              error: "TENANT_NOT_READY",
+            }),
+          },
+        });
+
+        sendJson(openAiSocket, {
+          type: "response.create",
+          response: {
+            instructions:
+              "Tell the caller briefly that the system is not ready to complete that action yet.",
+          },
+        });
+
+        return;
+      }
+
+      executeRealtimeTool({
+        tenantId,
+        callerPhone,
+        toolName,
+        args: toolArgs,
+      })
+        .then((toolResult) => {
+          console.log("[VOICE_REALTIME][TOOL_RESULT]", {
+            callSid,
+            toolName,
+            ok: toolResult?.ok,
+            error: toolResult?.error,
+          });
+
+          sendJson(openAiSocket, {
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: callId,
+              output: JSON.stringify(toolResult),
+            },
+          });
+
+          sendJson(openAiSocket, {
+            type: "response.create",
+            response: {
+              instructions:
+                "Respond to the caller using the tool result. If ok is true, confirm the appointment briefly. If ok is false, explain the issue briefly and ask one clear follow-up question.",
+            },
+          });
+        })
+        .catch((error) => {
+          console.error("[VOICE_REALTIME][TOOL_ERROR]", {
+            callSid,
+            toolName,
+            error: error instanceof Error ? error.message : String(error),
+          });
+
+          sendJson(openAiSocket, {
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: callId,
+              output: JSON.stringify({
+                ok: false,
+                error: error instanceof Error ? error.message : "TOOL_ERROR",
+              }),
+            },
+          });
+
+          sendJson(openAiSocket, {
+            type: "response.create",
+            response: {
+              instructions:
+                "Tell the caller briefly that this time could not be confirmed and ask for another day or time.",
+            },
+          });
+        });
+
       return;
     }
 
@@ -289,6 +442,8 @@ export async function createOpenAiRealtimeBridge({
       streamSid = event.start.streamSid;
       callSid = event.start.callSid || null;
       didNumber = event.start.customParameters?.didNumber || null;
+
+      callerPhone = event.start.customParameters?.callerPhone || null;
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {
         callSid,

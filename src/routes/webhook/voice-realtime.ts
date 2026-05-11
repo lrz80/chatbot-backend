@@ -23,6 +23,10 @@ router.post("/", async (req: Request, res: Response) => {
     .replace(/^tel:/, "")
     .trim();
 
+  const callerPhone = String(req.body.From || "")
+    .replace(/^tel:/, "")
+    .trim();
+
   const stream = vr.connect().stream({
     url: `${wsBaseUrl}/realtime/voice-stream`,
   });
@@ -35,6 +39,11 @@ router.post("/", async (req: Request, res: Response) => {
   stream.parameter({
     name: "channelKey",
     value: "voice",
+  });
+
+  stream.parameter({
+    name: "callerPhone",
+    value: callerPhone,
   });
 
   return res.type("text/xml").send(vr.toString());
