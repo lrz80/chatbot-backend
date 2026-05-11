@@ -14,13 +14,27 @@ function getPublicWsBaseUrl(): string {
   return "wss://api.aamy.ai";
 }
 
-router.post("/", async (_req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
   const vr = new twiml.VoiceResponse();
 
   const wsBaseUrl = getPublicWsBaseUrl();
 
-  vr.connect().stream({
+  const didNumber = String(req.body.To || "")
+    .replace(/^tel:/, "")
+    .trim();
+
+  const stream = vr.connect().stream({
     url: `${wsBaseUrl}/realtime/voice-stream`,
+  });
+
+  stream.parameter({
+    name: "didNumber",
+    value: didNumber,
+  });
+
+  stream.parameter({
+    name: "channelKey",
+    value: "voice",
   });
 
   return res.type("text/xml").send(vr.toString());

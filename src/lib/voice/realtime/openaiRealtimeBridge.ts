@@ -1,6 +1,8 @@
 //src/lib/voice/realtime/openaiRealtimeBridge.ts
 import WebSocket from "ws";
 import { buildRealtimeVoiceSession } from "./buildRealtimeVoiceSession";
+import { resolveVoiceRequestContext } from "../runtime/resolveVoiceRequestContext";
+import type { CallState } from "../types";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -126,32 +128,53 @@ export async function createOpenAiRealtimeBridge({
     throw new Error("Missing OPENAI_API_KEY");
   }
 
-  const session = buildRealtimeVoiceSession({
-    businessName: "Aamy Test Business",
-    businessInfo:
-      "This is a realtime voice connectivity test.",
-    systemPrompt:
-      "Help callers naturally and conversationally.",
-    locale: "es-ES",
-  });
-
   let streamSid: string | null = null;
   let callSid: string | null = null;
+  let didNumber: string | null = null;
   let openAiReady = false;
+  let sessionConfigured = false;
 
-  const openAiSocket = new WebSocket(getOpenAiRealtimeUrl(session.model), {
+  const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime";
+
+  const openAiSocket = new WebSocket(getOpenAiRealtimeUrl(model), {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "OpenAI-Beta": "realtime=v1",
     },
   });
 
-  openAiSocket.on("open", () => {
-    openAiReady = true;
+  async function configureRealtimeSessionIfReady(): Promise<void> {
+    if (sessionConfigured) return;
+    if (!openAiReady) return;
+    if (!callSid) return;
+    if (!didNumber) return;
+    if (openAiSocket.readyState !== WebSocket.OPEN) return;
 
-    console.log("[VOICE_REALTIME][OPENAI_CONNECTED]", {
-      model: session.model,
-      voice: session.voice,
+    const emptyState: CallState = {};
+
+    const context = await resolveVoiceRequestContext({
+      callSid,
+      didNumber,
+      state: emptyState,
+      langParam: undefined,
+      channelKey: "voice",
+    });
+
+    if (!context.ok) {
+      console.warn("[VOICE_REALTIME][CONTEXT_BLOCKED]", {
+        callSid,
+        didNumber,
+      });
+
+      twilioSocket.close();
+      return;
+    }
+
+    const session = buildRealtimeVoiceSession({
+      businessName: context.brand || context.tenant.name || "the business",
+      businessInfo: context.tenant.info_clave || "",
+      systemPrompt: context.cfg.system_prompt || "",
+      locale: context.currentLocale,
     });
 
     sendJson(
@@ -165,9 +188,32 @@ export async function createOpenAiRealtimeBridge({
     sendJson(openAiSocket, {
       type: "response.create",
       response: {
-        instructions:
-          "Greet the caller in one short sentence and ask how you can help.",
+        instructions: `Greet the caller naturally for ${context.brand}. Keep it short and ask how you can help.`,
       },
+    });
+
+    sessionConfigured = true;
+
+    console.log("[VOICE_REALTIME][SESSION_CONFIGURED]", {
+      callSid,
+      didNumber,
+      tenantId: context.tenant.id,
+      brand: context.brand,
+      locale: context.currentLocale,
+      voice: session.voice,
+    });
+  }
+
+  openAiSocket.on("open", () => {
+    openAiReady = true;
+
+    console.log("[VOICE_REALTIME][OPENAI_CONNECTED]", {
+      model,
+    });
+
+    configureRealtimeSessionIfReady().catch((error) => {
+      console.error("[VOICE_REALTIME][SESSION_CONFIG_ERROR]", error);
+      twilioSocket.close();
     });
   });
 
@@ -242,10 +288,17 @@ export async function createOpenAiRealtimeBridge({
     if (isTwilioStartEvent(event)) {
       streamSid = event.start.streamSid;
       callSid = event.start.callSid || null;
+      didNumber = event.start.customParameters?.didNumber || null;
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {
         callSid,
         streamSid,
+        didNumber,
+      });
+
+      configureRealtimeSessionIfReady().catch((error) => {
+        console.error("[VOICE_REALTIME][SESSION_CONFIG_ERROR]", error);
+        twilioSocket.close();
       });
 
       return;
