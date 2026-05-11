@@ -6,7 +6,7 @@ export type RealtimeVoiceSessionConfig = {
 };
 
 export function buildRealtimeVoiceSession(): RealtimeVoiceSessionConfig {
-  const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime-2";
+  const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime";
   const voice = process.env.OPENAI_REALTIME_VOICE?.trim() || "marin";
 
   return {
