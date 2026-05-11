@@ -45,6 +45,48 @@ type HandleVoiceInitialMenuResult = {
   twiml?: string;
 };
 
+function buildInitialMenuHints(params: {
+  locale: VoiceLocale;
+  tenantVoiceHints?: string | null;
+}): string | undefined {
+  const tenantHints = String(params.tenantVoiceHints || "").trim();
+
+  if (tenantHints) {
+    return tenantHints;
+  }
+
+  const fallbackHints = params.locale.startsWith("es")
+    ? [
+        "cita",
+        "reservar",
+        "agendar",
+        "reserva",
+        "precios",
+        "horarios",
+        "ubicacion",
+      ]
+    : params.locale.startsWith("pt")
+    ? [
+        "agendar",
+        "reserva",
+        "precos",
+        "horarios",
+        "localizacao",
+      ]
+    : [
+        "book",
+        "booking",
+        "appointment",
+        "book appointment",
+        "make appointment",
+        "prices",
+        "hours",
+        "location",
+      ];
+
+  return fallbackHints.join(", ");
+}
+
 export async function handleVoiceInitialMenu(
   params: HandleVoiceInitialMenuParams
 ): Promise<HandleVoiceInitialMenuResult> {
@@ -128,18 +170,23 @@ export async function handleVoiceInitialMenu(
       )
     );
 
+    const initialSpeechHints = buildInitialMenuHints({
+      locale: currentLocale,
+      tenantVoiceHints: cfg?.voice_hints,
+    });
+
     const gather = vr.gather({
       input: ["speech", "dtmf"] as any,
       numDigits: 1,
       action: "/webhook/voice-response",
       method: "POST",
       language: currentLocale as any,
-      speechTimeout: "1",
-      timeout: 7,
+      speechTimeout: "auto",
+      timeout: 8,
       actionOnEmptyResult: true,
-      bargeIn: true,
-      enhanced: true,
+      bargeIn: false,
       speechModel: "phone_call",
+      ...(initialSpeechHints ? { hints: initialSpeechHints } : {}),
     });
 
     gather.say(
