@@ -119,10 +119,12 @@ function buildOpenAiSessionUpdate(params: {
   instructions: string;
   voice: string;
   transcriptionLanguage: "en" | "es" | "pt";
+  model: string;
 }): Record<string, unknown> {
   return {
     type: "session.update",
     session: {
+      type: "realtime",
       modalities: ["text", "audio"],
       instructions: params.instructions,
       voice: params.voice,
@@ -364,6 +366,7 @@ export async function createOpenAiRealtimeBridge({
         instructions: session.instructions,
         voice: session.voice,
         transcriptionLanguage: getRealtimeTranscriptionLanguage(currentLocale),
+        model,
       })
     );
 
