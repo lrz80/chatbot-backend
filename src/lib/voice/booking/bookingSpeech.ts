@@ -271,7 +271,7 @@ export function createBookingGather(params: {
         ? params.timeout
         : expectedType === "phone"
         ? 10
-        : 5,
+        : 6,
     actionOnEmptyResult: true,
     bargeIn: typeof params.bargeIn === "boolean" ? params.bargeIn : false,
     ...(resolvedHints ? { hints: resolvedHints } : {}),
