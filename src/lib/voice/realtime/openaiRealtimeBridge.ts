@@ -37,6 +37,12 @@ type TwilioUnknownPayload = {
   [key: string]: unknown;
 };
 
+type RealtimeToolResult = {
+  ok?: boolean;
+  error?: string;
+  [key: string]: unknown;
+};
+
 function isTwilioStartEvent(event: TwilioUnknownPayload): event is TwilioStartPayload {
   return (
     event.event === "start" &&
@@ -76,9 +82,43 @@ function getOpenAiRealtimeUrl(model: string): string {
   return `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
 }
 
+function normalizeLocale(locale?: string): "en-US" | "es-ES" | "pt-BR" {
+  const value = String(locale || "").trim().toLowerCase();
+
+  if (value.startsWith("es")) return "es-ES";
+  if (value.startsWith("pt")) return "pt-BR";
+  return "en-US";
+}
+
+function getRealtimeTranscriptionLanguage(locale?: string): "en" | "es" | "pt" {
+  const normalized = normalizeLocale(locale);
+
+  if (normalized === "es-ES") return "es";
+  if (normalized === "pt-BR") return "pt";
+  return "en";
+}
+
+function buildInitialGreetingInstruction(params: {
+  brand: string;
+  locale?: string;
+}): string {
+  const normalized = normalizeLocale(params.locale);
+
+  if (normalized === "es-ES") {
+    return `Greet the caller in Spanish for ${params.brand}. Keep it short and natural.`;
+  }
+
+  if (normalized === "pt-BR") {
+    return `Greet the caller in Brazilian Portuguese for ${params.brand}. Keep it short and natural.`;
+  }
+
+  return `Greet the caller in English for ${params.brand}. Keep it short and natural.`;
+}
+
 function buildOpenAiSessionUpdate(params: {
   instructions: string;
   voice: string;
+  transcriptionLanguage: "en" | "es" | "pt";
 }): Record<string, unknown> {
   return {
     type: "session.update",
@@ -86,21 +126,17 @@ function buildOpenAiSessionUpdate(params: {
       modalities: ["text", "audio"],
       instructions: params.instructions,
       voice: params.voice,
-
-      // Twilio Media Streams envía audio G.711 μ-law.
       input_audio_format: "g711_ulaw",
       output_audio_format: "g711_ulaw",
-
       turn_detection: {
         type: "server_vad",
         threshold: 0.5,
         prefix_padding_ms: 300,
         silence_duration_ms: 700,
       },
-
       input_audio_transcription: {
         model: "gpt-4o-mini-transcribe",
-        language: "en",
+        language: params.transcriptionLanguage,
       },
       tools: [
         {
@@ -126,7 +162,7 @@ function buildOpenAiSessionUpdate(params: {
             properties: {
               service: {
                 type: "string",
-                description: "The service requested by the caller.",
+                description: "The canonical service requested by the caller.",
               },
               datetime: {
                 type: "string",
@@ -140,7 +176,7 @@ function buildOpenAiSessionUpdate(params: {
               },
               customer_name: {
                 type: "string",
-                description: "The caller or customer name.",
+                description: "The human customer name, not the pet name.",
               },
               customer_phone: {
                 type: "string",
@@ -150,6 +186,19 @@ function buildOpenAiSessionUpdate(params: {
               customer_email: {
                 type: "string",
                 description: "Optional customer email.",
+              },
+              pet_name: {
+                type: "string",
+                description: "The pet name only.",
+              },
+              pet_weight: {
+                type: "string",
+                description: "The pet weight only.",
+              },
+              location_detail: {
+                type: "string",
+                description:
+                  "Appointment location detail such as salon or mobile.",
               },
               customer_confirmed: {
                 type: "boolean",
@@ -185,6 +234,64 @@ function sendTwilioAudio(params: {
   });
 }
 
+function buildToolFollowupInstructions(params: {
+  toolName: string;
+  toolResult: RealtimeToolResult;
+}): string {
+  const { toolName, toolResult } = params;
+  const ok = toolResult?.ok === true;
+  const error = String(toolResult?.error || "").trim();
+
+  if (toolName === "get_booking_flow") {
+    if (ok) {
+      return [
+        "The booking flow is now available.",
+        "Do not confirm any appointment.",
+        "Ask only the next required booking question from the configured step order.",
+        "If the caller already provided a value for an earlier or later step and the tool result includes it, preserve it and ask only for the next still-missing required step.",
+        "Ask one short question only.",
+      ].join(" ");
+    }
+
+    return [
+      "Tell the caller briefly that booking cannot continue right now.",
+      "Do not invent booking steps.",
+      "Ask one short follow-up question only if needed.",
+    ].join(" ");
+  }
+
+  if (toolName === "create_appointment") {
+    if (ok) {
+      return [
+        "Confirm the appointment briefly using only the tool result as the source of truth.",
+        "Do not invent details.",
+        "Then ask if the caller needs anything else.",
+      ].join(" ");
+    }
+
+    if (error === "MISSING_FINAL_CONFIRMATION") {
+      return [
+        "Do not say the appointment was created.",
+        "Present one short final summary of the appointment details already collected.",
+        "Ask for explicit confirmation.",
+        "Ask one short confirmation question only.",
+      ].join(" ");
+    }
+
+    return [
+      "Do not say the appointment was created.",
+      "Explain the issue briefly using the tool result.",
+      "Ask one clear follow-up question.",
+    ].join(" ");
+  }
+
+  if (ok) {
+    return "Respond briefly using the tool result as the source of truth.";
+  }
+
+  return "Explain the issue briefly and ask one clear follow-up question.";
+}
+
 export async function createOpenAiRealtimeBridge({
   twilioSocket,
 }: BridgeParams): Promise<void> {
@@ -201,6 +308,8 @@ export async function createOpenAiRealtimeBridge({
   let tenantId: string | null = null;
   let openAiReady = false;
   let sessionConfigured = false;
+  let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
+  let bookingFlowLoaded = false;
 
   const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime";
 
@@ -238,11 +347,13 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
+    currentLocale = normalizeLocale(context.currentLocale);
+
     const session = buildRealtimeVoiceSession({
       businessName: context.brand || context.tenant.name || "the business",
       businessInfo: context.tenant.info_clave || "",
       systemPrompt: context.cfg.system_prompt || "",
-      locale: context.currentLocale,
+      locale: currentLocale,
     });
 
     sendJson(
@@ -250,18 +361,21 @@ export async function createOpenAiRealtimeBridge({
       buildOpenAiSessionUpdate({
         instructions: session.instructions,
         voice: session.voice,
+        transcriptionLanguage: getRealtimeTranscriptionLanguage(currentLocale),
       })
     );
 
     sendJson(openAiSocket, {
       type: "response.create",
       response: {
-        instructions: `Greet the caller in English for ${context.brand}. Keep it short. Do not use Portuguese. Do not use Spanish unless the caller asks for Spanish.`,
+        instructions: buildInitialGreetingInstruction({
+          brand: context.brand || context.tenant.name || "the business",
+          locale: currentLocale,
+        }),
       },
     });
 
     tenantId = context.tenant.id;
-
     sessionConfigured = true;
 
     console.log("[VOICE_REALTIME][SESSION_CONFIGURED]", {
@@ -269,7 +383,7 @@ export async function createOpenAiRealtimeBridge({
       didNumber,
       tenantId: context.tenant.id,
       brand: context.brand,
-      locale: context.currentLocale,
+      locale: currentLocale,
       voice: session.voice,
     });
   }
@@ -340,6 +454,42 @@ export async function createOpenAiRealtimeBridge({
         return;
       }
 
+      if (toolName === "create_appointment" && !bookingFlowLoaded) {
+        const blockedResult: RealtimeToolResult = {
+          ok: false,
+          error: "BOOKING_FLOW_NOT_LOADED",
+        };
+
+        console.log("[VOICE_REALTIME][TOOL_RESULT]", {
+          callSid,
+          toolName,
+          ok: false,
+          error: blockedResult.error,
+        });
+
+        sendJson(openAiSocket, {
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: callId,
+            output: JSON.stringify(blockedResult),
+          },
+        });
+
+        sendJson(openAiSocket, {
+          type: "response.create",
+          response: {
+            instructions: [
+              "Do not say the appointment was created.",
+              "Tell the caller briefly that you first need to collect the required booking details.",
+              "Call get_booking_flow before continuing the booking.",
+            ].join(" "),
+          },
+        });
+
+        return;
+      }
+
       executeRealtimeTool({
         tenantId,
         callerPhone,
@@ -347,6 +497,10 @@ export async function createOpenAiRealtimeBridge({
         args: toolArgs,
       })
         .then((toolResult) => {
+          if (toolName === "get_booking_flow" && toolResult?.ok) {
+            bookingFlowLoaded = true;
+          }
+
           console.log("[VOICE_REALTIME][TOOL_RESULT]", {
             callSid,
             toolName,
@@ -366,8 +520,10 @@ export async function createOpenAiRealtimeBridge({
           sendJson(openAiSocket, {
             type: "response.create",
             response: {
-              instructions:
-                "Respond to the caller using the tool result. If ok is true, confirm the appointment briefly. If ok is false, explain the issue briefly and ask one clear follow-up question.",
+              instructions: buildToolFollowupInstructions({
+                toolName,
+                toolResult: (toolResult || {}) as RealtimeToolResult,
+              }),
             },
           });
         })
@@ -378,23 +534,27 @@ export async function createOpenAiRealtimeBridge({
             error: error instanceof Error ? error.message : String(error),
           });
 
+          const toolErrorResult: RealtimeToolResult = {
+            ok: false,
+            error: error instanceof Error ? error.message : "TOOL_ERROR",
+          };
+
           sendJson(openAiSocket, {
             type: "conversation.item.create",
             item: {
               type: "function_call_output",
               call_id: callId,
-              output: JSON.stringify({
-                ok: false,
-                error: error instanceof Error ? error.message : "TOOL_ERROR",
-              }),
+              output: JSON.stringify(toolErrorResult),
             },
           });
 
           sendJson(openAiSocket, {
             type: "response.create",
             response: {
-              instructions:
-                "Tell the caller briefly that this time could not be confirmed and ask for another day or time.",
+              instructions: buildToolFollowupInstructions({
+                toolName,
+                toolResult: toolErrorResult,
+              }),
             },
           });
         });
@@ -464,7 +624,6 @@ export async function createOpenAiRealtimeBridge({
       streamSid = event.start.streamSid;
       callSid = event.start.callSid || null;
       didNumber = event.start.customParameters?.didNumber || null;
-
       callerPhone = event.start.customParameters?.callerPhone || null;
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {

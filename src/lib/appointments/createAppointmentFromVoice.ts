@@ -12,14 +12,6 @@ type AppointmentSettings = {
   enabled: boolean;
 };
 
-type CoreBookingSlot =
-  | "service"
-  | "datetime"
-  | "customer_name"
-  | "customer_phone"
-  | "customer_email"
-  | "confirmation";
-
 type Args = {
   tenantId: string;
   answersBySlot: Record<string, string | null | undefined>;
@@ -76,13 +68,17 @@ export async function createAppointmentFromVoice(args: Args) {
   const datetimeText = String(args.answersBySlot.datetime || "").trim();
   const datetimeIsoText = String(args.answersBySlot.datetime_iso || "").trim();
   const customerPhone = args.answersBySlot.customer_phone || null;
-  const customerName = args.answersBySlot.customer_name || "Cliente Voz";
+  const customerName = String(args.answersBySlot.customer_name || "").trim();
   const customerEmail = args.answersBySlot.customer_email || null;
   const timeZone =
     String(args.settings.timezone || "").trim() || "America/New_York";
 
   if (!serviceName) {
     throw new Error("MISSING_SERVICE");
+  }
+
+  if (!customerName) {
+    throw new Error("MISSING_CUSTOMER_NAME");
   }
 
   if (!args.settings.enabled) {
