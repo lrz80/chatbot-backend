@@ -126,7 +126,14 @@ export async function createOpenAiRealtimeBridge({
     throw new Error("Missing OPENAI_API_KEY");
   }
 
-  const session = buildRealtimeVoiceSession();
+  const session = buildRealtimeVoiceSession({
+    businessName: "Aamy Test Business",
+    businessInfo:
+      "This is a realtime voice connectivity test.",
+    systemPrompt:
+      "Help callers naturally and conversationally.",
+    locale: "es-ES",
+  });
 
   let streamSid: string | null = null;
   let callSid: string | null = null;
