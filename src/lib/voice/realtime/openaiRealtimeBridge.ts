@@ -80,26 +80,24 @@ function buildOpenAiSessionUpdate(params: {
   return {
     type: "session.update",
     session: {
-      type: "realtime",
+      modalities: ["text", "audio"],
       instructions: params.instructions,
-      audio: {
-        input: {
-          format: {
-            type: "audio/pcmu",
-          },
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 700,
-          },
-        },
-        output: {
-          format: {
-            type: "audio/pcmu",
-          },
-          voice: params.voice,
-        },
+      voice: params.voice,
+
+      // Twilio Media Streams envía audio G.711 μ-law.
+      input_audio_format: "g711_ulaw",
+      output_audio_format: "g711_ulaw",
+
+      turn_detection: {
+        type: "server_vad",
+        threshold: 0.5,
+        prefix_padding_ms: 300,
+        silence_duration_ms: 700,
+      },
+
+      input_audio_transcription: {
+        model: "gpt-4o-mini-transcribe",
+        language: "en",
       },
     },
   };
