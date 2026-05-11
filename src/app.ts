@@ -7,6 +7,7 @@ import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import http from 'http';
 import { initSocket } from './lib/socket';
+import { attachVoiceRealtimeStream } from "./routes/realtime/voice-stream";
 
 // Rutas principales
 import authRoutes from './routes/auth';
@@ -93,6 +94,7 @@ import squareIntegrationRouter from "./routes/integrations/square";
 import appointmentBookingFlowRoutes from "./routes/appointment-booking-flow";
 import appointmentServiceSchedulesRouter from "./routes/appointment-service-schedules";
 import appointmentServiceBookingRulesRouter from "./routes/appointments/service-booking-rules";
+import voiceRealtimeRouter from "./routes/webhook/voice-realtime";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -238,6 +240,7 @@ app.use("/api/integrations/square", squareIntegrationRouter);
 app.use("/api/appointment-booking-flow", appointmentBookingFlowRoutes);
 app.use("/api/appointment-service-schedules", appointmentServiceSchedulesRouter);
 app.use("/api/appointments/service-booking-rules", appointmentServiceBookingRulesRouter);
+app.use("/webhook/voice-realtime", voiceRealtimeRouter);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
@@ -268,6 +271,8 @@ const server = http.createServer(app);
 
 // Inicializar Socket.IO sobre este server con los mismos orígenes del CORS
 initSocket(server, WHITELIST);
+
+attachVoiceRealtimeStream(server);
 
 server.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
