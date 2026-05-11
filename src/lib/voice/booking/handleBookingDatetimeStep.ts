@@ -261,6 +261,16 @@ export async function handleBookingDatetimeStep(
     referenceSuggestedStarts,
   });
 
+  const scheduleValidationReason = String(
+    (scheduleValidation as any)?.reason || ""
+  ).trim();
+
+  const isUnavailableReason =
+    scheduleValidationReason === "schedule_not_available" ||
+    scheduleValidationReason === "lead_time_not_met";
+
+  const isIncompleteDatetimeReason = !isUnavailableReason;
+
   if (!scheduleValidation.ok) {
     const bookingDataWithSuggestedStarts = {
       ...currentBookingData,
@@ -305,20 +315,15 @@ export async function handleBookingDatetimeStep(
     });
 
     const promptTemplate =
-      (
-        scheduleValidation.reason === "schedule_not_available" ||
-        scheduleValidation.reason === "lead_time_not_met"
-      ) && unavailablePrompt
+      isUnavailableReason && unavailablePrompt
         ? unavailablePrompt
         : localizedRetryBase;
 
-    const rawAvailableTimes =
-      scheduleValidation.reason === "schedule_not_available" ||
-      scheduleValidation.reason === "lead_time_not_met"
-        ? Array.isArray(scheduleValidation.availableTimes)
-          ? scheduleValidation.availableTimes
-          : []
-        : [];
+    const rawAvailableTimes = isUnavailableReason
+      ? Array.isArray(scheduleValidation.availableTimes)
+        ? scheduleValidation.availableTimes
+        : []
+      : [];
 
     const availableTimes = rawAvailableTimes
       .map((value) => String(value || "").trim())
@@ -327,11 +332,7 @@ export async function handleBookingDatetimeStep(
     const availableTimesText = availableTimes.join(", ");
 
     const suggestedStarts =
-      (
-        scheduleValidation.reason === "schedule_not_available" ||
-        scheduleValidation.reason === "lead_time_not_met"
-      ) &&
-      Array.isArray(scheduleValidation.suggestedStarts)
+      isUnavailableReason && Array.isArray(scheduleValidation.suggestedStarts)
         ? scheduleValidation.suggestedStarts
             .map((value) => String(value || "").trim())
             .filter(Boolean)
@@ -363,30 +364,20 @@ export async function handleBookingDatetimeStep(
       callerE164,
     });
 
-    const retryPromptFinal =
-      suggestedTimesText || availableTimesText
-        ? retryPromptResolved
-        : currentLocale.startsWith("es")
-        ? `Ese horario no está disponible para ${
-            String(currentBookingData.service || "").trim() || "este servicio"
-          }. ¿Qué otro día y hora te gustaría?`
-        : currentLocale.startsWith("pt")
-        ? `Esse horário não está disponível para ${
-            String(currentBookingData.service || "").trim() || "este serviço"
-          }. Que outro dia e horário você gostaria?`
-        : `That time is not available for ${
-            String(currentBookingData.service || "").trim() || "this service"
-          }. What other day and time would you like?`;
+    const retryPromptFinal = isIncompleteDatetimeReason
+      ? retryPromptResolved
+      : suggestedTimesText || availableTimesText
+      ? retryPromptResolved
+      : unavailablePrompt
+      ? retryPromptResolved
+      : localizedRetryBase;
 
     const retryPrompt = twoSentencesMax(
       assertNonEmptyBookingSpeech({
         text: retryPromptFinal,
         stepKey: currentStep.step_key,
         field:
-          (
-            scheduleValidation.reason === "schedule_not_available" ||
-            scheduleValidation.reason === "lead_time_not_met"
-          ) && unavailablePrompt
+          isUnavailableReason && unavailablePrompt
             ? "unavailable_prompt"
             : currentStep.retry_prompt
             ? "retry_prompt"
@@ -409,7 +400,9 @@ export async function handleBookingDatetimeStep(
       to: didNumber || "ivr",
       text: retryPrompt,
       lang: currentLocale,
-      context: `booking_retry:${currentStep.step_key}`,
+      context: isIncompleteDatetimeReason
+        ? `booking_retry_incomplete_datetime:${currentStep.step_key}`
+        : `booking_retry:${currentStep.step_key}`,
     });
 
     return {

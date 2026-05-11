@@ -265,7 +265,7 @@ export function createBookingGather(params: {
     method: "POST",
     language: params.locale as any,
     speechModel: "phone_call",
-    speechTimeout: "1",
+    speechTimeout: "auto",
     timeout:
       typeof params.timeout === "number"
         ? params.timeout
@@ -273,7 +273,7 @@ export function createBookingGather(params: {
         ? 10
         : 5,
     actionOnEmptyResult: true,
-    bargeIn: typeof params.bargeIn === "boolean" ? params.bargeIn : true,
+    bargeIn: typeof params.bargeIn === "boolean" ? params.bargeIn : false,
     ...(resolvedHints ? { hints: resolvedHints } : {}),
   });
 }

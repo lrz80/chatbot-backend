@@ -13,8 +13,8 @@ export function buildVoiceGatherConfig({
   locale,
   action = "/webhook/voice-response",
   numDigits,
-  timeout = 4,
-  bargeIn,
+  timeout = 5,
+  bargeIn = false,
   hints,
 }: BuildVoiceGatherConfigParams) {
   return {
