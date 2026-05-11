@@ -105,9 +105,21 @@ function buildOpenAiSessionUpdate(params: {
       tools: [
         {
           type: "function",
+          name: "get_booking_flow",
+          description:
+            "Get the tenant-configured booking flow steps. Call this before starting any appointment booking. Follow these steps in order and do not skip required steps.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+            required: [],
+          },
+        },
+        {
+          type: "function",
           name: "create_appointment",
           description:
-            "Create a real appointment only after the caller has provided service, date/time, and name. This tool checks the configured provider and creates the appointment.",
+            "Create a real appointment ONLY after all required booking flow fields configured by the business have been collected and the caller explicitly confirmed the final details. Never skip tenant-configured booking steps.",
           parameters: {
             type: "object",
             additionalProperties: false,
@@ -139,8 +151,18 @@ function buildOpenAiSessionUpdate(params: {
                 type: "string",
                 description: "Optional customer email.",
               },
+              customer_confirmed: {
+                type: "boolean",
+                description:
+                  "True only if the caller explicitly confirmed the final appointment details after all required booking questions were completed.",
+              },
             },
-            required: ["service", "datetime", "customer_name"],
+            required: [
+              "service",
+              "datetime",
+              "customer_name",
+              "customer_confirmed",
+            ],
           },
         },
       ],
@@ -234,7 +256,7 @@ export async function createOpenAiRealtimeBridge({
     sendJson(openAiSocket, {
       type: "response.create",
       response: {
-        instructions: `Greet the caller naturally for ${context.brand}. Keep it short and ask how you can help.`,
+        instructions: `Greet the caller in English for ${context.brand}. Keep it short. Do not use Portuguese. Do not use Spanish unless the caller asks for Spanish.`,
       },
     });
 

@@ -14,29 +14,15 @@ export type RealtimeVoiceSessionConfig = {
   instructions: string;
 };
 
-function buildLanguageInstruction(locale?: string): string {
-  switch (locale) {
-    case "es-ES":
-      return `
-Start in Spanish.
-If the caller explicitly asks for English or Portuguese, switch to that language.
+function buildLanguageInstruction(_locale?: string): string {
+  return `
+Start every call in English.
+If the caller explicitly asks for Spanish, switch to Spanish immediately.
+If the caller explicitly asks for Portuguese, switch to Brazilian Portuguese immediately.
 Keep using the caller's selected language for the rest of the call.
+Never start the call in Portuguese.
+Never start the call in Spanish.
 `;
-
-    case "pt-BR":
-      return `
-Start in Brazilian Portuguese.
-If the caller explicitly asks for Spanish or English, switch to that language.
-Keep using the caller's selected language for the rest of the call.
-`;
-
-    default:
-      return `
-Start in English.
-If the caller explicitly asks for Spanish or Portuguese, switch to that language.
-Keep using the caller's selected language for the rest of the call.
-`;
-  }
 }
 
 export function buildRealtimeVoiceSession({
@@ -78,11 +64,21 @@ CORE BEHAVIOR:
 - Do not say you sent a text message unless a tool confirms it was sent.
 - Do not say an appointment is confirmed unless a booking tool confirms it.
 - Do not say availability is confirmed unless an availability tool confirms it.
-- If the caller wants to book, collect the needed details, then say that the team will confirm availability.
+- If the caller wants to book, do not skip required booking steps.
+- Required booking steps are configured by the business and must be completed before creating an appointment.
+- Never create an appointment without final confirmation from the caller.
 - Never invent pet breed, pet weight, price, address details, or appointment status.
 - If a caller's answer is unclear, ask a short clarification question.
 - If the caller asks to switch language, switch immediately and continue in that language.
 - Do not say that you can only speak one language.
+
+BOOKING RULES:
+- When the caller wants to book, first call get_booking_flow.
+- Ask the booking flow questions in step_order.
+- Do not skip enabled required steps.
+- Store each answer mentally by step_key.
+- Only call create_appointment after all required steps are answered and the caller explicitly confirms the final appointment details.
+- The service passed to create_appointment must be the canonical service name only, not pet details or extra text.
 
 CONVERSATION STYLE:
 - Be conversational and relaxed.

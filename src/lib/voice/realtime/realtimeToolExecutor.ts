@@ -1,6 +1,7 @@
 //src/lib/voice/realtime/realtimeToolExecutor.ts
 import { createAppointmentFromVoice } from "../../appointments/createAppointmentFromVoice";
 import { getAppointmentSettings } from "../../appointments/getAppointmentSettings";
+import { getBookingFlow } from "../../appointments/getBookingFlow";
 
 type ExecuteRealtimeToolParams = {
   tenantId: string;
@@ -20,10 +21,45 @@ export async function executeRealtimeTool({
   args,
 }: ExecuteRealtimeToolParams): Promise<any> {
   switch (toolName) {
+    case "get_booking_flow": {
+      const steps = await getBookingFlow(tenantId, "voice");
+
+      return {
+        ok: true,
+        steps: steps
+          .filter((step) => step.enabled)
+          .map((step) => ({
+            step_key: step.step_key,
+            step_order: step.step_order,
+            prompt: step.prompt,
+            expected_type: step.expected_type,
+            required: step.required,
+            retry_prompt: step.retry_prompt,
+            validation_config: step.validation_config || null,
+            prompt_translations: step.prompt_translations || null,
+            retry_prompt_translations: step.retry_prompt_translations || null,
+        })),
+      };
+    }
+
     case "create_appointment": {
       const settings = await getAppointmentSettings(tenantId);
 
-      const service = clean(args.service);
+      if (args.customer_confirmed !== true) {
+        return {
+          ok: false,
+          error: "MISSING_FINAL_CONFIRMATION",
+          message:
+            "The appointment cannot be created until the caller explicitly confirms the final appointment details.",
+        };
+      }
+      const rawService = clean(args.service);
+
+      const service = rawService
+        .replace(/\s+para\s+.*$/i, "")
+        .replace(/\s+for\s+.*$/i, "")
+        .trim();
+
       const datetime = clean(args.datetime);
       const datetimeIso = clean(args.datetime_iso);
       const customerName = clean(args.customer_name) || "Cliente Voz";
