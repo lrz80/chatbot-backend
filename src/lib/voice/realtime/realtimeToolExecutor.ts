@@ -1,13 +1,36 @@
-import { createAppointmentFromVoice } from "../../appointments/createAppointmentFromVoice";
-import { getAppointmentSettings } from "../../appointments/getAppointmentSettings";
 import { getBookingFlow } from "../../appointments/getBookingFlow";
-import { resolveVoiceScheduleValidation } from "../../appointments/resolveVoiceScheduleValidation";
+import { executeCanonicalBookingServiceStep } from "../booking/handleBookingServiceStep";
+import { executeCanonicalBookingDatetimeStep } from "../booking/handleBookingDatetimeStep";
+import { executeCanonicalBookingConfirmationStep } from "../booking/handleBookingConfirmationStep";
+import { executeCanonicalBookingSlotBusyRecovery } from "../voiceBookingBusyRecovery";
+import { upsertVoiceCallState } from "../upsertVoiceCallState";
+import type { CallState, VoiceLocale } from "../types";
 
 type ExecuteRealtimeToolParams = {
   tenantId: string;
   callerPhone: string | null;
   toolName: string;
   args: Record<string, any>;
+
+  tenant?: any;
+  cfg?: any;
+  callSid?: string;
+  didNumber?: string;
+  currentLocale?: VoiceLocale;
+  state?: CallState;
+  userInput?: string;
+  digits?: string;
+};
+
+type RealtimeBookingContext = {
+  tenant: any;
+  cfg: any;
+  callSid: string;
+  didNumber: string;
+  currentLocale: VoiceLocale;
+  state: CallState;
+  userInput: string;
+  digits: string;
 };
 
 type BookingFlowStepLike = {
@@ -72,6 +95,36 @@ function toCleanStringArray(value: unknown): string[] {
   return single ? [single] : [];
 }
 
+function getRealtimeBookingContext(
+  params: ExecuteRealtimeToolParams
+): RealtimeBookingContext | null {
+  const {
+    tenant,
+    cfg,
+    callSid,
+    didNumber,
+    currentLocale,
+    state,
+    userInput,
+    digits,
+  } = params;
+
+  if (!tenant || !callSid || !didNumber || !currentLocale || !state) {
+    return null;
+  }
+
+  return {
+    tenant,
+    cfg: cfg ?? {},
+    callSid,
+    didNumber,
+    currentLocale,
+    state,
+    userInput: String(userInput || "").trim(),
+    digits: String(digits || "").trim(),
+  };
+}
+
 function getValidationConfig(
   step: BookingFlowStepLike
 ): Record<string, unknown> | null {
@@ -124,8 +177,11 @@ function isTerminalFlowStep(step: BookingFlowStepLike): boolean {
   return terminal === "success" || terminal === "end";
 }
 
-function isConfirmationStep(step: BookingFlowStepLike): boolean {
-  return clean(step.expected_type).toLowerCase() === "confirmation";
+function isConfirmationLikeStep(step: BookingFlowStepLike): boolean {
+  return (
+    clean(step.expected_type).toLowerCase() === "confirmation" ||
+    clean(step.step_key) === "offer_booking_sms"
+  );
 }
 
 function isSuccessStep(step: BookingFlowStepLike): boolean {
@@ -221,7 +277,7 @@ function extractStepOptionCandidates(
   return results;
 }
 
-function canonicalizeStepValue(
+function canonicalizeGenericStepValue(
   step: BookingFlowStepLike,
   rawValue: string
 ): string {
@@ -265,36 +321,38 @@ function canonicalizeStepValue(
   return input;
 }
 
-function resolveConfiguredConfirmationValue(
-  step: BookingFlowStepLike,
-  rawValue: unknown
-): boolean | null {
-  const validationConfig = getValidationConfig(step);
+function extractStringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
 
-  const acceptValues = Array.isArray(validationConfig?.accept_values)
-    ? validationConfig.accept_values.map((item) => normalizeComparable(item))
-    : [];
+  const record = value as Record<string, unknown>;
+  const result: Record<string, string> = {};
 
-  const rejectValues = Array.isArray(validationConfig?.reject_values)
-    ? validationConfig.reject_values.map((item) => normalizeComparable(item))
-    : [];
+  for (const [key, raw] of Object.entries(record)) {
+    if (!key) continue;
+    if (typeof raw === "boolean") continue;
+    if (raw === null || raw === undefined) continue;
 
-  const normalized = normalizeComparable(rawValue);
+    const normalized = clean(raw);
+    if (!normalized) continue;
 
-  if (!normalized) return null;
-  if (acceptValues.includes(normalized)) return true;
-  if (rejectValues.includes(normalized)) return false;
+    result[key] = normalized;
+  }
 
-  return null;
+  return result;
 }
 
 function buildAnswersBySlot(params: {
   args: Record<string, any>;
   callerPhone: string | null;
+  state?: CallState;
 }): Record<string, string> {
-  const { args, callerPhone } = params;
+  const { args, callerPhone, state } = params;
 
-  const answersBySlot: Record<string, string> = {};
+  const answersBySlot: Record<string, string> = {
+    ...extractStringRecord(state?.bookingData),
+  };
 
   for (const [rawKey, rawValue] of Object.entries(args || {})) {
     const key = clean(rawKey);
@@ -347,7 +405,7 @@ function getMissingRequiredFlowSteps(params: {
 
   return sortFlowSteps(steps).filter((step) => {
     if (step.required !== true) return false;
-    if (isConfirmationStep(step)) return false;
+    if (isConfirmationLikeStep(step)) return false;
     if (isSuccessStep(step)) return false;
 
     const slot = getStepSlot(step);
@@ -358,15 +416,11 @@ function getMissingRequiredFlowSteps(params: {
   });
 }
 
-function buildMissingStepDetails(steps: BookingFlowStepLike[]) {
-  return steps.map(mapStepForRealtime);
-}
-
-function getConfirmationStep(
+function getConfirmationLikeStep(
   steps: BookingFlowStepLike[]
 ): BookingFlowStepLike | null {
   for (const step of sortFlowSteps(steps)) {
-    if (isConfirmationStep(step)) {
+    if (isConfirmationLikeStep(step)) {
       return step;
     }
   }
@@ -374,95 +428,220 @@ function getConfirmationStep(
   return null;
 }
 
-function getNextMissingRequiredStep(params: {
-  steps: BookingFlowStepLike[];
-  answersBySlot: Record<string, string>;
-}): RealtimeMappedStep | null {
-  const missingSteps = getMissingRequiredFlowSteps(params);
-
-  if (missingSteps.length === 0) {
-    return null;
-  }
-
-  return mapStepForRealtime(missingSteps[0]);
+function getStepIndexByKey(
+  steps: BookingFlowStepLike[],
+  stepKey: string
+): number {
+  return steps.findIndex((step) => clean(step.step_key) === clean(stepKey));
 }
 
-function resolveNextRequiredStepFromState(params: {
+function resolveCurrentStepIndex(params: {
   steps: BookingFlowStepLike[];
-  bookingState: BookingState;
-}): RealtimeMappedStep | null {
-  const { steps, bookingState } = params;
-
-  if (bookingState.awaiting_confirmation) {
-    const confirmationStep = getConfirmationStep(steps);
-    return confirmationStep ? mapStepForRealtime(confirmationStep) : null;
-  }
-
-  if (bookingState.ready_to_create) {
-    return null;
-  }
-
-  return getNextMissingRequiredStep({
-    steps,
-    answersBySlot: bookingState.collected_slots,
-  });
-}
-
-function buildBookingState(params: {
-  steps: BookingFlowStepLike[];
+  state: CallState;
   answersBySlot: Record<string, string>;
-  finalConfirmationGranted: boolean;
-}): BookingState {
-  const { steps, answersBySlot, finalConfirmationGranted } = params;
+  explicitStepKey?: string;
+}): number | null {
+  const { steps, state, answersBySlot, explicitStepKey } = params;
 
-  const missingSteps = getMissingRequiredFlowSteps({
+  if (explicitStepKey) {
+    const explicitIndex = getStepIndexByKey(steps, explicitStepKey);
+    if (explicitIndex >= 0) return explicitIndex;
+  }
+
+  if (
+    typeof state.bookingStepIndex === "number" &&
+    state.bookingStepIndex >= 0 &&
+    state.bookingStepIndex < steps.length
+  ) {
+    return state.bookingStepIndex;
+  }
+
+  const missingRequired = getMissingRequiredFlowSteps({
     steps,
     answersBySlot,
   });
 
-  if (missingSteps.length > 0) {
-    const currentStep = missingSteps[0];
-    return {
-      current_step_key: clean(currentStep.step_key) || null,
-      current_step_slot: getStepSlot(currentStep) || null,
-      awaiting_confirmation: false,
-      final_confirmation_granted: false,
-      ready_to_create: false,
-      collected_slots: answersBySlot,
-    };
+  if (missingRequired.length > 0) {
+    const idx = getStepIndexByKey(steps, clean(missingRequired[0].step_key));
+    return idx >= 0 ? idx : 0;
   }
 
-  const confirmationStep = getConfirmationStep(steps);
-
-  if (confirmationStep && !finalConfirmationGranted) {
-    return {
-      current_step_key: clean(confirmationStep.step_key) || null,
-      current_step_slot: getStepSlot(confirmationStep) || null,
-      awaiting_confirmation: true,
-      final_confirmation_granted: false,
-      ready_to_create: false,
-      collected_slots: answersBySlot,
-    };
+  const confirmationStep = getConfirmationLikeStep(steps);
+  if (confirmationStep) {
+    const idx = getStepIndexByKey(steps, clean(confirmationStep.step_key));
+    return idx >= 0 ? idx : null;
   }
+
+  return steps.length ? 0 : null;
+}
+
+function getNextStepIndex(
+  steps: BookingFlowStepLike[],
+  currentIndex: number
+): number | null {
+  const nextIndex = currentIndex + 1;
+  if (nextIndex < 0 || nextIndex >= steps.length) {
+    return null;
+  }
+  return nextIndex;
+}
+
+function buildCanonicalCallState(params: {
+  state: CallState;
+  answersBySlot: Record<string, string>;
+  bookingStepIndex?: number | null;
+}): CallState {
+  const { state, answersBySlot, bookingStepIndex } = params;
 
   return {
-    current_step_key: null,
-    current_step_slot: null,
-    awaiting_confirmation: false,
+    ...state,
+    bookingStepIndex:
+      typeof bookingStepIndex === "number" ? bookingStepIndex : undefined,
+    bookingData: {
+      ...(state.bookingData || {}),
+      ...answersBySlot,
+    },
+  };
+}
+
+function buildRealtimeBookingState(params: {
+  steps: BookingFlowStepLike[];
+  state: CallState;
+  explicitCurrentIndex?: number | null;
+  finalConfirmationGranted?: boolean;
+  readyToCreate?: boolean;
+}): BookingState {
+  const {
+    steps,
+    state,
+    explicitCurrentIndex,
+    finalConfirmationGranted = false,
+    readyToCreate = false,
+  } = params;
+
+  const answersBySlot = normalizeAnswersToCanonicalSlots({
+    steps,
+    answersBySlot: extractStringRecord(state.bookingData),
+  });
+
+  const currentIndex =
+    typeof explicitCurrentIndex === "number"
+      ? explicitCurrentIndex
+      : resolveCurrentStepIndex({
+          steps,
+          state,
+          answersBySlot,
+        });
+
+  const currentStep =
+    typeof currentIndex === "number" ? steps[currentIndex] : null;
+
+  return {
+    current_step_key: currentStep ? clean(currentStep.step_key) || null : null,
+    current_step_slot: currentStep ? getStepSlot(currentStep) || null : null,
+    awaiting_confirmation: currentStep ? isConfirmationLikeStep(currentStep) : false,
     final_confirmation_granted: finalConfirmationGranted,
-    ready_to_create: true,
+    ready_to_create: readyToCreate,
     collected_slots: answersBySlot,
   };
 }
 
-export async function executeRealtimeTool({
-  tenantId,
-  callerPhone,
-  toolName,
-  args,
-}: ExecuteRealtimeToolParams): Promise<any> {
+function buildNextRequiredStep(params: {
+  steps: BookingFlowStepLike[];
+  bookingState: BookingState;
+  overridePrompt?: string;
+}): RealtimeMappedStep | null {
+  const { steps, bookingState, overridePrompt } = params;
+
+  if (!bookingState.current_step_key) {
+    return null;
+  }
+
+  const step = steps.find(
+    (candidate) =>
+      clean(candidate.step_key) === clean(bookingState.current_step_key)
+  );
+
+  if (!step) {
+    return null;
+  }
+
+  const mapped = mapStepForRealtime(step);
+
+  if (overridePrompt) {
+    return {
+      ...mapped,
+      prompt: overridePrompt,
+    };
+  }
+
+  return mapped;
+}
+
+function parseJsonStringArray(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.map((item) => clean(item)).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+async function persistVoiceState(params: {
+  tenantId: string;
+  callSid: string;
+  state: CallState;
+  locale: VoiceLocale;
+}): Promise<void> {
+  const { tenantId, callSid, state, locale } = params;
+
+  await upsertVoiceCallState({
+    callSid,
+    tenantId,
+    lang: state.lang ?? locale,
+    turn: state.turn ?? 0,
+    awaiting: state.awaiting ?? false,
+    pendingType: state.pendingType ?? null,
+    awaitingNumber: state.awaitingNumber ?? false,
+    altDest: state.altDest ?? null,
+    smsSent: state.smsSent ?? false,
+    bookingStepIndex:
+      typeof state.bookingStepIndex === "number" ? state.bookingStepIndex : null,
+    bookingData: state.bookingData || {},
+  });
+}
+
+function buildContextMissingResult() {
+  return {
+    ok: false,
+    error: "REALTIME_BOOKING_CONTEXT_MISSING",
+    message:
+      "Realtime booking context is missing. The realtime bridge must pass tenant, callSid, didNumber, currentLocale, state, userInput, and digits.",
+  };
+}
+
+export async function executeRealtimeTool(
+  params: ExecuteRealtimeToolParams
+): Promise<any> {
+  const { tenantId, callerPhone, toolName, args } = params;
+
+  const bookingContext =
+    toolName === "get_booking_flow" ||
+    toolName === "submit_booking_step" ||
+    toolName === "create_appointment"
+      ? getRealtimeBookingContext(params)
+      : null;
+
   switch (toolName) {
     case "get_booking_flow": {
+      if (!bookingContext) {
+        return buildContextMissingResult();
+      }
+
       const steps = sortFlowSteps(
         (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
       );
@@ -472,20 +651,30 @@ export async function executeRealtimeTool({
         answersBySlot: buildAnswersBySlot({
           args,
           callerPhone,
+          state: bookingContext.state,
         }),
       });
 
-      const bookingState = buildBookingState({
-        steps,
+      const initialState = buildCanonicalCallState({
+        state: bookingContext.state,
         answersBySlot,
-        finalConfirmationGranted: false,
+        bookingStepIndex: resolveCurrentStepIndex({
+          steps,
+          state: bookingContext.state,
+          answersBySlot,
+        }),
+      });
+
+      const bookingState = buildRealtimeBookingState({
+        steps,
+        state: initialState,
       });
 
       return {
         ok: true,
         steps: mapFlowStepsForRealtime(steps),
         booking_state: bookingState,
-        next_required_step: resolveNextRequiredStepFromState({
+        next_required_step: buildNextRequiredStep({
           steps,
           bookingState,
         }),
@@ -493,14 +682,13 @@ export async function executeRealtimeTool({
     }
 
     case "submit_booking_step": {
+      if (!bookingContext) {
+        return buildContextMissingResult();
+      }
+
       const steps = sortFlowSteps(
         (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
       );
-
-      const rawAnswers = buildAnswersBySlot({
-        args,
-        callerPhone,
-      });
 
       const stepKey = clean(args.step_key);
       const value = clean(args.value);
@@ -513,10 +701,8 @@ export async function executeRealtimeTool({
         };
       }
 
-      const targetStep =
-        steps.find((step) => clean(step.step_key) === stepKey) || null;
-
-      if (!targetStep) {
+      const currentIndex = getStepIndexByKey(steps, stepKey);
+      if (currentIndex === -1) {
         return {
           ok: false,
           error: "UNKNOWN_BOOKING_STEP",
@@ -524,7 +710,8 @@ export async function executeRealtimeTool({
         };
       }
 
-      const targetSlot = getStepSlot(targetStep);
+      const currentStep = steps[currentIndex];
+      const targetSlot = getStepSlot(currentStep);
 
       if (!targetSlot) {
         return {
@@ -534,255 +721,604 @@ export async function executeRealtimeTool({
         };
       }
 
-      const normalizedStepValue = canonicalizeStepValue(targetStep, value);
+      const rawAnswers = normalizeAnswersToCanonicalSlots({
+        steps,
+        answersBySlot: buildAnswersBySlot({
+          args,
+          callerPhone,
+          state: bookingContext.state,
+        }),
+      });
 
-      const optionCandidates = extractStepOptionCandidates(targetStep);
-      const hasConfiguredOptions = optionCandidates.length > 0;
+      let workingState = buildCanonicalCallState({
+        state: bookingContext.state,
+        answersBySlot: rawAnswers,
+        bookingStepIndex: currentIndex,
+      });
 
-      if (hasConfiguredOptions) {
-        const resolvedToConfiguredOption = optionCandidates.some(
-          (option) =>
-            normalizeComparable(option.canonical) ===
-            normalizeComparable(normalizedStepValue)
-        );
+      const rawSlot =
+        typeof currentStep.validation_config?.slot === "string"
+          ? currentStep.validation_config.slot.trim()
+          : "";
 
-        if (!resolvedToConfiguredOption) {
-          const bookingState = buildBookingState({
+      const isServiceStep =
+        clean(currentStep.step_key) === "service" || rawSlot === "service";
+
+      const isDatetimeStep =
+        clean(currentStep.step_key) === "datetime" || rawSlot === "datetime";
+
+      const isConfirmationStep = isConfirmationLikeStep(currentStep);
+
+      if (isServiceStep) {
+        const serviceResult = await executeCanonicalBookingServiceStep({
+          currentStep: currentStep as any,
+          currentLocale: bookingContext.currentLocale,
+          callerE164: callerPhone,
+          effectiveUserInput: value,
+          state: workingState,
+          rawConfig: bookingContext.cfg?.booking_services_text || "",
+        });
+
+        if (serviceResult.kind === "retry" || serviceResult.kind === "ambiguous") {
+          const bookingState = buildRealtimeBookingState({
             steps,
-            answersBySlot: rawAnswers,
-            finalConfirmationGranted: false,
+            state: workingState,
+            explicitCurrentIndex: currentIndex,
           });
 
           return {
             ok: false,
-            error: "UNRESOLVED_STEP_OPTION",
-            message:
-              "The requested value could not be resolved to a configured canonical option.",
+            error:
+              serviceResult.kind === "ambiguous"
+                ? "AMBIGUOUS_BOOKING_SERVICE"
+                : "UNRESOLVED_BOOKING_SERVICE",
+            message: serviceResult.prompt,
+            assistant_prompt: serviceResult.prompt,
             booking_state: bookingState,
-            next_required_step: mapStepForRealtime(targetStep),
+            next_required_step: buildNextRequiredStep({
+              steps,
+              bookingState,
+              overridePrompt: serviceResult.prompt,
+            }),
+            service_options:
+              serviceResult.kind === "ambiguous" ? serviceResult.options : [],
           };
         }
-      }
 
-      const mergedAnswers: Record<string, string> = {
-        ...rawAnswers,
-      };
+        const nextAnswers = {
+          ...rawAnswers,
+          [targetSlot]: serviceResult.resolvedValue,
+          [stepKey]: serviceResult.resolvedValue,
+        };
 
-      if (normalizedStepValue) {
-        mergedAnswers[targetSlot] = normalizedStepValue;
-        mergedAnswers[stepKey] = normalizedStepValue;
-      }
+        workingState = buildCanonicalCallState({
+          state: serviceResult.state,
+          answersBySlot: nextAnswers,
+          bookingStepIndex: currentIndex,
+        });
+      } else if (isDatetimeStep) {
+        const datetimeResult = await executeCanonicalBookingDatetimeStep({
+          tenantId,
+          callSid: bookingContext.callSid,
+          currentStep: currentStep as any,
+          currentIndex,
+          currentLocale: bookingContext.currentLocale,
+          callerE164: callerPhone,
+          state: workingState,
+          resolvedStepValue: value,
+        });
 
-      const answersBySlot = normalizeAnswersToCanonicalSlots({
-        steps,
-        answersBySlot: mergedAnswers,
-      });
-
-      if ((targetStep.expected_type || "").toLowerCase() === "datetime") {
-        const serviceName = clean(answersBySlot.service);
-        const rawDatetime = clean(answersBySlot.datetime);
-        const validationConfig = getValidationConfig(targetStep);
-
-        if (serviceName && rawDatetime) {
-          const scheduleValidation = await resolveVoiceScheduleValidation({
-            tenantId,
-            serviceName,
-            rawDatetime,
-            channel: "voice",
+        if (datetimeResult.kind === "retry") {
+          const retryState = datetimeResult.state;
+          const bookingState = buildRealtimeBookingState({
+            steps,
+            state: retryState,
+            explicitCurrentIndex: currentIndex,
           });
 
-          if (!scheduleValidation.ok) {
-            const invalidAnswersBySlot = {
-              ...answersBySlot,
-              [targetSlot]: "",
-              [stepKey]: "",
-              datetime: "",
-            };
-
-            const bookingState = buildBookingState({
+          return {
+            ok: false,
+            error:
+              datetimeResult.context === "slot_unavailable"
+                ? "SLOT_UNAVAILABLE"
+                : "INVALID_DATETIME_STEP",
+            message: datetimeResult.prompt,
+            assistant_prompt: datetimeResult.prompt,
+            suggested_times: parseJsonStringArray(
+              retryState.bookingData?.__datetime_reference_suggested_starts
+            ),
+            booking_state: bookingState,
+            next_required_step: buildNextRequiredStep({
               steps,
-              answersBySlot: invalidAnswersBySlot,
-              finalConfirmationGranted: false,
+              bookingState,
+              overridePrompt: datetimeResult.prompt,
+            }),
+          };
+        }
+
+        const nextAnswers = {
+          ...rawAnswers,
+          [targetSlot]: datetimeResult.resolvedValue,
+          [stepKey]: datetimeResult.resolvedValue,
+          datetime: clean(
+            datetimeResult.nextState.bookingData?.datetime ||
+              datetimeResult.resolvedValue
+          ),
+          datetime_iso: clean(
+            datetimeResult.nextState.bookingData?.datetime_iso || ""
+          ),
+          datetime_display: clean(
+            datetimeResult.nextState.bookingData?.datetime_display ||
+              datetimeResult.resolvedValue
+          ),
+        };
+
+        workingState = buildCanonicalCallState({
+          state: datetimeResult.nextState,
+          answersBySlot: nextAnswers,
+          bookingStepIndex: currentIndex,
+        });
+      } else if (isConfirmationStep) {
+        const confirmationResult = await executeCanonicalBookingConfirmationStep({
+          tenant: bookingContext.tenant,
+          cfg: bookingContext.cfg,
+          flow: steps as any,
+          currentStep: currentStep as any,
+          currentLocale: bookingContext.currentLocale,
+          callSid: bookingContext.callSid,
+          didNumber: bookingContext.didNumber,
+          callerE164: callerPhone,
+          userInput: bookingContext.userInput || value,
+          digits: bookingContext.digits,
+          state: workingState,
+          upsertVoiceCallState,
+        });
+
+        if (confirmationResult.kind === "busy_recovery") {
+          const busyRecovered = await executeCanonicalBookingSlotBusyRecovery({
+            flow: steps as any,
+            state: confirmationResult.state,
+            tenantId,
+            callSid: bookingContext.callSid,
+            currentLocale: bookingContext.currentLocale,
+            callerE164: callerPhone,
+            timeZone: confirmationResult.busyRecovery.timeZone,
+            suggestedStarts: confirmationResult.busyRecovery.suggestedStarts,
+          });
+
+          const bookingState = buildRealtimeBookingState({
+            steps,
+            state: busyRecovered.state,
+            explicitCurrentIndex: busyRecovered.datetimeStepIndex,
+          });
+
+          return {
+            ok: false,
+            error: "SLOT_UNAVAILABLE",
+            message: busyRecovered.prompt,
+            assistant_prompt: busyRecovered.prompt,
+            suggested_times: parseJsonStringArray(
+              busyRecovered.state.bookingData?.__booking_busy_suggested_starts
+            ),
+            booking_state: bookingState,
+            next_required_step: buildNextRequiredStep({
+              steps,
+              bookingState,
+              overridePrompt: busyRecovered.prompt,
+            }),
+          };
+        }
+
+        if (confirmationResult.kind === "retry") {
+          const bookingState = buildRealtimeBookingState({
+            steps,
+            state: confirmationResult.state,
+            explicitCurrentIndex: currentIndex,
+          });
+
+          return {
+            ok: false,
+            error: "CONFIRMATION_RETRY",
+            message: confirmationResult.prompt,
+            assistant_prompt: confirmationResult.prompt,
+            booking_state: bookingState,
+            next_required_step: buildNextRequiredStep({
+              steps,
+              bookingState,
+              overridePrompt: confirmationResult.prompt,
+            }),
+          };
+        }
+
+        if (confirmationResult.kind === "failed") {
+          const bookingState = buildRealtimeBookingState({
+            steps,
+            state: confirmationResult.state,
+            explicitCurrentIndex: null,
+          });
+
+          return {
+            ok: false,
+            error: "BOOKING_FAILED",
+            message: confirmationResult.prompt,
+            assistant_prompt: confirmationResult.prompt,
+            booking_outcome: "failed",
+            booking_state: bookingState,
+            next_required_step: null,
+          };
+        }
+
+        if (confirmationResult.kind === "cancelled") {
+          const bookingState = buildRealtimeBookingState({
+            steps,
+            state: confirmationResult.state,
+            explicitCurrentIndex: null,
+          });
+
+          return {
+            ok: true,
+            message: confirmationResult.prompt,
+            assistant_prompt: confirmationResult.prompt,
+            booking_outcome: "cancelled",
+            booking_state: bookingState,
+            next_required_step: null,
+          };
+        }
+
+        if (confirmationResult.kind === "awaiting_sms_destination") {
+          const bookingState = buildRealtimeBookingState({
+            steps,
+            state: confirmationResult.state,
+            explicitCurrentIndex: null,
+          });
+
+          return {
+            ok: true,
+            booking_outcome: "awaiting_sms_destination",
+            requires_sms_destination: true,
+            booking_state: bookingState,
+            next_required_step: null,
+          };
+        }
+
+        if (confirmationResult.kind === "success_offer_sms") {
+          const bookingState = buildRealtimeBookingState({
+            steps,
+            state: confirmationResult.state,
+            explicitCurrentIndex: confirmationResult.state.bookingStepIndex ?? null,
+          });
+
+          return {
+            ok: true,
+            message: `${confirmationResult.successPrompt} ${confirmationResult.smsOfferPrompt}`,
+            assistant_prompt: `${confirmationResult.successPrompt} ${confirmationResult.smsOfferPrompt}`,
+            booking_outcome: "confirmed_offer_sms",
+            booking_state: bookingState,
+            next_required_step: buildNextRequiredStep({
+              steps,
+              bookingState,
+              overridePrompt: confirmationResult.smsOfferPrompt,
+            }),
+          };
+        }
+
+        if (confirmationResult.kind === "success") {
+          const bookingState = buildRealtimeBookingState({
+            steps,
+            state: confirmationResult.state,
+            explicitCurrentIndex: null,
+          });
+
+          return {
+            ok: true,
+            message: confirmationResult.prompt,
+            assistant_prompt: confirmationResult.prompt,
+            booking_outcome: "confirmed",
+            booking_state: bookingState,
+            next_required_step: null,
+          };
+        }
+
+        if (confirmationResult.kind === "pass_through") {
+          const bookingState = buildRealtimeBookingState({
+            steps,
+            state: confirmationResult.state,
+            explicitCurrentIndex: currentIndex,
+          });
+
+          return {
+            ok: false,
+            error: "INVALID_CONFIRMATION_STEP",
+            message: "Confirmation step could not be processed.",
+            booking_state: bookingState,
+            next_required_step: buildNextRequiredStep({
+              steps,
+              bookingState,
+            }),
+          };
+        }
+      } else {
+        const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
+        const optionCandidates = extractStepOptionCandidates(currentStep);
+        const hasConfiguredOptions = optionCandidates.length > 0;
+
+        if (hasConfiguredOptions) {
+          const resolvedToConfiguredOption = optionCandidates.some(
+            (option) =>
+              normalizeComparable(option.canonical) ===
+              normalizeComparable(normalizedStepValue)
+          );
+
+          if (!resolvedToConfiguredOption) {
+            const bookingState = buildRealtimeBookingState({
+              steps,
+              state: workingState,
+              explicitCurrentIndex: currentIndex,
             });
 
             return {
               ok: false,
-              error: "SLOT_UNAVAILABLE",
-              message: "The requested date and time is not available.",
+              error: "UNRESOLVED_STEP_OPTION",
+              message:
+                "The requested value could not be resolved to a configured canonical option.",
               booking_state: bookingState,
-              next_required_step: mapStepForRealtime(targetStep),
-              unavailable_reason: scheduleValidation.reason,
-              unavailable_prompt:
-                typeof validationConfig?.unavailable_prompt === "string"
-                  ? validationConfig.unavailable_prompt
-                  : "",
-              available_times: Array.isArray(scheduleValidation.availableTimes)
-                ? scheduleValidation.availableTimes
-                : [],
-              suggested_times: Array.isArray(scheduleValidation.suggestedStarts)
-                ? scheduleValidation.suggestedStarts
-                : [],
+              next_required_step: buildNextRequiredStep({
+                steps,
+                bookingState,
+              }),
             };
           }
         }
+
+        const nextAnswers = {
+          ...rawAnswers,
+          [targetSlot]: normalizedStepValue,
+          [stepKey]: normalizedStepValue,
+        };
+
+        workingState = buildCanonicalCallState({
+          state: workingState,
+          answersBySlot: nextAnswers,
+          bookingStepIndex: currentIndex,
+        });
       }
 
-      const confirmationValue = isConfirmationStep(targetStep)
-        ? resolveConfiguredConfirmationValue(targetStep, normalizedStepValue)
-        : null;
+      const nextIndex = getNextStepIndex(steps, currentIndex);
 
-      const finalConfirmationGranted = confirmationValue === true;
+      const advancedState: CallState = {
+        ...workingState,
+        bookingStepIndex:
+          typeof nextIndex === "number" ? nextIndex : undefined,
+      };
 
-      const bookingState = buildBookingState({
+      await persistVoiceState({
+        tenantId,
+        callSid: bookingContext.callSid,
+        state: advancedState,
+        locale: bookingContext.currentLocale,
+      });
+
+      const bookingState = buildRealtimeBookingState({
         steps,
-        answersBySlot,
-        finalConfirmationGranted,
+        state: advancedState,
+        explicitCurrentIndex: nextIndex,
       });
 
       return {
         ok: true,
         booking_state: bookingState,
-        next_required_step: resolveNextRequiredStepFromState({
+        next_required_step: buildNextRequiredStep({
           steps,
           bookingState,
         }),
-        action_required: bookingState.ready_to_create
-          ? "create_appointment"
-          : null,
+        action_required: null,
       };
     }
 
     case "create_appointment": {
-      const [settings, stepsRaw] = await Promise.all([
-        getAppointmentSettings(tenantId),
-        getBookingFlow(tenantId, "voice"),
-      ]);
+      if (!bookingContext) {
+        return buildContextMissingResult();
+      }
 
-      const steps = sortFlowSteps(stepsRaw as BookingFlowStepLike[]);
+      const steps = sortFlowSteps(
+        (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
+      );
+
+      const confirmationStep = getConfirmationLikeStep(steps);
+
+      if (!confirmationStep) {
+        return {
+          ok: false,
+          error: "BOOKING_CONFIRMATION_STEP_NOT_FOUND",
+          message: "No confirmation step is configured in the booking flow.",
+        };
+      }
+
+      const currentIndex = getStepIndexByKey(
+        steps,
+        clean(confirmationStep.step_key)
+      );
 
       const answersBySlot = normalizeAnswersToCanonicalSlots({
         steps,
         answersBySlot: buildAnswersBySlot({
           args,
           callerPhone,
+          state: bookingContext.state,
         }),
       });
 
-      const missingSteps = getMissingRequiredFlowSteps({
-        steps,
+      const workingState = buildCanonicalCallState({
+        state: bookingContext.state,
         answersBySlot,
+        bookingStepIndex: currentIndex >= 0 ? currentIndex : undefined,
       });
 
-      if (missingSteps.length > 0) {
-        const bookingState = buildBookingState({
+      const confirmationResult = await executeCanonicalBookingConfirmationStep({
+        tenant: bookingContext.tenant,
+        cfg: bookingContext.cfg,
+        flow: steps as any,
+        currentStep: confirmationStep as any,
+        currentLocale: bookingContext.currentLocale,
+        callSid: bookingContext.callSid,
+        didNumber: bookingContext.didNumber,
+        callerE164: callerPhone,
+        userInput: bookingContext.userInput,
+        digits: bookingContext.digits,
+        state: workingState,
+        upsertVoiceCallState,
+      });
+
+      if (confirmationResult.kind === "busy_recovery") {
+        const busyRecovered = await executeCanonicalBookingSlotBusyRecovery({
+          flow: steps as any,
+          state: confirmationResult.state,
+          tenantId,
+          callSid: bookingContext.callSid,
+          currentLocale: bookingContext.currentLocale,
+          callerE164: callerPhone,
+          timeZone: confirmationResult.busyRecovery.timeZone,
+          suggestedStarts: confirmationResult.busyRecovery.suggestedStarts,
+        });
+
+        const bookingState = buildRealtimeBookingState({
           steps,
-          answersBySlot,
-          finalConfirmationGranted: false,
+          state: busyRecovered.state,
+          explicitCurrentIndex: busyRecovered.datetimeStepIndex,
         });
 
         return {
           ok: false,
-          error: "MISSING_REQUIRED_BOOKING_FIELDS",
-          message:
-            "The appointment cannot be created until all required booking fields from the tenant flow are completed.",
+          error: "SLOT_UNAVAILABLE",
+          message: busyRecovered.prompt,
+          assistant_prompt: busyRecovered.prompt,
+          suggested_times: parseJsonStringArray(
+            busyRecovered.state.bookingData?.__booking_busy_suggested_starts
+          ),
           booking_state: bookingState,
-          missing_required_slots: missingSteps.map((step) => getStepSlot(step)),
-          next_required_step: resolveNextRequiredStepFromState({
+          next_required_step: buildNextRequiredStep({
             steps,
             bookingState,
+            overridePrompt: busyRecovered.prompt,
           }),
-          missing_required_steps: buildMissingStepDetails(missingSteps),
         };
       }
 
-      const finalConfirmationGranted =
-        args.final_confirmation_granted === true;
-
-      if (!finalConfirmationGranted) {
-        const bookingState = buildBookingState({
+      if (confirmationResult.kind === "retry") {
+        const bookingState = buildRealtimeBookingState({
           steps,
-          answersBySlot,
-          finalConfirmationGranted: false,
+          state: confirmationResult.state,
+          explicitCurrentIndex:
+            currentIndex >= 0 ? currentIndex : null,
         });
 
         return {
           ok: false,
           error: "MISSING_FINAL_CONFIRMATION",
-          message:
-            "The appointment cannot be created until the caller explicitly confirms the final appointment details.",
+          message: confirmationResult.prompt,
+          assistant_prompt: confirmationResult.prompt,
           booking_state: bookingState,
-          next_required_step: resolveNextRequiredStepFromState({
+          next_required_step: buildNextRequiredStep({
             steps,
             bookingState,
+            overridePrompt: confirmationResult.prompt,
           }),
         };
       }
 
-      const service = clean(answersBySlot.service);
-      const datetime = clean(answersBySlot.datetime);
-      const datetimeIso = clean(answersBySlot.datetime_iso);
-      const customerName = clean(answersBySlot.customer_name);
-      const customerPhone = clean(answersBySlot.customer_phone) || null;
-      const customerEmail = clean(answersBySlot.customer_email) || null;
+      if (confirmationResult.kind === "failed") {
+        const bookingState = buildRealtimeBookingState({
+          steps,
+          state: confirmationResult.state,
+          explicitCurrentIndex: null,
+        });
 
-      if (!service) {
         return {
           ok: false,
-          error: "MISSING_SERVICE",
-          message: "Service is required before creating an appointment.",
+          error: "BOOKING_FAILED",
+          message: confirmationResult.prompt,
+          assistant_prompt: confirmationResult.prompt,
+          booking_outcome: "failed",
+          booking_state: bookingState,
+          next_required_step: null,
         };
       }
 
-      if (!datetime && !datetimeIso) {
+      if (confirmationResult.kind === "cancelled") {
+        const bookingState = buildRealtimeBookingState({
+          steps,
+          state: confirmationResult.state,
+          explicitCurrentIndex: null,
+        });
+
         return {
-          ok: false,
-          error: "MISSING_DATETIME",
-          message: "Date and time are required before creating an appointment.",
+          ok: true,
+          message: confirmationResult.prompt,
+          assistant_prompt: confirmationResult.prompt,
+          booking_outcome: "cancelled",
+          booking_state: bookingState,
+          next_required_step: null,
         };
       }
 
-      if (!customerName) {
+      if (confirmationResult.kind === "awaiting_sms_destination") {
+        const bookingState = buildRealtimeBookingState({
+          steps,
+          state: confirmationResult.state,
+          explicitCurrentIndex: null,
+        });
+
         return {
-          ok: false,
-          error: "MISSING_CUSTOMER_NAME",
-          message: "Customer name is required before creating an appointment.",
+          ok: true,
+          booking_outcome: "awaiting_sms_destination",
+          requires_sms_destination: true,
+          booking_state: bookingState,
+          next_required_step: null,
         };
       }
 
-      const result = await createAppointmentFromVoice({
-        tenantId,
-        answersBySlot: {
-          ...answersBySlot,
-          service,
-          datetime,
-          datetime_iso: datetimeIso,
-          customer_name: customerName,
-          customer_phone: customerPhone || "",
-          customer_email: customerEmail || "",
-        },
-        settings,
-      });
+      if (confirmationResult.kind === "success_offer_sms") {
+        const bookingState = buildRealtimeBookingState({
+          steps,
+          state: confirmationResult.state,
+          explicitCurrentIndex: confirmationResult.state.bookingStepIndex ?? null,
+        });
 
-      const bookingState = buildBookingState({
-        steps,
-        answersBySlot,
-        finalConfirmationGranted: true,
-      });
+        return {
+          ok: true,
+          message: `${confirmationResult.successPrompt} ${confirmationResult.smsOfferPrompt}`,
+          assistant_prompt: `${confirmationResult.successPrompt} ${confirmationResult.smsOfferPrompt}`,
+          booking_outcome: "confirmed_offer_sms",
+          booking_state: bookingState,
+          next_required_step: buildNextRequiredStep({
+            steps,
+            bookingState,
+            overridePrompt: confirmationResult.smsOfferPrompt,
+          }),
+        };
+      }
+
+      if (confirmationResult.kind === "success") {
+        const bookingState = buildRealtimeBookingState({
+          steps,
+          state: confirmationResult.state,
+          explicitCurrentIndex: null,
+        });
+
+        return {
+          ok: true,
+          message: confirmationResult.prompt,
+          assistant_prompt: confirmationResult.prompt,
+          booking_outcome: "confirmed",
+          booking_state: bookingState,
+          next_required_step: null,
+        };
+      }
 
       return {
-        ok: true,
-        booking_state: bookingState,
-        next_required_step: null,
-        appointment: {
-          id: result.id,
-          service: result.service || service,
-          customer_name: result.customer_name,
-          customer_phone: result.customer_phone,
-          start_time: result.start_time,
-          end_time: result.end_time,
-          status: result.status,
-          google_event_link: result.google_event_link || null,
-        },
+        ok: false,
+        error: "CREATE_APPOINTMENT_NOT_ALLOWED",
+        message: "The appointment could not be created in the current booking state.",
       };
     }
 

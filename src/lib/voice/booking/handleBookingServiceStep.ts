@@ -1,4 +1,4 @@
-//src/lib/voice/booking/handleBookingServiceStep.ts
+// src/lib/voice/booking/handleBookingServiceStep.ts
 import { twiml } from "twilio";
 import {
   resolveBookingFlowSpeech,
@@ -30,6 +30,35 @@ type HandleBookingServiceStepResult =
     }
   | {
       handled: false;
+      state: CallState;
+      resolvedValue: string;
+    };
+
+export type CanonicalBookingServiceStepParams = {
+  currentStep: BookingStep;
+  currentLocale: VoiceLocale;
+  callerE164: string | null;
+  effectiveUserInput: string;
+  state: CallState;
+  rawConfig: string;
+};
+
+export type CanonicalBookingServiceStepResult =
+  | {
+      kind: "retry";
+      state: CallState;
+      prompt: string;
+      hints?: string;
+    }
+  | {
+      kind: "ambiguous";
+      state: CallState;
+      prompt: string;
+      hints?: string;
+      options: string[];
+    }
+  | {
+      kind: "resolved";
       state: CallState;
       resolvedValue: string;
     };
@@ -67,19 +96,16 @@ function buildServiceSpeechHints(rawConfig: string): string | undefined {
   return deduped.length ? deduped.join(", ") : undefined;
 }
 
-export async function handleBookingServiceStep(
-  params: HandleBookingServiceStepParams
-): Promise<HandleBookingServiceStepResult> {
+export async function executeCanonicalBookingServiceStep(
+  params: CanonicalBookingServiceStepParams
+): Promise<CanonicalBookingServiceStepResult> {
   const {
-    vr,
     currentStep,
     currentLocale,
-    voiceName,
     callerE164,
     effectiveUserInput,
     state,
     rawConfig,
-    createBookingGather,
   } = params;
 
   const serviceHints = buildServiceSpeechHints(rawConfig);
@@ -113,22 +139,11 @@ export async function handleBookingServiceStep(
       })
     );
 
-    const gather = createBookingGather({
-      vr,
-      locale: currentLocale,
-      step: currentStep,
-      hints: serviceHints,
-    });
-
-    gather.say(
-      { language: currentLocale as any, voice: voiceName },
-      retryPrompt
-    );
-
     return {
-      handled: true,
+      kind: "retry",
       state,
-      twiml: vr.toString(),
+      prompt: retryPrompt,
+      hints: serviceHints,
     };
   }
 
@@ -143,33 +158,25 @@ export async function handleBookingServiceStep(
       fallbackPromptTranslations: currentStep.prompt_translations || null,
     });
 
-    const ambiguousPrompt = resolveBookingFlowSpeech({
-      baseText: ambiguousBaseText,
-      locale: currentLocale,
-      bookingData: {
-        ...(state.bookingData || {}),
-        optionsText,
-        available_options: optionsText,
-      },
-      callerE164,
-    });
-
-    const gather = createBookingGather({
-      vr,
-      locale: currentLocale,
-      step: currentStep,
-      hints: serviceHints,
-    });
-
-    gather.say(
-      { language: currentLocale as any, voice: voiceName },
-      twoSentencesMax(ambiguousPrompt)
+    const ambiguousPrompt = twoSentencesMax(
+      resolveBookingFlowSpeech({
+        baseText: ambiguousBaseText,
+        locale: currentLocale,
+        bookingData: {
+          ...(state.bookingData || {}),
+          optionsText,
+          available_options: optionsText,
+        },
+        callerE164,
+      })
     );
 
     return {
-      handled: true,
+      kind: "ambiguous",
       state,
-      twiml: vr.toString(),
+      prompt: ambiguousPrompt,
+      hints: serviceHints,
+      options: serviceResolution.options,
     };
   }
 
@@ -191,8 +198,59 @@ export async function handleBookingServiceStep(
   };
 
   return {
-    handled: false,
+    kind: "resolved",
     state: nextState,
     resolvedValue,
+  };
+}
+
+export async function handleBookingServiceStep(
+  params: HandleBookingServiceStepParams
+): Promise<HandleBookingServiceStepResult> {
+  const {
+    vr,
+    currentStep,
+    currentLocale,
+    voiceName,
+    callerE164,
+    effectiveUserInput,
+    state,
+    rawConfig,
+    createBookingGather,
+  } = params;
+
+  const canonical = await executeCanonicalBookingServiceStep({
+    currentStep,
+    currentLocale,
+    callerE164,
+    effectiveUserInput,
+    state,
+    rawConfig,
+  });
+
+  if (canonical.kind === "retry" || canonical.kind === "ambiguous") {
+    const gather = createBookingGather({
+      vr,
+      locale: currentLocale,
+      step: currentStep,
+      hints: canonical.hints,
+    });
+
+    gather.say(
+      { language: currentLocale as any, voice: voiceName },
+      canonical.prompt
+    );
+
+    return {
+      handled: true,
+      state: canonical.state,
+      twiml: vr.toString(),
+    };
+  }
+
+  return {
+    handled: false,
+    state: canonical.state,
+    resolvedValue: canonical.resolvedValue,
   };
 }

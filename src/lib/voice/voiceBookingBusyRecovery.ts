@@ -1,7 +1,11 @@
-//src/lib/voice/voiceBookingBusyRecovery.ts
+// src/lib/voice/voiceBookingBusyRecovery.ts
 import { twiml } from "twilio";
 import { upsertVoiceCallState } from "./upsertVoiceCallState";
-import { resolveBookingFlowSpeech, resolveBookingRetryText, resolveBookingPromptText } from "./voiceBookingHelpers";
+import {
+  resolveBookingFlowSpeech,
+  resolveBookingRetryText,
+  resolveBookingPromptText,
+} from "./voiceBookingHelpers";
 import { twoSentencesMax } from "./speechFormatting";
 import type { CallState, VoiceLocale } from "./types";
 
@@ -33,6 +37,24 @@ type HandleBookingSlotBusyRecoveryParams = {
     lang?: string;
     context?: string;
   }) => void;
+};
+
+export type ExecuteCanonicalBookingSlotBusyRecoveryParams = {
+  flow: BookingFlowStep[];
+  state: CallState;
+  tenantId: string;
+  callSid: string;
+  currentLocale: VoiceLocale;
+  callerE164: string | null;
+  timeZone: string;
+  suggestedStarts: string[];
+};
+
+export type ExecuteCanonicalBookingSlotBusyRecoveryResult = {
+  state: CallState;
+  prompt: string;
+  context: "booking_busy_retry:datetime";
+  datetimeStepIndex: number;
 };
 
 function createBookingGather(params: {
@@ -110,22 +132,18 @@ function formatSuggestedStartForVoice(
   }).format(date);
 }
 
-export async function handleBookingSlotBusyRecovery(
-  params: HandleBookingSlotBusyRecoveryParams
-): Promise<{ state: CallState; twiml: string }> {
+export async function executeCanonicalBookingSlotBusyRecovery(
+  params: ExecuteCanonicalBookingSlotBusyRecoveryParams
+): Promise<ExecuteCanonicalBookingSlotBusyRecoveryResult> {
   const {
-    vr,
     flow,
     state,
     tenantId,
     callSid,
     currentLocale,
-    voiceName,
-    didNumber,
     callerE164,
     timeZone,
     suggestedStarts,
-    logBotSay,
   } = params;
 
   const datetimeStepIndex = findDatetimeStepIndex(flow);
@@ -182,26 +200,25 @@ export async function handleBookingSlotBusyRecovery(
     callerE164,
   });
 
-  const busyPromptFallback =
-    currentLocale.startsWith("es")
-      ? `Ese horario ya no está disponible para ${
-          String(
-            state.bookingData?.service_display ||
-              state.bookingData?.service ||
-              "este servicio"
-          ).trim() || "este servicio"
-        }. Las opciones más cercanas son ${
-          suggestedTimesText || "otras horas disponibles"
-        }. ¿Cuál prefieres?`
-      : `That time is no longer available for ${
-          String(
-            state.bookingData?.service_display ||
-              state.bookingData?.service ||
-              "this service"
-          ).trim() || "this service"
-        }. The closest options are ${
-          suggestedTimesText || "other available times"
-        }. Which one do you prefer?`;
+  const busyPromptFallback = currentLocale.startsWith("es")
+    ? `Ese horario ya no está disponible para ${
+        String(
+          state.bookingData?.service_display ||
+            state.bookingData?.service ||
+            "este servicio"
+        ).trim() || "este servicio"
+      }. Las opciones más cercanas son ${
+        suggestedTimesText || "otras horas disponibles"
+      }. ¿Cuál prefieres?`
+    : `That time is no longer available for ${
+        String(
+          state.bookingData?.service_display ||
+            state.bookingData?.service ||
+            "this service"
+        ).trim() || "this service"
+      }. The closest options are ${
+        suggestedTimesText || "other available times"
+      }. Which one do you prefer?`;
 
   const busyPrompt = twoSentencesMax(
     (busyPromptResolved || "").trim() || busyPromptFallback
@@ -238,26 +255,48 @@ export async function handleBookingSlotBusyRecovery(
     bookingData: nextBookingData,
   });
 
+  return {
+    state: nextState,
+    prompt: busyPrompt,
+    context: "booking_busy_retry:datetime",
+    datetimeStepIndex,
+  };
+}
+
+export async function handleBookingSlotBusyRecovery(
+  params: HandleBookingSlotBusyRecoveryParams
+): Promise<{ state: CallState; twiml: string }> {
+  const canonical = await executeCanonicalBookingSlotBusyRecovery({
+    flow: params.flow,
+    state: params.state,
+    tenantId: params.tenantId,
+    callSid: params.callSid,
+    currentLocale: params.currentLocale,
+    callerE164: params.callerE164,
+    timeZone: params.timeZone,
+    suggestedStarts: params.suggestedStarts,
+  });
+
   const gather = createBookingGather({
-    vr,
-    locale: currentLocale,
+    vr: params.vr,
+    locale: params.currentLocale,
   });
 
   gather.say(
-    { language: currentLocale as any, voice: voiceName as any },
-    busyPrompt
+    { language: params.currentLocale as any, voice: params.voiceName as any },
+    canonical.prompt
   );
 
-  logBotSay({
-    callSid,
-    to: didNumber || "ivr",
-    text: busyPrompt,
-    lang: currentLocale,
-    context: "booking_busy_retry:datetime",
+  params.logBotSay({
+    callSid: params.callSid,
+    to: params.didNumber || "ivr",
+    text: canonical.prompt,
+    lang: params.currentLocale,
+    context: canonical.context,
   });
 
   return {
-    state: nextState,
-    twiml: vr.toString(),
+    state: canonical.state,
+    twiml: params.vr.toString(),
   };
 }

@@ -278,6 +278,10 @@ function buildToolFollowupInstructions(params: {
   const { toolName, toolResult } = params;
   const ok = toolResult?.ok === true;
   const error = String(toolResult?.error || "").trim();
+  const assistantPrompt = clean((toolResult as any)?.assistant_prompt || "");
+  const bookingOutcome = clean((toolResult as any)?.booking_outcome || "");
+  const requiresSmsDestination =
+    (toolResult as any)?.requires_sms_destination === true;
 
   const nextRequiredStep =
     toolResult &&
@@ -288,17 +292,26 @@ function buildToolFollowupInstructions(params: {
 
   const nextStepSlot = String(nextRequiredStep?.slot || "").trim();
   const nextStepPrompt = String(nextRequiredStep?.prompt || "").trim();
-  const missingRequiredSlots = Array.isArray(toolResult?.missing_required_slots)
-    ? toolResult.missing_required_slots.map((item) => String(item || "").trim()).filter(Boolean)
+
+  const missingRequiredSlots = Array.isArray((toolResult as any)?.missing_required_slots)
+    ? (toolResult as any).missing_required_slots
+        .map((item: unknown) => String(item || "").trim())
+        .filter(Boolean)
     : [];
 
   if (toolName === "get_booking_flow") {
+    if (ok && nextStepPrompt) {
+      return [
+        "Use only the tool result as source of truth.",
+        `Ask exactly this next booking question: ${nextStepPrompt}`,
+        "Ask one short question only.",
+      ].join(" ");
+    }
+
     if (ok) {
       return [
-        "The booking flow is now available.",
-        "Do not confirm any appointment.",
-        "Ask only the next required booking question from the configured step order.",
-        "If the caller already provided a valid value for a later step, preserve it and ask only for the next still-missing required step.",
+        "Use only the tool result as source of truth.",
+        "Ask only the next required booking question.",
         "Ask one short question only.",
       ].join(" ");
     }
@@ -306,66 +319,134 @@ function buildToolFollowupInstructions(params: {
     return [
       "Tell the caller briefly that booking cannot continue right now.",
       "Do not invent booking steps.",
-      "Ask one short follow-up question only if needed.",
     ].join(" ");
   }
 
   if (toolName === "submit_booking_step") {
-    if (error === "SLOT_UNAVAILABLE") {
-      const unavailablePrompt = String(toolResult?.unavailable_prompt || "").trim();
-      const suggestedTimes = Array.isArray(toolResult?.suggested_times)
-        ? toolResult.suggested_times.map((item) => String(item || "").trim()).filter(Boolean)
-        : [];
-
-      const parts = [
-        "Do not say the appointment is confirmed.",
-        "Do not move to the next booking step.",
-        "The requested time is not available.",
-      ];
-
-      if (unavailablePrompt) {
-        parts.push(`Use this unavailable message template: ${unavailablePrompt}`);
-      }
-
-      if (suggestedTimes.length > 0) {
-        parts.push(`Offer these alternatives: ${suggestedTimes.join(", ")}.`);
-      }
-
-      parts.push("Ask the caller for a different day and time.");
-
-      return parts.join(" ");
-    }
-    
-    if (ok) {
+    if (assistantPrompt && bookingOutcome === "confirmed") {
       return [
         "Use only the tool result as source of truth.",
-        "If there is a next required booking step, ask only that next question.",
-        "If the booking state says awaiting final confirmation, present one short summary and ask for explicit confirmation.",
-        "If the booking state says ready_to_create is true, you may call create_appointment.",
+        `Tell the caller this confirmation message: ${assistantPrompt}`,
+        "Do not ask for more booking fields.",
+        "Then ask briefly if they need anything else.",
+      ].join(" ");
+    }
+
+    if (assistantPrompt && bookingOutcome === "confirmed_offer_sms") {
+      return [
+        "Use only the tool result as source of truth.",
+        `Tell the caller this exact combined message: ${assistantPrompt}`,
+        "Do not invent any extra booking details.",
+      ].join(" ");
+    }
+
+    if (assistantPrompt && bookingOutcome === "cancelled") {
+      return [
+        "Use only the tool result as source of truth.",
+        `Tell the caller this cancellation message: ${assistantPrompt}`,
+        "Then ask briefly if they need anything else.",
+      ].join(" ");
+    }
+
+    if (requiresSmsDestination) {
+      return [
+        "Use only the tool result as source of truth.",
+        "Ask the caller what phone number should receive the booking details by SMS.",
         "Ask one short question only.",
       ].join(" ");
     }
 
+    if (
+      assistantPrompt &&
+      (
+        error === "UNRESOLVED_BOOKING_SERVICE" ||
+        error === "AMBIGUOUS_BOOKING_SERVICE" ||
+        error === "INVALID_DATETIME_STEP" ||
+        error === "SLOT_UNAVAILABLE" ||
+        error === "CONFIRMATION_RETRY" ||
+        error === "BOOKING_FAILED"
+      )
+    ) {
+      return [
+        "Use only the tool result as source of truth.",
+        `Tell the caller this exact retry or error prompt: ${assistantPrompt}`,
+        "Do not move to the next booking step unless the tool result says so.",
+      ].join(" ");
+    }
+
+    const bookingState =
+      toolResult &&
+      typeof toolResult.booking_state === "object" &&
+      toolResult.booking_state !== null
+        ? (toolResult.booking_state as Record<string, unknown>)
+        : null;
+
+    const awaitingConfirmation = bookingState?.awaiting_confirmation === true;
+
+    if (awaitingConfirmation && nextStepPrompt) {
+      return [
+        "Use only the tool result as source of truth.",
+        "Present one short summary of the booking details already collected.",
+        `Then ask exactly this confirmation question: ${nextStepPrompt}`,
+      ].join(" ");
+    }
+
+    if (ok && nextStepPrompt) {
+      return [
+        "Use only the tool result as source of truth.",
+        `Ask exactly this next booking question: ${nextStepPrompt}`,
+        "Do not ask any other field.",
+      ].join(" ");
+    }
+
     return [
-      "Do not invent booking progress.",
-      "Explain briefly that the step could not be processed.",
-      "Ask one short follow-up question only if the tool result includes a next required step.",
+      "Use only the tool result as source of truth.",
+      "Respond briefly and do not invent booking progress.",
     ].join(" ");
   }
 
   if (toolName === "create_appointment") {
-    if (ok) {
+    if (assistantPrompt && bookingOutcome === "confirmed") {
       return [
-        "Confirm the appointment briefly using only the tool result as the source of truth.",
-        "Do not invent details.",
-        "Then ask if the caller needs anything else.",
+        "Use only the tool result as source of truth.",
+        `Tell the caller this booking confirmation message: ${assistantPrompt}`,
+        "Then ask briefly if they need anything else.",
+      ].join(" ");
+    }
+
+    if (assistantPrompt && bookingOutcome === "confirmed_offer_sms") {
+      return [
+        "Use only the tool result as source of truth.",
+        `Tell the caller this exact combined message: ${assistantPrompt}`,
+      ].join(" ");
+    }
+
+    if (assistantPrompt && bookingOutcome === "cancelled") {
+      return [
+        "Use only the tool result as source of truth.",
+        `Tell the caller this cancellation message: ${assistantPrompt}`,
+        "Then ask briefly if they need anything else.",
+      ].join(" ");
+    }
+
+    if (requiresSmsDestination) {
+      return [
+        "Use only the tool result as source of truth.",
+        "Ask the caller what phone number should receive the booking details by SMS.",
+        "Ask one short question only.",
+      ].join(" ");
+    }
+
+    if (assistantPrompt && !ok) {
+      return [
+        "Use only the tool result as source of truth.",
+        `Tell the caller this exact prompt: ${assistantPrompt}`,
       ].join(" ");
     }
 
     if (error === "MISSING_REQUIRED_BOOKING_FIELDS") {
       const parts = [
         "Do not say the appointment was created.",
-        "Do not ask for final confirmation again yet.",
         "A required booking field is still missing.",
       ];
 
@@ -383,18 +464,14 @@ function buildToolFollowupInstructions(params: {
         parts.push("Ask one short question only for the next missing required field.");
       }
 
-      parts.push("Do not repeat already collected fields.");
-      parts.push("Do not call create_appointment again until the missing required field is collected.");
-
       return parts.join(" ");
     }
 
     if (error === "MISSING_FINAL_CONFIRMATION") {
       return [
         "Do not say the appointment was created.",
-        "Present one short final summary of the appointment details already collected.",
+        "Present one short final summary of the booking details already collected.",
         "Ask for explicit confirmation.",
-        "Ask one short confirmation question only.",
       ].join(" ");
     }
 
@@ -417,6 +494,10 @@ function buildToolFollowupInstructions(params: {
       "Do not end the call yet.",
       "Continue helping the caller briefly using the tool result as source of truth.",
     ].join(" ");
+  }
+
+  if (assistantPrompt) {
+    return `Use this exact tool-result prompt: ${assistantPrompt}`;
   }
 
   if (ok) {
@@ -472,6 +553,11 @@ export async function createOpenAiRealtimeBridge({
   let didNumber: string | null = null;
   let callerPhone: string | null = null;
   let tenantId: string | null = null;
+  let realtimeTenant: any = null;
+  let realtimeCfg: any = null;
+  let realtimeState: CallState = {};
+  let lastUserTranscript = "";
+  let lastUserDigits = "";
   let openAiReady = false;
   let sessionConfigured = false;
   let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
@@ -497,12 +583,12 @@ export async function createOpenAiRealtimeBridge({
     if (!didNumber) return;
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
 
-    const emptyState: CallState = {};
+    const requestState: CallState = realtimeState;
 
     const context = await resolveVoiceRequestContext({
       callSid,
       didNumber,
-      state: emptyState,
+      state: requestState,
       langParam: undefined,
       channelKey: "voice",
     });
@@ -553,6 +639,12 @@ export async function createOpenAiRealtimeBridge({
     });
 
     tenantId = context.tenant.id;
+    realtimeTenant = context.tenant;
+    realtimeCfg = context.cfg || {};
+    realtimeState = {
+      ...realtimeState,
+      lang: currentLocale,
+    };
     sessionConfigured = true;
 
     console.log("[VOICE_REALTIME][SESSION_CONFIGURED]", {
@@ -727,6 +819,14 @@ export async function createOpenAiRealtimeBridge({
         callerPhone,
         toolName,
         args: effectiveToolArgs,
+        tenant: realtimeTenant,
+        cfg: realtimeCfg,
+        callSid: callSid || undefined,
+        didNumber: didNumber || undefined,
+        currentLocale,
+        state: realtimeState,
+        userInput: lastUserTranscript,
+        digits: lastUserDigits,
       })
         .then((toolResult) => {
           if (toolName === "get_booking_flow" && toolResult?.ok) {
@@ -760,6 +860,20 @@ export async function createOpenAiRealtimeBridge({
                 : collectedBookingSlots;
           }
 
+          realtimeState = {
+            ...realtimeState,
+            lang: currentLocale,
+            bookingStepIndex:
+              typeof toolResult?.booking_state?.current_step_key === "string" &&
+              toolResult?.booking_state?.current_step_key
+                ? undefined
+                : realtimeState.bookingStepIndex,
+            bookingData: {
+              ...(realtimeState.bookingData || {}),
+              ...collectedBookingSlots,
+            },
+          };
+
           if (toolName === "end_call" && toolResult?.ok === true && toolResult?.hangup === true) {
             hangupRequestedByTool = true;
           }
@@ -791,6 +905,7 @@ export async function createOpenAiRealtimeBridge({
               }),
             },
           });
+          lastUserDigits = "";
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TOOL_ERROR]", {
@@ -847,6 +962,8 @@ export async function createOpenAiRealtimeBridge({
       event.type === "response.audio_transcript.done" ||
       event.type === "conversation.item.input_audio_transcription.completed"
     ) {
+      lastUserTranscript = clean(event.transcript || "");
+
       console.log("[VOICE_REALTIME][TRANSCRIPT]", {
         callSid,
         transcript: event.transcript,
@@ -908,6 +1025,11 @@ export async function createOpenAiRealtimeBridge({
       hangupRequestedByTool = false;
       currentBookingStepKey = null;
       collectedBookingSlots = {};
+      realtimeState = {};
+      realtimeTenant = null;
+      realtimeCfg = null;
+      lastUserTranscript = "";
+      lastUserDigits = "";
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {
         callSid,
@@ -920,6 +1042,14 @@ export async function createOpenAiRealtimeBridge({
         twilioSocket.close();
       });
 
+      return;
+    }
+
+    if (event.event === "dtmf") {
+      const digit = clean((event as any)?.dtmf?.digit || "");
+      if (digit) {
+        lastUserDigits = digit;
+      }
       return;
     }
 

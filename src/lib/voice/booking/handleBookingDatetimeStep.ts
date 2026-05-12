@@ -1,4 +1,4 @@
-//src/lib/voice/booking/handleBookingDatetimeStep.ts
+// src/lib/voice/booking/handleBookingDatetimeStep.ts
 import { twiml } from "twilio";
 import type { CallState, VoiceLocale } from "../types";
 import { resolveVoiceScheduleValidation } from "../../appointments/resolveVoiceScheduleValidation";
@@ -58,6 +58,30 @@ type HandleBookingDatetimeStepResult =
       handled: true;
       state: CallState;
       twiml: string;
+    };
+
+export type CanonicalBookingDatetimeStepParams = {
+  tenantId: string;
+  callSid: string;
+  currentStep: BookingStepLike;
+  currentIndex: number;
+  currentLocale: VoiceLocale;
+  callerE164: string | null;
+  state: CallState;
+  resolvedStepValue: string;
+};
+
+export type CanonicalBookingDatetimeStepResult =
+  | {
+      kind: "retry";
+      state: CallState;
+      prompt: string;
+      context: "empty_datetime" | "incomplete_datetime" | "slot_unavailable";
+    }
+  | {
+      kind: "resolved";
+      nextState: CallState;
+      resolvedValue: string;
     };
 
 function assertNonEmptyBookingSpeech(input: {
@@ -124,23 +148,18 @@ function formatSuggestedStartForVoice(
   }).format(date);
 }
 
-export async function handleBookingDatetimeStep(
-  params: HandleBookingDatetimeStepParams
-): Promise<HandleBookingDatetimeStepResult> {
+export async function executeCanonicalBookingDatetimeStep(
+  params: CanonicalBookingDatetimeStepParams
+): Promise<CanonicalBookingDatetimeStepResult> {
   const {
-    vr,
     tenantId,
     callSid,
-    didNumber,
     currentStep,
     currentIndex,
     currentLocale,
-    voiceName,
     callerE164,
     state,
     resolvedStepValue,
-    createBookingGather,
-    logBotSay,
   } = params;
 
   const currentBookingData = {
@@ -220,34 +239,17 @@ export async function handleBookingDatetimeStep(
       })
     );
 
-    const gather = createBookingGather({
-      vr,
-      locale: currentLocale,
-    });
-
-    gather.say(
-      { language: currentLocale as any, voice: voiceName },
-      retryPrompt
-    );
-
-    logBotSay({
-      callSid,
-      to: didNumber || "ivr",
-      text: retryPrompt,
-      lang: currentLocale,
-      context: `booking_retry_empty_datetime:${currentStep.step_key}`,
-    });
-
     return {
-      handled: true,
+      kind: "retry",
       state: nextState,
-      twiml: vr.toString(),
+      prompt: retryPrompt,
+      context: "empty_datetime",
     };
   }
 
   if (!serviceName) {
     return {
-      handled: false,
+      kind: "resolved",
       nextState: state,
       resolvedValue: resolvedStepValue,
     };
@@ -367,10 +369,10 @@ export async function handleBookingDatetimeStep(
     const retryPromptFinal = isIncompleteDatetimeReason
       ? retryPromptResolved
       : suggestedTimesText || availableTimesText
-      ? retryPromptResolved
-      : unavailablePrompt
-      ? retryPromptResolved
-      : localizedRetryBase;
+        ? retryPromptResolved
+        : unavailablePrompt
+          ? retryPromptResolved
+          : localizedRetryBase;
 
     const retryPrompt = twoSentencesMax(
       assertNonEmptyBookingSpeech({
@@ -380,35 +382,18 @@ export async function handleBookingDatetimeStep(
           isUnavailableReason && unavailablePrompt
             ? "unavailable_prompt"
             : currentStep.retry_prompt
-            ? "retry_prompt"
-            : "prompt",
+              ? "retry_prompt"
+              : "prompt",
       })
     );
 
-    const gather = createBookingGather({
-      vr,
-      locale: currentLocale,
-    });
-
-    gather.say(
-      { language: currentLocale as any, voice: voiceName },
-      retryPrompt
-    );
-
-    logBotSay({
-      callSid,
-      to: didNumber || "ivr",
-      text: retryPrompt,
-      lang: currentLocale,
-      context: isIncompleteDatetimeReason
-        ? `booking_retry_incomplete_datetime:${currentStep.step_key}`
-        : `booking_retry:${currentStep.step_key}`,
-    });
-
     return {
-      handled: true,
+      kind: "retry",
       state: nextState,
-      twiml: vr.toString(),
+      prompt: retryPrompt,
+      context: isIncompleteDatetimeReason
+        ? "incomplete_datetime"
+        : "slot_unavailable",
     };
   }
 
@@ -436,8 +421,71 @@ export async function handleBookingDatetimeStep(
   };
 
   return {
-    handled: false,
+    kind: "resolved",
     nextState,
     resolvedValue: rawDatetime,
+  };
+}
+
+export async function handleBookingDatetimeStep(
+  params: HandleBookingDatetimeStepParams
+): Promise<HandleBookingDatetimeStepResult> {
+  const {
+    vr,
+    didNumber,
+    currentStep,
+    currentLocale,
+    voiceName,
+    callSid,
+    createBookingGather,
+    logBotSay,
+  } = params;
+
+  const canonical = await executeCanonicalBookingDatetimeStep({
+    tenantId: params.tenantId,
+    callSid: params.callSid,
+    currentStep: params.currentStep,
+    currentIndex: params.currentIndex,
+    currentLocale: params.currentLocale,
+    callerE164: params.callerE164,
+    state: params.state,
+    resolvedStepValue: params.resolvedStepValue,
+  });
+
+  if (canonical.kind === "retry") {
+    const gather = createBookingGather({
+      vr,
+      locale: currentLocale,
+    });
+
+    gather.say(
+      { language: currentLocale as any, voice: voiceName },
+      canonical.prompt
+    );
+
+    logBotSay({
+      callSid,
+      to: didNumber || "ivr",
+      text: canonical.prompt,
+      lang: currentLocale,
+      context:
+        canonical.context === "empty_datetime"
+          ? `booking_retry_empty_datetime:${currentStep.step_key}`
+          : canonical.context === "incomplete_datetime"
+            ? `booking_retry_incomplete_datetime:${currentStep.step_key}`
+            : `booking_retry:${currentStep.step_key}`,
+    });
+
+    return {
+      handled: true,
+      state: canonical.state,
+      twiml: vr.toString(),
+    };
+  }
+
+  return {
+    handled: false,
+    nextState: canonical.nextState,
+    resolvedValue: canonical.resolvedValue,
   };
 }
