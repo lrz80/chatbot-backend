@@ -386,6 +386,8 @@ function buildToolFollowupInstructions(params: {
     if (awaitingConfirmation && nextStepPrompt) {
       return [
         "Use only the tool result as source of truth.",
+        "Do not call create_appointment yet.",
+        "Wait for the caller explicit confirmation first.",
         "Present one short summary of the booking details already collected.",
         `Then ask exactly this confirmation question: ${nextStepPrompt}`,
       ].join(" ");
@@ -394,6 +396,7 @@ function buildToolFollowupInstructions(params: {
     if (ok && nextStepPrompt) {
       return [
         "Use only the tool result as source of truth.",
+        "Do not call create_appointment unless a later tool result explicitly allows it.",
         `Ask exactly this next booking question: ${nextStepPrompt}`,
         "Do not ask any other field.",
       ].join(" ");

@@ -1,4 +1,8 @@
 import { getBookingFlow } from "../../appointments/getBookingFlow";
+import {
+  resolveBookingPromptText,
+  resolveBookingRetryText,
+} from "../voiceBookingHelpers";
 import { executeCanonicalBookingServiceStep } from "../booking/handleBookingServiceStep";
 import { executeCanonicalBookingDatetimeStep } from "../booking/handleBookingDatetimeStep";
 import { executeCanonicalBookingConfirmationStep } from "../booking/handleBookingConfirmationStep";
@@ -95,6 +99,29 @@ function toCleanStringArray(value: unknown): string[] {
   return single ? [single] : [];
 }
 
+function extractStringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const record = value as Record<string, unknown>;
+  const result: Record<string, string> = {};
+
+  for (const [key, raw] of Object.entries(record)) {
+    const normalizedKey = clean(key);
+    if (!normalizedKey) continue;
+    if (typeof raw === "boolean") continue;
+    if (raw === null || raw === undefined) continue;
+
+    const normalizedValue = clean(raw);
+    if (!normalizedValue) continue;
+
+    result[normalizedKey] = normalizedValue;
+  }
+
+  return result;
+}
+
 function getRealtimeBookingContext(
   params: ExecuteRealtimeToolParams
 ): RealtimeBookingContext | null {
@@ -120,8 +147,8 @@ function getRealtimeBookingContext(
     didNumber,
     currentLocale,
     state,
-    userInput: String(userInput || "").trim(),
-    digits: String(digits || "").trim(),
+    userInput: clean(userInput),
+    digits: clean(digits),
   };
 }
 
@@ -194,15 +221,40 @@ function sortFlowSteps(steps: BookingFlowStepLike[]): BookingFlowStepLike[] {
     .sort((a, b) => Number(a.step_order || 0) - Number(b.step_order || 0));
 }
 
-function mapStepForRealtime(step: BookingFlowStepLike): RealtimeMappedStep {
+function mapStepForRealtime(
+  step: BookingFlowStepLike,
+  locale?: VoiceLocale
+): RealtimeMappedStep {
+  const resolvedPrompt = locale
+    ? resolveBookingPromptText({
+        locale,
+        prompt: step.prompt || "",
+        promptTranslations:
+          (step.prompt_translations as Record<string, string> | null) || null,
+      })
+    : step.prompt || "";
+
+  const resolvedRetryPrompt = locale
+    ? resolveBookingRetryText({
+        locale,
+        retryPrompt: step.retry_prompt || "",
+        retryPromptTranslations:
+          (step.retry_prompt_translations as Record<string, string> | null) ||
+          null,
+        fallbackPrompt: step.prompt || "",
+        fallbackPromptTranslations:
+          (step.prompt_translations as Record<string, string> | null) || null,
+      })
+    : step.retry_prompt || "";
+
   return {
     step_key: clean(step.step_key),
     step_order: Number(step.step_order || 0),
     slot: getStepSlot(step),
-    prompt: step.prompt || "",
+    prompt: resolvedPrompt,
     expected_type: step.expected_type || "text",
     required: step.required === true,
-    retry_prompt: step.retry_prompt || "",
+    retry_prompt: resolvedRetryPrompt,
     validation_config: step.validation_config || null,
     prompt_translations: step.prompt_translations || null,
     retry_prompt_translations: step.retry_prompt_translations || null,
@@ -210,9 +262,10 @@ function mapStepForRealtime(step: BookingFlowStepLike): RealtimeMappedStep {
 }
 
 function mapFlowStepsForRealtime(
-  steps: BookingFlowStepLike[]
+  steps: BookingFlowStepLike[],
+  locale?: VoiceLocale
 ): RealtimeMappedStep[] {
-  return sortFlowSteps(steps).map(mapStepForRealtime);
+  return sortFlowSteps(steps).map((step) => mapStepForRealtime(step, locale));
 }
 
 function extractStepOptionCandidates(
@@ -321,28 +374,6 @@ function canonicalizeGenericStepValue(
   return input;
 }
 
-function extractStringRecord(value: unknown): Record<string, string> {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-
-  const record = value as Record<string, unknown>;
-  const result: Record<string, string> = {};
-
-  for (const [key, raw] of Object.entries(record)) {
-    if (!key) continue;
-    if (typeof raw === "boolean") continue;
-    if (raw === null || raw === undefined) continue;
-
-    const normalized = clean(raw);
-    if (!normalized) continue;
-
-    result[key] = normalized;
-  }
-
-  return result;
-}
-
 function buildAnswersBySlot(params: {
   args: Record<string, any>;
   callerPhone: string | null;
@@ -416,6 +447,13 @@ function getMissingRequiredFlowSteps(params: {
   });
 }
 
+function getStepIndexByKey(
+  steps: BookingFlowStepLike[],
+  stepKey: string
+): number {
+  return steps.findIndex((step) => clean(step.step_key) === clean(stepKey));
+}
+
 function getConfirmationLikeStep(
   steps: BookingFlowStepLike[]
 ): BookingFlowStepLike | null {
@@ -426,13 +464,6 @@ function getConfirmationLikeStep(
   }
 
   return null;
-}
-
-function getStepIndexByKey(
-  steps: BookingFlowStepLike[],
-  stepKey: string
-): number {
-  return steps.findIndex((step) => clean(step.step_key) === clean(stepKey));
 }
 
 function resolveCurrentStepIndex(params: {
@@ -549,9 +580,10 @@ function buildRealtimeBookingState(params: {
 function buildNextRequiredStep(params: {
   steps: BookingFlowStepLike[];
   bookingState: BookingState;
+  locale?: VoiceLocale;
   overridePrompt?: string;
 }): RealtimeMappedStep | null {
-  const { steps, bookingState, overridePrompt } = params;
+  const { steps, bookingState, locale, overridePrompt } = params;
 
   if (!bookingState.current_step_key) {
     return null;
@@ -566,7 +598,7 @@ function buildNextRequiredStep(params: {
     return null;
   }
 
-  const mapped = mapStepForRealtime(step);
+  const mapped = mapStepForRealtime(step, locale);
 
   if (overridePrompt) {
     return {
@@ -672,11 +704,12 @@ export async function executeRealtimeTool(
 
       return {
         ok: true,
-        steps: mapFlowStepsForRealtime(steps),
+        steps: mapFlowStepsForRealtime(steps, bookingContext.currentLocale),
         booking_state: bookingState,
         next_required_step: buildNextRequiredStep({
           steps,
           bookingState,
+          locale: bookingContext.currentLocale,
         }),
       };
     }
@@ -778,6 +811,7 @@ export async function executeRealtimeTool(
             next_required_step: buildNextRequiredStep({
               steps,
               bookingState,
+              locale: bookingContext.currentLocale,
               overridePrompt: serviceResult.prompt,
             }),
             service_options:
@@ -831,6 +865,7 @@ export async function executeRealtimeTool(
             next_required_step: buildNextRequiredStep({
               steps,
               bookingState,
+              locale: bookingContext.currentLocale,
               overridePrompt: datetimeResult.prompt,
             }),
           };
@@ -904,6 +939,7 @@ export async function executeRealtimeTool(
             next_required_step: buildNextRequiredStep({
               steps,
               bookingState,
+              locale: bookingContext.currentLocale,
               overridePrompt: busyRecovered.prompt,
             }),
           };
@@ -925,6 +961,7 @@ export async function executeRealtimeTool(
             next_required_step: buildNextRequiredStep({
               steps,
               bookingState,
+              locale: bookingContext.currentLocale,
               overridePrompt: confirmationResult.prompt,
             }),
           };
@@ -985,7 +1022,10 @@ export async function executeRealtimeTool(
           const bookingState = buildRealtimeBookingState({
             steps,
             state: confirmationResult.state,
-            explicitCurrentIndex: confirmationResult.state.bookingStepIndex ?? null,
+            explicitCurrentIndex:
+              typeof confirmationResult.state.bookingStepIndex === "number"
+                ? confirmationResult.state.bookingStepIndex
+                : null,
           });
 
           return {
@@ -997,6 +1037,7 @@ export async function executeRealtimeTool(
             next_required_step: buildNextRequiredStep({
               steps,
               bookingState,
+              locale: bookingContext.currentLocale,
               overridePrompt: confirmationResult.smsOfferPrompt,
             }),
           };
@@ -1034,6 +1075,7 @@ export async function executeRealtimeTool(
             next_required_step: buildNextRequiredStep({
               steps,
               bookingState,
+              locale: bookingContext.currentLocale,
             }),
           };
         }
@@ -1065,6 +1107,7 @@ export async function executeRealtimeTool(
               next_required_step: buildNextRequiredStep({
                 steps,
                 bookingState,
+                locale: bookingContext.currentLocale,
               }),
             };
           }
@@ -1110,6 +1153,7 @@ export async function executeRealtimeTool(
         next_required_step: buildNextRequiredStep({
           steps,
           bookingState,
+          locale: bookingContext.currentLocale,
         }),
         action_required: null,
       };
@@ -1199,6 +1243,7 @@ export async function executeRealtimeTool(
           next_required_step: buildNextRequiredStep({
             steps,
             bookingState,
+            locale: bookingContext.currentLocale,
             overridePrompt: busyRecovered.prompt,
           }),
         };
@@ -1208,8 +1253,7 @@ export async function executeRealtimeTool(
         const bookingState = buildRealtimeBookingState({
           steps,
           state: confirmationResult.state,
-          explicitCurrentIndex:
-            currentIndex >= 0 ? currentIndex : null,
+          explicitCurrentIndex: currentIndex >= 0 ? currentIndex : null,
         });
 
         return {
@@ -1221,6 +1265,7 @@ export async function executeRealtimeTool(
           next_required_step: buildNextRequiredStep({
             steps,
             bookingState,
+            locale: bookingContext.currentLocale,
             overridePrompt: confirmationResult.prompt,
           }),
         };
@@ -1281,7 +1326,10 @@ export async function executeRealtimeTool(
         const bookingState = buildRealtimeBookingState({
           steps,
           state: confirmationResult.state,
-          explicitCurrentIndex: confirmationResult.state.bookingStepIndex ?? null,
+          explicitCurrentIndex:
+            typeof confirmationResult.state.bookingStepIndex === "number"
+              ? confirmationResult.state.bookingStepIndex
+              : null,
         });
 
         return {
@@ -1293,6 +1341,7 @@ export async function executeRealtimeTool(
           next_required_step: buildNextRequiredStep({
             steps,
             bookingState,
+            locale: bookingContext.currentLocale,
             overridePrompt: confirmationResult.smsOfferPrompt,
           }),
         };
