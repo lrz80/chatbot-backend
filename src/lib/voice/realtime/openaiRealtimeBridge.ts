@@ -253,13 +253,26 @@ function buildToolFollowupInstructions(params: {
   const ok = toolResult?.ok === true;
   const error = String(toolResult?.error || "").trim();
 
+  const nextRequiredStep =
+    toolResult &&
+    typeof toolResult.next_required_step === "object" &&
+    toolResult.next_required_step !== null
+      ? (toolResult.next_required_step as Record<string, unknown>)
+      : null;
+
+  const nextStepSlot = String(nextRequiredStep?.slot || "").trim();
+  const nextStepPrompt = String(nextRequiredStep?.prompt || "").trim();
+  const missingRequiredSlots = Array.isArray(toolResult?.missing_required_slots)
+    ? toolResult.missing_required_slots.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+
   if (toolName === "get_booking_flow") {
     if (ok) {
       return [
         "The booking flow is now available.",
         "Do not confirm any appointment.",
         "Ask only the next required booking question from the configured step order.",
-        "If the caller already provided a value for an earlier or later step and the tool result includes it, preserve it and ask only for the next still-missing required step.",
+        "If the caller already provided a valid value for a later step, preserve it and ask only for the next still-missing required step.",
         "Ask one short question only.",
       ].join(" ");
     }
@@ -278,6 +291,33 @@ function buildToolFollowupInstructions(params: {
         "Do not invent details.",
         "Then ask if the caller needs anything else.",
       ].join(" ");
+    }
+
+    if (error === "MISSING_REQUIRED_BOOKING_FIELDS") {
+      const parts = [
+        "Do not say the appointment was created.",
+        "Do not ask for final confirmation again yet.",
+        "A required booking field is still missing.",
+      ];
+
+      if (missingRequiredSlots.length > 0) {
+        parts.push(`Missing required slots: ${missingRequiredSlots.join(", ")}.`);
+      }
+
+      if (nextStepSlot) {
+        parts.push(`The next missing required slot is ${nextStepSlot}.`);
+      }
+
+      if (nextStepPrompt) {
+        parts.push(`Ask exactly this next question: ${nextStepPrompt}`);
+      } else {
+        parts.push("Ask one short question only for the next missing required field.");
+      }
+
+      parts.push("Do not repeat already collected fields.");
+      parts.push("Do not call create_appointment again until the missing required field is collected.");
+
+      return parts.join(" ");
     }
 
     if (error === "MISSING_FINAL_CONFIRMATION") {
@@ -523,6 +563,8 @@ export async function createOpenAiRealtimeBridge({
             toolName,
             ok: toolResult?.ok,
             error: toolResult?.error,
+            missing_required_slots: toolResult?.missing_required_slots,
+            next_required_step: toolResult?.next_required_step,
           });
 
           sendJson(openAiSocket, {
