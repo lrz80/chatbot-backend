@@ -23,17 +23,42 @@ type BookingFlowStepLike = {
   retry_prompt_translations?: Record<string, unknown> | null;
 };
 
+type RealtimeMappedStep = {
+  step_key: string;
+  step_order: number;
+  slot: string;
+  prompt: string;
+  expected_type: string;
+  required: boolean;
+  retry_prompt: string;
+  validation_config: Record<string, unknown> | null;
+  prompt_translations: Record<string, unknown> | null;
+  retry_prompt_translations: Record<string, unknown> | null;
+};
+
+type BookingState = {
+  current_step_key: string | null;
+  current_step_slot: string | null;
+  awaiting_confirmation: boolean;
+  final_confirmation_granted: boolean;
+  ready_to_create: boolean;
+  collected_slots: Record<string, string>;
+};
+
 function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function getStepSlot(step: BookingFlowStepLike): string {
-  const validationConfig =
-    step.validation_config &&
-    typeof step.validation_config === "object"
-      ? (step.validation_config as Record<string, unknown>)
-      : null;
+function getValidationConfig(
+  step: BookingFlowStepLike
+): Record<string, unknown> | null {
+  return step.validation_config && typeof step.validation_config === "object"
+    ? (step.validation_config as Record<string, unknown>)
+    : null;
+}
 
+function getStepSlot(step: BookingFlowStepLike): string {
+  const validationConfig = getValidationConfig(step);
   const configuredSlot = clean(validationConfig?.slot);
 
   if (configuredSlot) {
@@ -69,29 +94,24 @@ function getAnswerValueForStep(
   return "";
 }
 
-function isConfirmationStep(step: BookingFlowStepLike): boolean {
-  const slot = getStepSlot(step).toLowerCase();
-  const stepKey = clean(step.step_key).toLowerCase();
+function isTerminalFlowStep(step: BookingFlowStepLike): boolean {
+  const validationConfig = getValidationConfig(step);
+  const terminal = clean(validationConfig?.terminal_behavior).toLowerCase();
 
-  return (
-    slot === "customer_confirmed" ||
-    slot === "confirmation" ||
-    stepKey === "customer_confirmed" ||
-    stepKey === "confirmation" ||
-    stepKey === "confirm"
-  );
+  return terminal === "success" || terminal === "end";
+}
+
+function getStepKind(step: BookingFlowStepLike): string {
+  const validationConfig = getValidationConfig(step);
+  return clean(validationConfig?.step_kind).toLowerCase();
+}
+
+function isConfirmationStep(step: BookingFlowStepLike): boolean {
+  return getStepKind(step) === "confirmation";
 }
 
 function isSuccessStep(step: BookingFlowStepLike): boolean {
-  const slot = getStepSlot(step).toLowerCase();
-  const stepKey = clean(step.step_key).toLowerCase();
-
-  return (
-    slot === "success" ||
-    slot === "success_message" ||
-    stepKey === "success" ||
-    stepKey === "success_message"
-  );
+  return isTerminalFlowStep(step);
 }
 
 function sortFlowSteps(steps: BookingFlowStepLike[]): BookingFlowStepLike[] {
@@ -100,8 +120,8 @@ function sortFlowSteps(steps: BookingFlowStepLike[]): BookingFlowStepLike[] {
     .sort((a, b) => Number(a.step_order || 0) - Number(b.step_order || 0));
 }
 
-function mapFlowStepsForRealtime(steps: BookingFlowStepLike[]) {
-  return sortFlowSteps(steps).map((step) => ({
+function mapStepForRealtime(step: BookingFlowStepLike): RealtimeMappedStep {
+  return {
     step_key: clean(step.step_key),
     step_order: Number(step.step_order || 0),
     slot: getStepSlot(step),
@@ -112,7 +132,11 @@ function mapFlowStepsForRealtime(steps: BookingFlowStepLike[]) {
     validation_config: step.validation_config || null,
     prompt_translations: step.prompt_translations || null,
     retry_prompt_translations: step.retry_prompt_translations || null,
-  }));
+  };
+}
+
+function mapFlowStepsForRealtime(steps: BookingFlowStepLike[]): RealtimeMappedStep[] {
+  return sortFlowSteps(steps).map(mapStepForRealtime);
 }
 
 function buildAnswersBySlot(params: {
@@ -125,11 +149,8 @@ function buildAnswersBySlot(params: {
 
   for (const [rawKey, rawValue] of Object.entries(args || {})) {
     const key = clean(rawKey);
-    if (!key || key === "customer_confirmed") continue;
-
-    if (typeof rawValue === "boolean") {
-      continue;
-    }
+    if (!key) continue;
+    if (typeof rawValue === "boolean") continue;
 
     const value = clean(rawValue);
     if (!value) continue;
@@ -144,88 +165,135 @@ function buildAnswersBySlot(params: {
   return answersBySlot;
 }
 
-function getMissingRequiredFlowSlots(params: {
+function normalizeAnswersToCanonicalSlots(params: {
   steps: BookingFlowStepLike[];
   answersBySlot: Record<string, string>;
-}): string[] {
-  const { steps, answersBySlot } = params;
-
-  const missing: string[] = [];
+}): Record<string, string> {
+  const { steps } = params;
+  const normalized: Record<string, string> = { ...params.answersBySlot };
 
   for (const step of sortFlowSteps(steps)) {
-    if (step.required !== true) continue;
-    if (isConfirmationStep(step)) continue;
-    if (isSuccessStep(step)) continue;
+    const canonicalSlot = getStepSlot(step);
+    if (!canonicalSlot) continue;
 
-    const slot = getStepSlot(step);
-    if (!slot) continue;
+    const value = getAnswerValueForStep(step, normalized);
+    if (!value) continue;
 
-    const value = getAnswerValueForStep(step, answersBySlot);
-    if (!value) {
-      missing.push(slot);
+    normalized[canonicalSlot] = value;
+
+    const stepKey = clean(step.step_key);
+    if (stepKey) {
+      normalized[stepKey] = value;
     }
   }
 
-  return missing;
+  return normalized;
 }
 
-function buildMissingStepDetails(params: {
+function getMissingRequiredFlowSteps(params: {
   steps: BookingFlowStepLike[];
-  missingSlots: string[];
-}) {
-  const { steps, missingSlots } = params;
+  answersBySlot: Record<string, string>;
+}): BookingFlowStepLike[] {
+  const { steps, answersBySlot } = params;
 
-  const missingSet = new Set(missingSlots);
+  return sortFlowSteps(steps).filter((step) => {
+    if (step.required !== true) return false;
+    if (isConfirmationStep(step)) return false;
+    if (isSuccessStep(step)) return false;
 
-  return sortFlowSteps(steps)
-    .filter((step) => {
-      const slot = getStepSlot(step);
-      return missingSet.has(slot);
-    })
-    .map((step) => ({
-      step_key: clean(step.step_key),
-      step_order: Number(step.step_order || 0),
-      slot: getStepSlot(step),
-      prompt: step.prompt || "",
-      retry_prompt: step.retry_prompt || "",
-      required: step.required === true,
-      expected_type: step.expected_type || "text",
-      validation_config: step.validation_config || null,
-      prompt_translations: step.prompt_translations || null,
-      retry_prompt_translations: step.retry_prompt_translations || null,
-    }));
+    const slot = getStepSlot(step);
+    if (!slot) return false;
+
+    const value = getAnswerValueForStep(step, answersBySlot);
+    return !value;
+  });
+}
+
+function buildMissingStepDetails(steps: BookingFlowStepLike[]) {
+  return steps.map(mapStepForRealtime);
+}
+
+function getConfirmationStep(
+  steps: BookingFlowStepLike[]
+): BookingFlowStepLike | null {
+  for (const step of sortFlowSteps(steps)) {
+    if (isConfirmationStep(step)) {
+      return step;
+    }
+  }
+
+  return null;
 }
 
 function getNextMissingRequiredStep(params: {
   steps: BookingFlowStepLike[];
   answersBySlot: Record<string, string>;
-}) {
-  const { steps, answersBySlot } = params;
+}): RealtimeMappedStep | null {
+  const missingSteps = getMissingRequiredFlowSteps(params);
 
-  for (const step of sortFlowSteps(steps)) {
-    if (step.required !== true) continue;
-    if (isConfirmationStep(step)) continue;
-    if (isSuccessStep(step)) continue;
-
-    const slot = getStepSlot(step);
-    if (!slot) continue;
-
-    const value = getAnswerValueForStep(step, answersBySlot);
-    if (!value) {
-      return {
-        step_key: clean(step.step_key),
-        step_order: Number(step.step_order || 0),
-        slot,
-        prompt: step.prompt || "",
-        retry_prompt: step.retry_prompt || "",
-        required: true,
-        expected_type: step.expected_type || "text",
-        validation_config: step.validation_config || null,
-        prompt_translations: step.prompt_translations || null,
-        retry_prompt_translations: step.retry_prompt_translations || null,
-      };
-    }
+  if (missingSteps.length === 0) {
+    return null;
   }
+
+  return mapStepForRealtime(missingSteps[0]);
+}
+
+function buildBookingState(params: {
+  steps: BookingFlowStepLike[];
+  answersBySlot: Record<string, string>;
+  finalConfirmationGranted: boolean;
+}): BookingState {
+  const { steps, answersBySlot, finalConfirmationGranted } = params;
+
+  const missingSteps = getMissingRequiredFlowSteps({
+    steps,
+    answersBySlot,
+  });
+
+  if (missingSteps.length > 0) {
+    const currentStep = missingSteps[0];
+    return {
+      current_step_key: clean(currentStep.step_key) || null,
+      current_step_slot: getStepSlot(currentStep) || null,
+      awaiting_confirmation: false,
+      final_confirmation_granted: false,
+      ready_to_create: false,
+      collected_slots: answersBySlot,
+    };
+  }
+
+  const confirmationStep = getConfirmationStep(steps);
+
+  if (confirmationStep && !finalConfirmationGranted) {
+    return {
+      current_step_key: clean(confirmationStep.step_key) || null,
+      current_step_slot: getStepSlot(confirmationStep) || null,
+      awaiting_confirmation: true,
+      final_confirmation_granted: false,
+      ready_to_create: false,
+      collected_slots: answersBySlot,
+    };
+  }
+
+  return {
+    current_step_key: null,
+    current_step_slot: null,
+    awaiting_confirmation: false,
+    final_confirmation_granted: finalConfirmationGranted,
+    ready_to_create: true,
+    collected_slots: answersBySlot,
+  };
+}
+
+function resolveBooleanLikeValue(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  const normalized = clean(value).toLowerCase();
+
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
 
   return null;
 }
@@ -238,70 +306,170 @@ export async function executeRealtimeTool({
 }: ExecuteRealtimeToolParams): Promise<any> {
   switch (toolName) {
     case "get_booking_flow": {
-      const steps = await getBookingFlow(tenantId, "voice");
+      const steps = sortFlowSteps((await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]);
+      const answersBySlot = normalizeAnswersToCanonicalSlots({
+        steps,
+        answersBySlot: buildAnswersBySlot({
+          args,
+          callerPhone,
+        }),
+      });
+
+      const bookingState = buildBookingState({
+        steps,
+        answersBySlot,
+        finalConfirmationGranted: false,
+      });
 
       return {
         ok: true,
-        steps: mapFlowStepsForRealtime(steps as BookingFlowStepLike[]),
+        steps: mapFlowStepsForRealtime(steps),
+        booking_state: bookingState,
+        next_required_step: getNextMissingRequiredStep({
+          steps,
+          answersBySlot,
+        }),
       };
     }
 
-    case "create_appointment": {
-      const [settings, steps] = await Promise.all([
-        getAppointmentSettings(tenantId),
-        getBookingFlow(tenantId, "voice"),
-      ]);
+    case "submit_booking_step": {
+      const steps = sortFlowSteps((await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]);
 
-      const flowSteps = sortFlowSteps(steps as BookingFlowStepLike[]);
-      const answersBySlot = buildAnswersBySlot({
+      const rawAnswers = buildAnswersBySlot({
         args,
         callerPhone,
       });
 
-      for (const step of flowSteps) {
-        const canonicalSlot = getStepSlot(step);
-        if (!canonicalSlot) continue;
+      const stepKey = clean(args.step_key);
+      const value = clean(args.value);
 
-        const value = getAnswerValueForStep(step, answersBySlot);
-        if (!value) continue;
-
-        answersBySlot[canonicalSlot] = value;
-
-        const stepKey = clean(step.step_key);
-        if (stepKey) {
-          answersBySlot[stepKey] = value;
-        }
+      if (!stepKey) {
+        return {
+          ok: false,
+          error: "MISSING_STEP_KEY",
+          message: "step_key is required.",
+        };
       }
 
-      const missingRequiredSlots = getMissingRequiredFlowSlots({
-        steps: flowSteps,
+      const targetStep =
+        steps.find((step) => clean(step.step_key) === stepKey) || null;
+
+      if (!targetStep) {
+        return {
+          ok: false,
+          error: "UNKNOWN_BOOKING_STEP",
+          message: `Unknown booking step: ${stepKey}`,
+        };
+      }
+
+      const targetSlot = getStepSlot(targetStep);
+
+      if (!targetSlot) {
+        return {
+          ok: false,
+          error: "BOOKING_STEP_WITHOUT_SLOT",
+          message: `Booking step ${stepKey} has no canonical slot.`,
+        };
+      }
+
+      const mergedAnswers = {
+        ...rawAnswers,
+      };
+
+      if (value) {
+        mergedAnswers[targetSlot] = value;
+        mergedAnswers[stepKey] = value;
+      }
+
+      const answersBySlot = normalizeAnswersToCanonicalSlots({
+        steps,
+        answersBySlot: mergedAnswers,
+      });
+
+      const confirmationValue =
+        isConfirmationStep(targetStep) ? resolveBooleanLikeValue(value) : null;
+
+      const finalConfirmationGranted = confirmationValue === true;
+
+      const bookingState = buildBookingState({
+        steps,
+        answersBySlot,
+        finalConfirmationGranted,
+      });
+
+      return {
+        ok: true,
+        booking_state: bookingState,
+        next_required_step:
+          bookingState.awaiting_confirmation
+            ? mapStepForRealtime(getConfirmationStep(steps) as BookingFlowStepLike)
+            : getNextMissingRequiredStep({
+                steps,
+                answersBySlot,
+              }),
+      };
+    }
+
+    case "create_appointment": {
+      const [settings, stepsRaw] = await Promise.all([
+        getAppointmentSettings(tenantId),
+        getBookingFlow(tenantId, "voice"),
+      ]);
+
+      const steps = sortFlowSteps(stepsRaw as BookingFlowStepLike[]);
+      const answersBySlot = normalizeAnswersToCanonicalSlots({
+        steps,
+        answersBySlot: buildAnswersBySlot({
+          args,
+          callerPhone,
+        }),
+      });
+
+      const missingSteps = getMissingRequiredFlowSteps({
+        steps,
         answersBySlot,
       });
 
-      if (missingRequiredSlots.length > 0) {
+      if (missingSteps.length > 0) {
+        const bookingState = buildBookingState({
+          steps,
+          answersBySlot,
+          finalConfirmationGranted: false,
+        });
+
         return {
           ok: false,
           error: "MISSING_REQUIRED_BOOKING_FIELDS",
           message:
             "The appointment cannot be created until all required booking fields from the tenant flow are completed.",
-          missing_required_slots: missingRequiredSlots,
+          booking_state: bookingState,
+          missing_required_slots: missingSteps.map((step) => getStepSlot(step)),
           next_required_step: getNextMissingRequiredStep({
-            steps: flowSteps,
+            steps,
             answersBySlot,
           }),
-          missing_required_steps: buildMissingStepDetails({
-            steps: flowSteps,
-            missingSlots: missingRequiredSlots,
-          }),
+          missing_required_steps: buildMissingStepDetails(missingSteps),
         };
       }
 
-      if (args.customer_confirmed !== true) {
+      const finalConfirmationGranted = resolveBooleanLikeValue(args.final_confirmation_granted) === true;
+
+      if (!finalConfirmationGranted) {
+        const bookingState = buildBookingState({
+          steps,
+          answersBySlot,
+          finalConfirmationGranted: false,
+        });
+
         return {
           ok: false,
           error: "MISSING_FINAL_CONFIRMATION",
           message:
             "The appointment cannot be created until the caller explicitly confirms the final appointment details.",
+          booking_state: bookingState,
+          next_required_step: getConfirmationStep(steps)
+            ? mapStepForRealtime(getConfirmationStep(steps) as BookingFlowStepLike)
+            : null,
         };
       }
 
@@ -352,6 +520,11 @@ export async function executeRealtimeTool({
 
       return {
         ok: true,
+        booking_state: buildBookingState({
+          steps,
+          answersBySlot,
+          finalConfirmationGranted: true,
+        }),
         appointment: {
           id: result.id,
           service: result.service || service,
@@ -362,6 +535,13 @@ export async function executeRealtimeTool({
           status: result.status,
           google_event_link: result.google_event_link || null,
         },
+      };
+    }
+
+    case "end_call": {
+      return {
+        ok: true,
+        hangup: true,
       };
     }
 

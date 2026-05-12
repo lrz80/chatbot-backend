@@ -1,5 +1,6 @@
 //src/lib/voice/realtime/openaiRealtimeBridge.ts
 import WebSocket from "ws";
+import twilio from "twilio";
 import { buildRealtimeVoiceSession } from "./buildRealtimeVoiceSession";
 import { resolveVoiceRequestContext } from "../runtime/resolveVoiceRequestContext";
 import type { CallState } from "../types";
@@ -155,7 +156,7 @@ function buildOpenAiSessionUpdate(params: {
           type: "function",
           name: "get_booking_flow",
           description:
-            "Get the tenant-configured booking flow steps. Call this before starting any appointment booking. Follow these steps in order and do not skip required steps.",
+            "Get the tenant-configured booking flow and current canonical booking state before or during appointment booking. Follow the configured step order and do not skip required steps.",
           parameters: {
             type: "object",
             additionalProperties: false,
@@ -165,9 +166,30 @@ function buildOpenAiSessionUpdate(params: {
         },
         {
           type: "function",
+          name: "submit_booking_step",
+          description:
+            "Submit the caller answer for the current tenant-configured booking step. Use this to advance the booking flow one canonical step at a time. Do not skip steps. Do not invent slot completion.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              step_key: {
+                type: "string",
+                description: "The canonical current booking step key.",
+              },
+              value: {
+                type: "string",
+                description: "The raw caller answer for that booking step.",
+              },
+            },
+            required: ["step_key", "value"],
+          },
+        },
+        {
+          type: "function",
           name: "create_appointment",
           description:
-            "Create a real appointment ONLY after all required booking flow fields configured by the business have been collected and the caller explicitly confirmed the final details. Never skip tenant-configured booking steps.",
+            "Create a real appointment only when the server-side booking state says final_confirmation_granted=true and ready_to_create=true. Never skip tenant-configured booking steps.",
           parameters: {
             type: "object",
             additionalProperties: false,
@@ -183,8 +205,7 @@ function buildOpenAiSessionUpdate(params: {
               },
               datetime_iso: {
                 type: "string",
-                description:
-                  "Optional ISO datetime if already known. Leave empty if uncertain.",
+                description: "Optional ISO datetime if already known. Leave empty if uncertain.",
               },
               customer_name: {
                 type: "string",
@@ -192,8 +213,7 @@ function buildOpenAiSessionUpdate(params: {
               },
               customer_phone: {
                 type: "string",
-                description:
-                  "The customer phone number. Use the caller phone if not provided.",
+                description: "The customer phone number. Use the caller phone if not provided.",
               },
               customer_email: {
                 type: "string",
@@ -211,18 +231,20 @@ function buildOpenAiSessionUpdate(params: {
                 type: "string",
                 description: "Appointment location detail such as salon or mobile.",
               },
-              customer_confirmed: {
-                type: "boolean",
-                description:
-                  "True only if the caller explicitly confirmed the final appointment details after all required booking questions were completed.",
-              },
             },
-            required: [
-              "service",
-              "datetime",
-              "customer_name",
-              "customer_confirmed",
-            ],
+            required: ["service", "datetime", "customer_name"],
+          },
+        },
+        {
+          type: "function",
+          name: "end_call",
+          description:
+            "Request to end the call only when the conversation is complete and no required booking step or confirmation is still pending.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+            required: [],
           },
         },
       ],
@@ -284,6 +306,24 @@ function buildToolFollowupInstructions(params: {
     ].join(" ");
   }
 
+  if (toolName === "submit_booking_step") {
+    if (ok) {
+      return [
+        "Use only the tool result as source of truth.",
+        "If there is a next required booking step, ask only that next question.",
+        "If the booking state says awaiting final confirmation, present one short summary and ask for explicit confirmation.",
+        "If the booking state says ready_to_create is true, you may call create_appointment.",
+        "Ask one short question only.",
+      ].join(" ");
+    }
+
+    return [
+      "Do not invent booking progress.",
+      "Explain briefly that the step could not be processed.",
+      "Ask one short follow-up question only if the tool result includes a next required step.",
+    ].join(" ");
+  }
+
   if (toolName === "create_appointment") {
     if (ok) {
       return [
@@ -336,11 +376,57 @@ function buildToolFollowupInstructions(params: {
     ].join(" ");
   }
 
+  if (toolName === "end_call") {
+    if (ok && toolResult?.hangup === true) {
+      return [
+        "Say a short goodbye only.",
+        "Do not ask any more questions.",
+      ].join(" ");
+    }
+
+    return [
+      "Do not end the call yet.",
+      "Continue helping the caller briefly using the tool result as source of truth.",
+    ].join(" ");
+  }
+
   if (ok) {
     return "Respond briefly using the tool result as the source of truth.";
   }
 
   return "Explain the issue briefly and ask one clear follow-up question.";
+}
+
+async function endTwilioCall(callSid: string | null): Promise<void> {
+  if (!callSid) return;
+
+  const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
+  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+
+  if (!accountSid || !authToken) {
+    console.warn("[VOICE_REALTIME][TWILIO_HANGUP_SKIPPED]", {
+      callSid,
+      reason: "MISSING_TWILIO_CREDENTIALS",
+    });
+    return;
+  }
+
+  try {
+    const client = twilio(accountSid, authToken);
+
+    await client.calls(callSid).update({
+      status: "completed",
+    });
+
+    console.log("[VOICE_REALTIME][TWILIO_CALL_COMPLETED]", {
+      callSid,
+    });
+  } catch (error) {
+    console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
+      callSid,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 export async function createOpenAiRealtimeBridge({
@@ -361,6 +447,9 @@ export async function createOpenAiRealtimeBridge({
   let sessionConfigured = false;
   let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
   let bookingFlowLoaded = false;
+  let finalConfirmationGranted = false;
+  let readyToCreateAppointment = false;
+  let hangupRequestedByTool = false;
 
   const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime";
 
@@ -511,51 +600,112 @@ export async function createOpenAiRealtimeBridge({
         return;
       }
 
-      if (toolName === "create_appointment" && !bookingFlowLoaded) {
-        const blockedResult: RealtimeToolResult = {
-          ok: false,
-          error: "BOOKING_FLOW_NOT_LOADED",
-        };
+      if (toolName === "create_appointment") {
+        if (!bookingFlowLoaded) {
+          const blockedResult: RealtimeToolResult = {
+            ok: false,
+            error: "BOOKING_FLOW_NOT_LOADED",
+          };
 
-        console.log("[VOICE_REALTIME][TOOL_RESULT]", {
-          callSid,
-          toolName,
-          ok: false,
-          error: blockedResult.error,
-        });
+          console.log("[VOICE_REALTIME][TOOL_RESULT]", {
+            callSid,
+            toolName,
+            ok: false,
+            error: blockedResult.error,
+          });
 
-        sendJson(openAiSocket, {
-          type: "conversation.item.create",
-          item: {
-            type: "function_call_output",
-            call_id: callId,
-            output: JSON.stringify(blockedResult),
-          },
-        });
+          sendJson(openAiSocket, {
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: callId,
+              output: JSON.stringify(blockedResult),
+            },
+          });
 
-        sendJson(openAiSocket, {
-          type: "response.create",
-          response: {
-            instructions: [
-              "Do not say the appointment was created.",
-              "Tell the caller briefly that you first need to collect the required booking details.",
-              "Call get_booking_flow before continuing the booking.",
-            ].join(" "),
-          },
-        });
+          sendJson(openAiSocket, {
+            type: "response.create",
+            response: {
+              instructions: [
+                "Do not say the appointment was created.",
+                "Tell the caller briefly that you first need to collect the required booking details.",
+                "Call get_booking_flow before continuing the booking.",
+              ].join(" "),
+            },
+          });
 
-        return;
+          return;
+        }
+
+        if (!finalConfirmationGranted || !readyToCreateAppointment) {
+          const blockedResult: RealtimeToolResult = {
+            ok: false,
+            error: "MISSING_FINAL_CONFIRMATION",
+          };
+
+          console.log("[VOICE_REALTIME][TOOL_RESULT]", {
+            callSid,
+            toolName,
+            ok: false,
+            error: blockedResult.error,
+          });
+
+          sendJson(openAiSocket, {
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: callId,
+              output: JSON.stringify(blockedResult),
+            },
+          });
+
+          sendJson(openAiSocket, {
+            type: "response.create",
+            response: {
+              instructions: buildToolFollowupInstructions({
+                toolName,
+                toolResult: blockedResult,
+              }),
+            },
+          });
+
+          return;
+        }
       }
+
+      const effectiveToolArgs =
+        toolName === "create_appointment"
+          ? {
+              ...toolArgs,
+              final_confirmation_granted: finalConfirmationGranted,
+            }
+          : toolArgs;
 
       executeRealtimeTool({
         tenantId,
         callerPhone,
         toolName,
-        args: toolArgs,
+        args: effectiveToolArgs,
       })
         .then((toolResult) => {
           if (toolName === "get_booking_flow" && toolResult?.ok) {
             bookingFlowLoaded = true;
+          }
+
+          const bookingState =
+            toolResult &&
+            typeof toolResult.booking_state === "object" &&
+            toolResult.booking_state !== null
+              ? (toolResult.booking_state as Record<string, unknown>)
+              : null;
+
+          if (bookingState) {
+            finalConfirmationGranted = bookingState.final_confirmation_granted === true;
+            readyToCreateAppointment = bookingState.ready_to_create === true;
+          }
+
+          if (toolName === "end_call" && toolResult?.ok === true && toolResult?.hangup === true) {
+            hangupRequestedByTool = true;
           }
 
           console.log("[VOICE_REALTIME][TOOL_RESULT]", {
@@ -651,6 +801,17 @@ export async function createOpenAiRealtimeBridge({
       console.log("[VOICE_REALTIME][RESPONSE_DONE]", {
         callSid,
       });
+
+      if (hangupRequestedByTool) {
+        hangupRequestedByTool = false;
+
+        endTwilioCall(callSid).catch((error) => {
+          console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
+            callSid,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
     }
   });
 
@@ -684,6 +845,11 @@ export async function createOpenAiRealtimeBridge({
       callSid = event.start.callSid || null;
       didNumber = event.start.customParameters?.didNumber || null;
       callerPhone = event.start.customParameters?.callerPhone || null;
+
+      bookingFlowLoaded = false;
+      finalConfirmationGranted = false;
+      readyToCreateAppointment = false;
+      hangupRequestedByTool = false;
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {
         callSid,
