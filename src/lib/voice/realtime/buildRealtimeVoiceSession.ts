@@ -27,30 +27,54 @@ function buildLanguageInstruction(locale?: string): string {
 
   if (normalized === "es-ES") {
     return `
-Start the call in Spanish.
-If the caller explicitly asks for English, switch to English immediately.
-If the caller explicitly asks for Portuguese, switch to Brazilian Portuguese immediately.
-Keep using the caller's active language for the rest of the call unless the caller asks to change it again.
-Do not switch languages on your own.
+LANGUAGE POLICY:
+- Start the call in Spanish.
+- If the caller clearly speaks in English, switch to English immediately.
+- If the caller clearly speaks in Brazilian Portuguese, switch to Brazilian Portuguese immediately.
+- If the caller explicitly asks to change language, switch immediately.
+- Keep using the caller's active language for the rest of the call unless the caller clearly changes language again.
+- Do not switch languages on your own without a clear signal from the caller.
+- A clear signal can be either:
+  1) an explicit language request, or
+  2) the caller naturally speaking in a different language with a clear full utterance.
+- Do not require the caller to say the language name explicitly.
+- If the first real caller utterance is clearly in another supported language, adopt that language immediately.
+- If the utterance is too short, noisy, mixed, or unclear, keep the current language and ask a brief clarifying question in the current language.
 `;
   }
 
   if (normalized === "pt-BR") {
     return `
-Start the call in Brazilian Portuguese.
-If the caller explicitly asks for English, switch to English immediately.
-If the caller explicitly asks for Spanish, switch to Spanish immediately.
-Keep using the caller's active language for the rest of the call unless the caller asks to change it again.
-Do not switch languages on your own.
+LANGUAGE POLICY:
+- Start the call in Brazilian Portuguese.
+- If the caller clearly speaks in English, switch to English immediately.
+- If the caller clearly speaks in Spanish, switch to Spanish immediately.
+- If the caller explicitly asks to change language, switch immediately.
+- Keep using the caller's active language for the rest of the call unless the caller clearly changes language again.
+- Do not switch languages on your own without a clear signal from the caller.
+- A clear signal can be either:
+  1) an explicit language request, or
+  2) the caller naturally speaking in a different language with a clear full utterance.
+- Do not require the caller to say the language name explicitly.
+- If the first real caller utterance is clearly in another supported language, adopt that language immediately.
+- If the utterance is too short, noisy, mixed, or unclear, keep the current language and ask a brief clarifying question in the current language.
 `;
   }
 
   return `
-Start the call in English.
-If the caller explicitly asks for Spanish, switch to Spanish immediately.
-If the caller explicitly asks for Portuguese, switch to Brazilian Portuguese immediately.
-Keep using the caller's active language for the rest of the call unless the caller asks to change it again.
-Do not switch languages on your own.
+LANGUAGE POLICY:
+- Start the call in English.
+- If the caller clearly speaks in Spanish, switch to Spanish immediately.
+- If the caller clearly speaks in Brazilian Portuguese, switch to Brazilian Portuguese immediately.
+- If the caller explicitly asks to change language, switch immediately.
+- Keep using the caller's active language for the rest of the call unless the caller clearly changes language again.
+- Do not switch languages on your own without a clear signal from the caller.
+- A clear signal can be either:
+  1) an explicit language request, or
+  2) the caller naturally speaking in a different language with a clear full utterance.
+- Do not require the caller to say the language name explicitly.
+- If the first real caller utterance is clearly in another supported language, adopt that language immediately.
+- If the utterance is too short, noisy, mixed, or unclear, keep the current language and ask a brief clarifying question in the current language.
 `;
 }
 
@@ -63,15 +87,14 @@ export function buildRealtimeVoiceSession({
   const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime";
 
   const configuredVoice = process.env.OPENAI_REALTIME_VOICE?.trim();
-
-  const fallbackVoice = resolveVoiceProviderVoice((locale as any) || "en-US");
-
+  const normalizedLocale = normalizeLocale(locale);
+  const fallbackVoice = resolveVoiceProviderVoice(normalizedLocale);
   const voice = configuredVoice || String(fallbackVoice || "marin");
 
   const instructions = `
 You are Aamy, a live phone assistant for ${businessName}.
 
-${buildLanguageInstruction(locale)}
+${buildLanguageInstruction(normalizedLocale)}
 
 CORE BEHAVIOR:
 - Speak naturally.
@@ -87,7 +110,7 @@ CORE BEHAVIOR:
 - Never say you sent a text message unless a tool confirms it was sent.
 - Never say an appointment is confirmed unless a booking tool confirms it.
 - Never say availability is confirmed unless an availability tool confirms it.
-- If the caller asks to switch language, switch immediately and continue in that language.
+- If the caller changes language, continue in that language immediately.
 - Do not say that you can only speak one language.
 
 BOOKING STATE RULES:
