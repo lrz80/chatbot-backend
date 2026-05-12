@@ -274,6 +274,54 @@ export async function resolveVoiceScheduleValidation(
     };
   }
 
+  const requestedEndAt = addMinutes(parsed.requestedAt, defaultDurationMin);
+  const orchestrator = new BookingProviderOrchestrator();
+
+  const requestedAvailability = await orchestrator.checkAvailability({
+    tenantId: params.tenantId,
+    summary: params.serviceName,
+    startISO: parsed.requestedAt.toISOString(),
+    endISO: requestedEndAt.toISOString(),
+    timeZone,
+    bufferMin,
+    calendarId: null,
+  });
+
+  console.log("[VOICE][PROVIDER_AVAILABILITY_CHECK]", {
+    tenantId: params.tenantId,
+    serviceName: params.serviceName,
+    startISO: parsed.requestedAt.toISOString(),
+    endISO: requestedEndAt.toISOString(),
+    timeZone,
+    bufferMin,
+    requestedAvailability,
+  });
+
+  if (!requestedAvailability.ok) {
+    const rawSuggestedStarts = normalizeSuggestedStarts(
+      (scheduleValidation as { suggestedStarts?: unknown }).suggestedStarts
+    );
+
+    const suggestedStarts = (
+      await filterBookableSuggestedStarts({
+        tenantId: params.tenantId,
+        serviceName: params.serviceName,
+        candidateStarts: rawSuggestedStarts,
+        durationMin: defaultDurationMin,
+        bufferMin,
+        timeZone,
+      })
+    ).slice(0, 3);
+
+    return {
+      ok: false,
+      reason: "schedule_not_available",
+      availableTimes: [],
+      suggestedStarts,
+      timeZone,
+    };
+  }
+
   return {
     ok: true,
     requestedAt: parsed.requestedAt,
