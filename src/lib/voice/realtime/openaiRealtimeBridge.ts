@@ -384,6 +384,9 @@ function buildToolFollowupInstructions(params: {
   const nextStepSlot = String(nextRequiredStep?.slot || "").trim();
   const nextStepPrompt = String(nextRequiredStep?.prompt || "").trim();
 
+  const nextStepKey = String(nextRequiredStep?.step_key || "").trim().toLowerCase();
+  const isConfirmationStep = nextStepSlot === "confirmation" || nextStepKey === "confirm";
+
   const missingRequiredSlots = Array.isArray((toolResult as any)?.missing_required_slots)
     ? (toolResult as any).missing_required_slots
         .map((item: unknown) => String(item || "").trim())
@@ -474,11 +477,13 @@ function buildToolFollowupInstructions(params: {
 
     const awaitingConfirmation = bookingState?.awaiting_confirmation === true;
 
-    if (awaitingConfirmation && nextStepPrompt) {
+    if ((awaitingConfirmation || isConfirmationStep) && nextStepPrompt) {
       return [
         "Use only the tool result as source of truth.",
-        `Say exactly this confirmation question: ${nextStepPrompt}`,
+        `Say exactly this confirmation question verbatim: ${nextStepPrompt}`,
         "Do not paraphrase it.",
+        "Do not shorten it.",
+        "Do not omit any final confirmation words.",
         "Do not add a summary before it.",
         "Ask one short question only.",
       ].join(" ");
