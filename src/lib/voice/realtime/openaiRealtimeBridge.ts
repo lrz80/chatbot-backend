@@ -99,6 +99,10 @@ function getRealtimeTranscriptionLanguage(locale?: string): "en" | "es" | "pt" {
   return "en";
 }
 
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
 function buildInitialGreetingInstruction(params: {
   brand: string;
   locale?: string;
@@ -450,6 +454,8 @@ export async function createOpenAiRealtimeBridge({
   let finalConfirmationGranted = false;
   let readyToCreateAppointment = false;
   let hangupRequestedByTool = false;
+  let currentBookingStepKey: string | null = null;
+  let collectedBookingSlots: Record<string, string> = {};
 
   const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime";
 
@@ -676,10 +682,20 @@ export async function createOpenAiRealtimeBridge({
       const effectiveToolArgs =
         toolName === "create_appointment"
           ? {
+              ...collectedBookingSlots,
               ...toolArgs,
               final_confirmation_granted: finalConfirmationGranted,
             }
-          : toolArgs;
+          : toolName === "submit_booking_step"
+            ? {
+                ...collectedBookingSlots,
+                ...toolArgs,
+                step_key: clean(toolArgs.step_key || currentBookingStepKey || ""),
+              }
+            : {
+                ...collectedBookingSlots,
+                ...toolArgs,
+              };
 
       executeRealtimeTool({
         tenantId,
@@ -702,6 +718,21 @@ export async function createOpenAiRealtimeBridge({
           if (bookingState) {
             finalConfirmationGranted = bookingState.final_confirmation_granted === true;
             readyToCreateAppointment = bookingState.ready_to_create === true;
+
+            currentBookingStepKey =
+              typeof bookingState.current_step_key === "string" && bookingState.current_step_key.trim()
+                ? bookingState.current_step_key.trim()
+                : null;
+
+            collectedBookingSlots =
+              bookingState.collected_slots &&
+              typeof bookingState.collected_slots === "object"
+                ? Object.fromEntries(
+                    Object.entries(bookingState.collected_slots as Record<string, unknown>)
+                      .map(([key, value]) => [clean(key), clean(value)])
+                      .filter(([key, value]) => key && value)
+                  )
+                : collectedBookingSlots;
           }
 
           if (toolName === "end_call" && toolResult?.ok === true && toolResult?.hangup === true) {
@@ -850,6 +881,8 @@ export async function createOpenAiRealtimeBridge({
       finalConfirmationGranted = false;
       readyToCreateAppointment = false;
       hangupRequestedByTool = false;
+      currentBookingStepKey = null;
+      collectedBookingSlots = {};
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {
         callSid,
