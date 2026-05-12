@@ -320,6 +320,46 @@ const getTenantIdBySubscriptionId = async (subscriptionId: string): Promise<stri
   return res.rows[0]?.id || null;
 };
 
+async function finalizeLegalAcceptance(params: {
+  legalAcceptanceId?: string | null;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+  stripeCheckoutSessionId?: string | null;
+  tenantId?: string | null;
+}) {
+  const {
+    legalAcceptanceId,
+    stripeCustomerId,
+    stripeSubscriptionId,
+    stripeCheckoutSessionId,
+    tenantId,
+  } = params;
+
+  if (!legalAcceptanceId) {
+    return;
+  }
+
+  await pool.query(
+    `
+    UPDATE legal_acceptances
+    SET
+      tenant_id = COALESCE($2, tenant_id),
+      stripe_customer_id = COALESCE($3, stripe_customer_id),
+      stripe_subscription_id = COALESCE($4, stripe_subscription_id),
+      stripe_checkout_session_id = COALESCE($5, stripe_checkout_session_id),
+      updated_at = NOW()
+    WHERE id = $1
+    `,
+    [
+      legalAcceptanceId,
+      tenantId,
+      stripeCustomerId,
+      stripeSubscriptionId,
+      stripeCheckoutSessionId,
+    ]
+  );
+}
+
 function stripeUnixToDateOrNull(value: unknown): Date | null {
   const seconds =
     typeof value === 'number'
@@ -359,6 +399,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   // ==========================
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
+    const legalAcceptanceId =
+      typeof session.metadata?.legal_acceptance_id === "string"
+        ? session.metadata.legal_acceptance_id
+        : null;
     const email = session.customer_email;
 
     // ==========================
@@ -371,6 +415,13 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     ) {
       const tenantId = session.metadata.tenant_id as string;
       const customerId = typeof session.customer === 'string' ? session.customer : null;
+
+      await finalizeLegalAcceptance({
+        legalAcceptanceId,
+        tenantId,
+        stripeCustomerId: customerId,
+        stripeCheckoutSessionId: session.id,
+      });
 
       if (!customerId) {
         console.warn('⚠️ Opción A: Checkout $399 completado pero no hay customerId.');
@@ -654,6 +705,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
 
         const subscriptionId = session.subscription as string;
+        const stripeCustomerId =
+          typeof session.customer === "string"
+            ? session.customer
+            : null;
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
         const vigencia = new Date(subscription.current_period_end * 1000);
         const esTrial = subscription.status === 'trialing';
@@ -681,9 +736,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         const planLimits = prod ? limitsFromProduct(prod) : {};
 
         const contractMetadata = contractMetadataFromProduct(prod);
-
-        const stripeCustomerId =
-          typeof subscription.customer === "string" ? subscription.customer : null;
 
         const currentPeriodStart = stripeUnixToDateOrNull(subscription.current_period_start);
         const currentPeriodEnd = stripeUnixToDateOrNull(subscription.current_period_end);
@@ -732,6 +784,14 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             productId,                         // 👈 NUEVO
           ]
         );
+
+        await finalizeLegalAcceptance({
+          legalAcceptanceId,
+          tenantId,
+          stripeCustomerId,
+          stripeSubscriptionId: subscriptionId,
+          stripeCheckoutSessionId: session.id,
+        });
 
         await upsertTenantSubscription({
           tenantId,

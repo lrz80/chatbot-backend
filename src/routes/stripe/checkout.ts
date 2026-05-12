@@ -4,6 +4,8 @@ import Stripe from "stripe";
 import jwt from "jsonwebtoken";
 import pool from "../../lib/db";
 
+const LEGAL_VERSION = "aamy_voice_pro_v1_2026_05_11";
+
 const router = express.Router();
 
 router.post("/checkout", async (req, res) => {
@@ -23,6 +25,16 @@ router.post("/checkout", async (req, res) => {
   // ✅ Compatibilidad: plan
   const planRaw = (req.body?.plan || req.query?.plan || "initial_399") as string;
   const plan = String(planRaw).toLowerCase().trim();
+
+  const acceptedLegal =
+    req.body?.acceptedLegal === true ||
+    req.body?.acceptedLegal === "true";
+
+  if (!acceptedLegal) {
+    return res.status(400).json({
+      error: "You must accept the legal terms before subscribing.",
+    });
+  }
 
   // Variables antiguas por plan
   const PRICE_INITIAL_399 = process.env.STRIPE_PRICE_INITIAL_399;
@@ -46,6 +58,61 @@ router.post("/checkout", async (req, res) => {
 
     const email: string | undefined = u.rows[0]?.email;
     if (!email) return res.status(404).json({ error: "Usuario no encontrado" });
+
+    const ipAddress =
+      req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() ||
+      req.socket.remoteAddress ||
+      null;
+
+    const userAgent =
+      req.headers["user-agent"]?.toString() || null;
+
+    const legalAcceptanceResult = await pool.query(
+      `
+      INSERT INTO legal_acceptances (
+        tenant_id,
+        email,
+        ip_address,
+        user_agent,
+
+        accepted_terms,
+        accepted_privacy,
+        accepted_acceptable_use,
+        accepted_annual_commitment,
+
+        legal_version,
+
+        plan_name,
+        monthly_price_cents,
+        currency,
+        commitment_months,
+        cancellation_window_days,
+        early_termination_fee_months
+      )
+      VALUES (
+        $1,$2,$3,$4,
+        true,true,true,true,
+        $5,
+        'Aamy Voice Pro',
+        25000,
+        'usd',
+        12,
+        30,
+        3
+      )
+      RETURNING id
+      `,
+      [
+        tenantId,
+        email,
+        ipAddress,
+        userAgent,
+        LEGAL_VERSION,
+      ]
+    );
+
+    const legalAcceptanceId =
+      legalAcceptanceResult.rows[0]?.id;
 
     // =========================================================
     // 1) MODO DINÁMICO: si viene priceId -> usarlo directo
@@ -95,6 +162,10 @@ router.post("/checkout", async (req, res) => {
           purpose: mode === "subscription" ? "aamy_membership" : "aamy_payment",
           price_id: priceId,
           product_id: product.id,
+
+          legal_acceptance_id: legalAcceptanceId,
+          legal_version: LEGAL_VERSION,
+          accepted_annual_commitment: "true",
         },
 
         client_reference_id: tenantId,
@@ -119,6 +190,10 @@ router.post("/checkout", async (req, res) => {
             purpose: "aamy_membership",
             price_id: priceId,
             product_id: product.id,
+
+            legal_acceptance_id: legalAcceptanceId,
+            legal_version: LEGAL_VERSION,
+            accepted_annual_commitment: "true",
           },
         };
       }
@@ -149,6 +224,10 @@ router.post("/checkout", async (req, res) => {
           tenant_id: tenantId,
           purpose: "aamy_test_0",
           plan: "test",
+
+          legal_acceptance_id: legalAcceptanceId,
+          legal_version: LEGAL_VERSION,
+          accepted_annual_commitment: "true",
         },
 
         // ✅ CRÍTICO: subscription.metadata
@@ -157,6 +236,10 @@ router.post("/checkout", async (req, res) => {
             tenant_id: tenantId,
             purpose: "aamy_test_0",
             plan: "test",
+
+            legal_acceptance_id: legalAcceptanceId,
+            legal_version: LEGAL_VERSION,
+            accepted_annual_commitment: "true",
           },
         },
 
@@ -185,6 +268,10 @@ router.post("/checkout", async (req, res) => {
         tenant_id: tenantId,
         purpose: "aamy_initial_399",
         plan: "initial_399",
+
+        legal_acceptance_id: legalAcceptanceId,
+        legal_version: LEGAL_VERSION,
+        accepted_annual_commitment: "true",
       },
       client_reference_id: tenantId,
       customer_email: email,
