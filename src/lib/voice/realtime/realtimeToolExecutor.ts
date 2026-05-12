@@ -141,6 +141,128 @@ function mapFlowStepsForRealtime(steps: BookingFlowStepLike[]): RealtimeMappedSt
   return sortFlowSteps(steps).map(mapStepForRealtime);
 }
 
+function normalizeComparable(value: unknown): string {
+  return clean(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function toCleanStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => clean(item)).filter(Boolean);
+  }
+
+  const single = clean(value);
+  return single ? [single] : [];
+}
+
+type StepOptionCandidate = {
+  canonical: string;
+  candidates: string[];
+};
+
+function extractStepOptionCandidates(step: BookingFlowStepLike): StepOptionCandidate[] {
+  const validationConfig = getValidationConfig(step);
+  const options = Array.isArray(validationConfig?.options) ? validationConfig.options : [];
+
+  const results: StepOptionCandidate[] = [];
+
+  for (const option of options) {
+    if (typeof option === "string") {
+      const canonical = clean(option);
+      if (!canonical) continue;
+
+      results.push({
+        canonical,
+        candidates: [canonical],
+      });
+      continue;
+    }
+
+    if (!option || typeof option !== "object") {
+      continue;
+    }
+
+    const record = option as Record<string, unknown>;
+    const canonical =
+      clean(record.value) ||
+      clean(record.label) ||
+      clean(record.name) ||
+      clean(record.title);
+
+    if (!canonical) {
+      continue;
+    }
+
+    const candidateSet = new Set<string>();
+
+    [
+      canonical,
+      clean(record.label),
+      clean(record.name),
+      clean(record.title),
+      ...toCleanStringArray(record.aliases),
+      ...toCleanStringArray(record.synonyms),
+      ...toCleanStringArray(record.keywords),
+      ...toCleanStringArray(record.examples),
+      ...toCleanStringArray(record.speech_hints),
+    ]
+      .filter(Boolean)
+      .forEach((item) => candidateSet.add(item));
+
+    results.push({
+      canonical,
+      candidates: Array.from(candidateSet),
+    });
+  }
+
+  return results;
+}
+
+function canonicalizeStepValue(step: BookingFlowStepLike, rawValue: string): string {
+  const input = clean(rawValue);
+  if (!input) return "";
+
+  const options = extractStepOptionCandidates(step);
+  if (!options.length) {
+    return input;
+  }
+
+  const normalizedInput = normalizeComparable(input);
+
+  for (const option of options) {
+    for (const candidate of option.candidates) {
+      const normalizedCandidate = normalizeComparable(candidate);
+      if (normalizedCandidate && normalizedInput === normalizedCandidate) {
+        return option.canonical;
+      }
+    }
+  }
+
+  const matchedOptions = options.filter((option) =>
+    option.candidates.some((candidate) => {
+      const normalizedCandidate = normalizeComparable(candidate);
+      if (!normalizedCandidate || normalizedCandidate.length < 4) {
+        return false;
+      }
+
+      return (
+        normalizedInput.includes(normalizedCandidate) ||
+        normalizedCandidate.includes(normalizedInput)
+      );
+    })
+  );
+
+  if (matchedOptions.length === 1) {
+    return matchedOptions[0].canonical;
+  }
+
+  return input;
+}
+
 function buildAnswersBySlot(params: {
   args: Record<string, any>;
   callerPhone: string | null;
@@ -374,13 +496,15 @@ export async function executeRealtimeTool({
         };
       }
 
-      const mergedAnswers = {
+      const normalizedStepValue = canonicalizeStepValue(targetStep, value);
+
+      const mergedAnswers: Record<string, string> = {
         ...rawAnswers,
       };
 
-      if (value) {
-        mergedAnswers[targetSlot] = value;
-        mergedAnswers[stepKey] = value;
+      if (normalizedStepValue) {
+        mergedAnswers[targetSlot] = normalizedStepValue;
+        mergedAnswers[stepKey] = normalizedStepValue;
       }
 
       const answersBySlot = normalizeAnswersToCanonicalSlots({
@@ -391,6 +515,7 @@ export async function executeRealtimeTool({
       if ((targetStep.expected_type || "").toLowerCase() === "datetime") {
         const serviceName = clean(answersBySlot.service);
         const rawDatetime = clean(answersBySlot.datetime);
+        const validationConfig = getValidationConfig(targetStep);
 
         if (serviceName && rawDatetime) {
           const scheduleValidation = await resolveVoiceScheduleValidation({
@@ -401,12 +526,16 @@ export async function executeRealtimeTool({
           });
 
           if (!scheduleValidation.ok) {
+            const invalidAnswersBySlot = {
+              ...answersBySlot,
+              [targetSlot]: "",
+              [stepKey]: "",
+              datetime: "",
+            };
+
             const bookingState = buildBookingState({
               steps,
-              answersBySlot: {
-                ...answersBySlot,
-                datetime: "",
-              },
+              answersBySlot: invalidAnswersBySlot,
               finalConfirmationGranted: false,
             });
 
@@ -416,10 +545,14 @@ export async function executeRealtimeTool({
               message: "The requested date and time is not available.",
               booking_state: bookingState,
               next_required_step: mapStepForRealtime(targetStep),
+              unavailable_reason: scheduleValidation.reason,
               unavailable_prompt:
-                typeof targetStep.validation_config?.unavailable_prompt === "string"
-                  ? targetStep.validation_config.unavailable_prompt
+                typeof validationConfig?.unavailable_prompt === "string"
+                  ? validationConfig.unavailable_prompt
                   : "",
+              available_times: Array.isArray(scheduleValidation.availableTimes)
+                ? scheduleValidation.availableTimes
+                : [],
               suggested_times: Array.isArray(scheduleValidation.suggestedStarts)
                 ? scheduleValidation.suggestedStarts
                 : [],
@@ -429,7 +562,7 @@ export async function executeRealtimeTool({
       }
 
       const confirmationValue =
-        isConfirmationStep(targetStep) ? resolveBooleanLikeValue(value) : null;
+        isConfirmationStep(targetStep) ? resolveBooleanLikeValue(normalizedStepValue) : null;
 
       const finalConfirmationGranted = confirmationValue === true;
 
@@ -440,13 +573,13 @@ export async function executeRealtimeTool({
       });
 
       const nextRequiredStep = bookingState.awaiting_confirmation
-  ? mapStepForRealtime(getConfirmationStep(steps) as BookingFlowStepLike)
-  : bookingState.ready_to_create
-    ? null
-    : getNextMissingRequiredStep({
-        steps,
-        answersBySlot,
-      });
+        ? mapStepForRealtime(getConfirmationStep(steps) as BookingFlowStepLike)
+        : bookingState.ready_to_create
+          ? null
+          : getNextMissingRequiredStep({
+              steps,
+              answersBySlot,
+            });
 
       return {
         ok: true,
