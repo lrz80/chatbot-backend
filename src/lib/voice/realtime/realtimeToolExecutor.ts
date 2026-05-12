@@ -599,15 +599,23 @@ function buildNextRequiredStep(params: {
   }
 
   const mapped = mapStepForRealtime(step, locale);
+  const templateValues = buildBookingPromptTemplateValues(bookingState);
 
-  if (overridePrompt) {
-    return {
-      ...mapped,
-      prompt: overridePrompt,
-    };
-  }
+  const renderedPrompt = renderBookingStepTemplate(
+    overridePrompt || mapped.prompt,
+    templateValues
+  );
 
-  return mapped;
+  const renderedRetryPrompt = renderBookingStepTemplate(
+    mapped.retry_prompt,
+    templateValues
+  );
+
+  return {
+    ...mapped,
+    prompt: renderedPrompt,
+    retry_prompt: renderedRetryPrompt,
+  };
 }
 
 function parseJsonStringArray(value: unknown): string[] {
@@ -621,6 +629,35 @@ function parseJsonStringArray(value: unknown): string[] {
   } catch {
     return [];
   }
+}
+
+function renderBookingStepTemplate(
+  template: string,
+  values: Record<string, string>
+): string {
+  return String(template || "").replace(/\{([^}]+)\}/g, (_, rawKey: string) => {
+    const key = clean(rawKey);
+    return clean(values[key] || "");
+  });
+}
+
+function buildBookingPromptTemplateValues(
+  bookingState: BookingState
+): Record<string, string> {
+  const slots = bookingState.collected_slots || {};
+
+  return {
+    service:
+      clean(slots.service_display) ||
+      clean(slots.service) ||
+      clean(slots.service_name) ||
+      "",
+    datetime:
+      clean(slots.datetime_display) ||
+      clean(slots.datetime) ||
+      clean(slots.datetime_iso) ||
+      "",
+  };
 }
 
 async function persistVoiceState(params: {
