@@ -109,6 +109,18 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function isAwaitingFinalConfirmation(params: {
+  currentBookingStepKey: string | null;
+  finalConfirmationGranted: boolean;
+  readyToCreateAppointment: boolean;
+}): boolean {
+  if (params.finalConfirmationGranted || params.readyToCreateAppointment) {
+    return false;
+  }
+
+  return clean(params.currentBookingStepKey).toLowerCase() === "confirm";
+}
+
 function buildInitialGreetingInstruction(params: {
   brand: string;
   locale?: string;
@@ -793,6 +805,138 @@ export async function createOpenAiRealtimeBridge({
               ].join(" "),
             },
           });
+
+          return;
+        }
+
+        const awaitingFinalConfirmation = isAwaitingFinalConfirmation({
+          currentBookingStepKey,
+          finalConfirmationGranted,
+          readyToCreateAppointment,
+        });
+
+        if (awaitingFinalConfirmation) {
+          const confirmArgs = {
+            ...collectedBookingSlots,
+            step_key: "confirm",
+            value: clean(lastUserTranscript),
+          };
+
+          executeRealtimeTool({
+            tenantId,
+            callerPhone,
+            toolName: "submit_booking_step",
+            args: confirmArgs,
+            tenant: realtimeTenant,
+            cfg: realtimeCfg,
+            callSid: callSid || undefined,
+            didNumber: didNumber || undefined,
+            currentLocale,
+            state: realtimeState,
+            userInput: lastUserTranscript,
+            digits: lastUserDigits,
+          })
+            .then((toolResult) => {
+              const bookingState =
+                toolResult &&
+                typeof toolResult.booking_state === "object" &&
+                toolResult.booking_state !== null
+                  ? (toolResult.booking_state as Record<string, unknown>)
+                  : null;
+
+              if (bookingState) {
+                finalConfirmationGranted = bookingState.final_confirmation_granted === true;
+                readyToCreateAppointment = bookingState.ready_to_create === true;
+
+                currentBookingStepKey =
+                  typeof bookingState.current_step_key === "string" && bookingState.current_step_key.trim()
+                    ? bookingState.current_step_key.trim()
+                    : null;
+
+                collectedBookingSlots =
+                  bookingState.collected_slots &&
+                  typeof bookingState.collected_slots === "object"
+                    ? Object.fromEntries(
+                        Object.entries(bookingState.collected_slots as Record<string, unknown>)
+                          .map(([key, value]) => [clean(key), clean(value)])
+                          .filter(([key, value]) => key && value)
+                      )
+                    : collectedBookingSlots;
+              }
+
+              realtimeState = {
+                ...realtimeState,
+                lang: currentLocale,
+                bookingData: {
+                  ...(realtimeState.bookingData || {}),
+                  ...collectedBookingSlots,
+                },
+              };
+
+              console.log("[VOICE_REALTIME][TOOL_REDIRECT]", {
+                callSid,
+                fromTool: "create_appointment",
+                toTool: "submit_booking_step",
+                step_key: "confirm",
+                transcript: lastUserTranscript,
+                ok: toolResult?.ok,
+                error: toolResult?.error,
+              });
+
+              sendJson(openAiSocket, {
+                type: "conversation.item.create",
+                item: {
+                  type: "function_call_output",
+                  call_id: callId,
+                  output: JSON.stringify(toolResult),
+                },
+              });
+
+              sendJson(openAiSocket, {
+                type: "response.create",
+                response: {
+                  instructions: buildToolFollowupInstructions({
+                    toolName: "submit_booking_step",
+                    toolResult: (toolResult || {}) as RealtimeToolResult,
+                  }),
+                },
+              });
+
+              lastUserDigits = "";
+            })
+            .catch((error) => {
+              console.error("[VOICE_REALTIME][TOOL_REDIRECT_ERROR]", {
+                callSid,
+                fromTool: "create_appointment",
+                toTool: "submit_booking_step",
+                step_key: "confirm",
+                error: error instanceof Error ? error.message : String(error),
+              });
+
+              const toolErrorResult: RealtimeToolResult = {
+                ok: false,
+                error: error instanceof Error ? error.message : "TOOL_ERROR",
+              };
+
+              sendJson(openAiSocket, {
+                type: "conversation.item.create",
+                item: {
+                  type: "function_call_output",
+                  call_id: callId,
+                  output: JSON.stringify(toolErrorResult),
+                },
+              });
+
+              sendJson(openAiSocket, {
+                type: "response.create",
+                response: {
+                  instructions: buildToolFollowupInstructions({
+                    toolName: "submit_booking_step",
+                    toolResult: toolErrorResult,
+                  }),
+                },
+              });
+            });
 
           return;
         }
