@@ -311,6 +311,31 @@ function buildToolFollowupInstructions(params: {
   }
 
   if (toolName === "submit_booking_step") {
+    if (error === "SLOT_UNAVAILABLE") {
+      const unavailablePrompt = String(toolResult?.unavailable_prompt || "").trim();
+      const suggestedTimes = Array.isArray(toolResult?.suggested_times)
+        ? toolResult.suggested_times.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+
+      const parts = [
+        "Do not say the appointment is confirmed.",
+        "Do not move to the next booking step.",
+        "The requested time is not available.",
+      ];
+
+      if (unavailablePrompt) {
+        parts.push(`Use this unavailable message template: ${unavailablePrompt}`);
+      }
+
+      if (suggestedTimes.length > 0) {
+        parts.push(`Offer these alternatives: ${suggestedTimes.join(", ")}.`);
+      }
+
+      parts.push("Ask the caller for a different day and time.");
+
+      return parts.join(" ");
+    }
+    
     if (ok) {
       return [
         "Use only the tool result as source of truth.",

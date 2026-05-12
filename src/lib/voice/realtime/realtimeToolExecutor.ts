@@ -3,6 +3,7 @@
 import { createAppointmentFromVoice } from "../../appointments/createAppointmentFromVoice";
 import { getAppointmentSettings } from "../../appointments/getAppointmentSettings";
 import { getBookingFlow } from "../../appointments/getBookingFlow";
+import { resolveVoiceScheduleValidation } from "../../appointments/resolveVoiceScheduleValidation";
 
 type ExecuteRealtimeToolParams = {
   tenantId: string;
@@ -387,6 +388,46 @@ export async function executeRealtimeTool({
         answersBySlot: mergedAnswers,
       });
 
+      if ((targetStep.expected_type || "").toLowerCase() === "datetime") {
+        const serviceName = clean(answersBySlot.service);
+        const rawDatetime = clean(answersBySlot.datetime);
+
+        if (serviceName && rawDatetime) {
+          const scheduleValidation = await resolveVoiceScheduleValidation({
+            tenantId,
+            serviceName,
+            rawDatetime,
+            channel: "voice",
+          });
+
+          if (!scheduleValidation.ok) {
+            const bookingState = buildBookingState({
+              steps,
+              answersBySlot: {
+                ...answersBySlot,
+                datetime: "",
+              },
+              finalConfirmationGranted: false,
+            });
+
+            return {
+              ok: false,
+              error: "SLOT_UNAVAILABLE",
+              message: "The requested date and time is not available.",
+              booking_state: bookingState,
+              next_required_step: mapStepForRealtime(targetStep),
+              unavailable_prompt:
+                typeof targetStep.validation_config?.unavailable_prompt === "string"
+                  ? targetStep.validation_config.unavailable_prompt
+                  : "",
+              suggested_times: Array.isArray(scheduleValidation.suggestedStarts)
+                ? scheduleValidation.suggestedStarts
+                : [],
+            };
+          }
+        }
+      }
+
       const confirmationValue =
         isConfirmationStep(targetStep) ? resolveBooleanLikeValue(value) : null;
 
@@ -398,16 +439,20 @@ export async function executeRealtimeTool({
         finalConfirmationGranted,
       });
 
+      const nextRequiredStep = bookingState.awaiting_confirmation
+  ? mapStepForRealtime(getConfirmationStep(steps) as BookingFlowStepLike)
+  : bookingState.ready_to_create
+    ? null
+    : getNextMissingRequiredStep({
+        steps,
+        answersBySlot,
+      });
+
       return {
         ok: true,
         booking_state: bookingState,
-        next_required_step:
-          bookingState.awaiting_confirmation
-            ? mapStepForRealtime(getConfirmationStep(steps) as BookingFlowStepLike)
-            : getNextMissingRequiredStep({
-                steps,
-                answersBySlot,
-              }),
+        next_required_step: nextRequiredStep,
+        action_required: bookingState.ready_to_create ? "create_appointment" : null,
       };
     }
 
