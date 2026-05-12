@@ -28,6 +28,18 @@ function clean(value: unknown): string {
 }
 
 function getStepSlot(step: BookingFlowStepLike): string {
+  const validationConfig =
+    step.validation_config &&
+    typeof step.validation_config === "object"
+      ? (step.validation_config as Record<string, unknown>)
+      : null;
+
+  const configuredSlot = clean(validationConfig?.slot);
+
+  if (configuredSlot) {
+    return configuredSlot;
+  }
+
   return clean(step.step_key);
 }
 
@@ -39,7 +51,20 @@ function isConfirmationStep(step: BookingFlowStepLike): boolean {
     slot === "customer_confirmed" ||
     slot === "confirmation" ||
     stepKey === "customer_confirmed" ||
-    stepKey === "confirmation"
+    stepKey === "confirmation" ||
+    stepKey === "confirm"
+  );
+}
+
+function isSuccessStep(step: BookingFlowStepLike): boolean {
+  const slot = getStepSlot(step).toLowerCase();
+  const stepKey = clean(step.step_key).toLowerCase();
+
+  return (
+    slot === "success" ||
+    slot === "success_message" ||
+    stepKey === "success" ||
+    stepKey === "success_message"
   );
 }
 
@@ -104,6 +129,7 @@ function getMissingRequiredFlowSlots(params: {
   for (const step of sortFlowSteps(steps)) {
     if (step.required !== true) continue;
     if (isConfirmationStep(step)) continue;
+    if (isSuccessStep(step)) continue;
 
     const slot = getStepSlot(step);
     if (!slot) continue;
@@ -153,6 +179,7 @@ function getNextMissingRequiredStep(params: {
   for (const step of sortFlowSteps(steps)) {
     if (step.required !== true) continue;
     if (isConfirmationStep(step)) continue;
+    if (isSuccessStep(step)) continue;
 
     const slot = getStepSlot(step);
     if (!slot) continue;
