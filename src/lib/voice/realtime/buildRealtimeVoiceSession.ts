@@ -22,59 +22,22 @@ function normalizeLocale(locale?: string): "en-US" | "es-ES" | "pt-BR" {
   return "en-US";
 }
 
-function buildLanguageInstruction(locale?: string): string {
-  const normalized = normalizeLocale(locale);
-
-  if (normalized === "es-ES") {
-    return `
-LANGUAGE POLICY:
-- Start the call in Spanish.
-- If the caller clearly speaks in English, switch to English immediately.
-- If the caller clearly speaks in Brazilian Portuguese, switch to Brazilian Portuguese immediately.
-- If the caller explicitly asks to change language, switch immediately.
-- Keep using the caller's active language for the rest of the call unless the caller clearly changes language again.
-- Do not switch languages on your own without a clear signal from the caller.
-- A clear signal can be either:
-  1) an explicit language request, or
-  2) the caller naturally speaking in a different language with a clear full utterance.
-- Do not require the caller to say the language name explicitly.
-- If the first real caller utterance is clearly in another supported language, adopt that language immediately.
-- If the utterance is too short, noisy, mixed, or unclear, keep the current language and ask a brief clarifying question in the current language.
-`;
-  }
-
-  if (normalized === "pt-BR") {
-    return `
-LANGUAGE POLICY:
-- Start the call in Brazilian Portuguese.
-- If the caller clearly speaks in English, switch to English immediately.
-- If the caller clearly speaks in Spanish, switch to Spanish immediately.
-- If the caller explicitly asks to change language, switch immediately.
-- Keep using the caller's active language for the rest of the call unless the caller clearly changes language again.
-- Do not switch languages on your own without a clear signal from the caller.
-- A clear signal can be either:
-  1) an explicit language request, or
-  2) the caller naturally speaking in a different language with a clear full utterance.
-- Do not require the caller to say the language name explicitly.
-- If the first real caller utterance is clearly in another supported language, adopt that language immediately.
-- If the utterance is too short, noisy, mixed, or unclear, keep the current language and ask a brief clarifying question in the current language.
-`;
-  }
-
+function buildLanguageInstruction(): string {
   return `
 LANGUAGE POLICY:
-- Start the call in English.
+- Always start the call in English.
 - If the caller clearly speaks in Spanish, switch to Spanish immediately.
 - If the caller clearly speaks in Brazilian Portuguese, switch to Brazilian Portuguese immediately.
+- If the caller clearly speaks in another language supported by the system, switch to that language immediately.
 - If the caller explicitly asks to change language, switch immediately.
 - Keep using the caller's active language for the rest of the call unless the caller clearly changes language again.
 - Do not switch languages on your own without a clear signal from the caller.
 - A clear signal can be either:
   1) an explicit language request, or
-  2) the caller naturally speaking in a different language with a clear full utterance.
+  2) the caller naturally speaking in another language with a clear full utterance.
 - Do not require the caller to say the language name explicitly.
-- If the first real caller utterance is clearly in another supported language, adopt that language immediately.
-- If the utterance is too short, noisy, mixed, or unclear, keep the current language and ask a brief clarifying question in the current language.
+- If the first real caller utterance is clearly in another language, adopt that language immediately.
+- If the utterance is too short, noisy, mixed, or unclear, keep English and ask a brief clarifying question in English.
 `;
 }
 
@@ -94,7 +57,7 @@ export function buildRealtimeVoiceSession({
   const instructions = `
 You are Aamy, a live phone assistant for ${businessName}.
 
-${buildLanguageInstruction(normalizedLocale)}
+${buildLanguageInstruction()}
 
 CORE BEHAVIOR:
 - Speak naturally.
