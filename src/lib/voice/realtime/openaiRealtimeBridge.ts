@@ -91,12 +91,25 @@ function normalizeLocale(locale?: string): "en-US" | "es-ES" | "pt-BR" {
   return "en-US";
 }
 
-function getRealtimeTranscriptionLanguage(locale?: string): "en" | "es" | "pt" {
-  const normalized = normalizeLocale(locale);
+function extractDetectedLocaleFromTranscriptEvent(
+  event: Record<string, any>
+): "en-US" | "es-ES" | "pt-BR" | null {
+  const candidates = [
+    event.language,
+    event.lang,
+    event.detected_language,
+    event.transcript_language,
+    event.locale,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
 
-  if (normalized === "es-ES") return "es";
-  if (normalized === "pt-BR") return "pt";
-  return "en";
+  for (const candidate of candidates) {
+    const normalized = normalizeLocale(candidate);
+    if (normalized) return normalized;
+  }
+
+  return null;
 }
 
 function clean(value: unknown): string {
@@ -123,7 +136,6 @@ function buildInitialGreetingInstruction(params: {
 function buildOpenAiSessionUpdate(params: {
   instructions: string;
   voice: string;
-  transcriptionLanguage: "en" | "es" | "pt";
   model: string;
 }): Record<string, unknown> {
   return {
@@ -139,7 +151,6 @@ function buildOpenAiSessionUpdate(params: {
           },
           transcription: {
             model: "gpt-4o-mini-transcribe",
-            language: params.transcriptionLanguage,
           },
           turn_detection: {
             type: "server_vad",
@@ -606,7 +617,7 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
-    currentLocale = normalizeLocale(context.currentLocale);
+    currentLocale = "en-US";
 
     const session = buildRealtimeVoiceSession({
       businessName: context.brand || context.tenant.name || "the business",
@@ -623,7 +634,6 @@ export async function createOpenAiRealtimeBridge({
       buildOpenAiSessionUpdate({
         instructions: session.instructions,
         voice: session.voice,
-        transcriptionLanguage: getRealtimeTranscriptionLanguage(currentLocale),
         model,
       })
     );
@@ -967,9 +977,35 @@ export async function createOpenAiRealtimeBridge({
     ) {
       lastUserTranscript = clean(event.transcript || "");
 
+      const detectedLocale = extractDetectedLocaleFromTranscriptEvent(
+        event as Record<string, any>
+      );
+
+      if (detectedLocale && detectedLocale !== currentLocale) {
+        currentLocale = detectedLocale;
+        realtimeState = {
+          ...realtimeState,
+          lang: currentLocale,
+        };
+
+        console.log("[VOICE_REALTIME][LANGUAGE_SWITCH]", {
+          callSid,
+          locale: currentLocale,
+          transcript: lastUserTranscript,
+        });
+      }
+
       console.log("[VOICE_REALTIME][TRANSCRIPT]", {
         callSid,
         transcript: event.transcript,
+        activeLocale: currentLocale,
+        detectedLanguage:
+          (event as any).language ||
+          (event as any).lang ||
+          (event as any).detected_language ||
+          (event as any).transcript_language ||
+          (event as any).locale ||
+          null,
       });
     }
 
