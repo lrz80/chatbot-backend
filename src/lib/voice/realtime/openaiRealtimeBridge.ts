@@ -617,6 +617,7 @@ export async function createOpenAiRealtimeBridge({
   let hangupRequestedByTool = false;
   let currentBookingStepKey: string | null = null;
   let collectedBookingSlots: Record<string, string> = {};
+  let localeLocked = false;
 
   const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime";
 
@@ -766,6 +767,42 @@ export async function createOpenAiRealtimeBridge({
           response: {
             instructions:
               "Tell the caller briefly that the system is not ready to complete that action yet.",
+          },
+        });
+
+        return;
+      }
+
+      if (toolName === "submit_booking_step" && !bookingFlowLoaded) {
+        const blockedResult: RealtimeToolResult = {
+          ok: false,
+          error: "BOOKING_FLOW_NOT_LOADED",
+        };
+
+        console.log("[VOICE_REALTIME][TOOL_RESULT]", {
+          callSid,
+          toolName,
+          ok: false,
+          error: blockedResult.error,
+        });
+
+        sendJson(openAiSocket, {
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: callId,
+            output: JSON.stringify(blockedResult),
+          },
+        });
+
+        sendJson(openAiSocket, {
+          type: "response.create",
+          response: {
+            instructions: [
+              "Do not submit any booking step yet.",
+              "Call get_booking_flow first.",
+              "Then ask only the first required booking question from the tool result.",
+            ].join(" "),
           },
         });
 
@@ -1163,13 +1200,19 @@ export async function createOpenAiRealtimeBridge({
         .then((detection) => {
           const detectedLocale = mapDetectedLanguageToLocale(detection?.lang || null);
 
+          const normalizedTranscript = clean(transcript);
+          const tokenCount = normalizedTranscript.split(/\s+/).filter(Boolean).length;
+
           const shouldSwitch =
             detectedLocale !== null &&
             detectedLocale !== currentLocale &&
             typeof detection?.confidence === "number" &&
-            detection.confidence >= 0.75;
+            detection.confidence >= 0.85 &&
+            !localeLocked &&
+            tokenCount >= 3;
 
           if (shouldSwitch) {
+            localeLocked = true;
             currentLocale = detectedLocale;
             realtimeState = {
               ...realtimeState,
@@ -1278,6 +1321,7 @@ export async function createOpenAiRealtimeBridge({
       finalConfirmationGranted = false;
       readyToCreateAppointment = false;
       hangupRequestedByTool = false;
+      localeLocked = false;
       currentBookingStepKey = null;
       collectedBookingSlots = {};
       realtimeState = {};
