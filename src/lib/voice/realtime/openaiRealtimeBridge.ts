@@ -989,6 +989,7 @@ export async function createOpenAiRealtimeBridge({
                 ...collectedBookingSlots,
                 ...toolArgs,
                 step_key: clean(toolArgs.step_key || currentBookingStepKey || ""),
+                value: clean(lastUserTranscript || toolArgs.value || ""),
               }
             : {
                 ...collectedBookingSlots,
