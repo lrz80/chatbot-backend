@@ -5,6 +5,7 @@ import { buildRealtimeVoiceSession } from "./buildRealtimeVoiceSession";
 import { resolveVoiceRequestContext } from "../runtime/resolveVoiceRequestContext";
 import type { CallState } from "../types";
 import { executeRealtimeTool } from "./realtimeToolExecutor";
+import { detectarIdioma } from "../../detectarIdioma";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -91,23 +92,15 @@ function normalizeLocale(locale?: string): "en-US" | "es-ES" | "pt-BR" {
   return "en-US";
 }
 
-function extractDetectedLocaleFromTranscriptEvent(
-  event: Record<string, any>
+function mapDetectedLanguageToLocale(
+  detectedLanguage?: string | null
 ): "en-US" | "es-ES" | "pt-BR" | null {
-  const candidates = [
-    event.language,
-    event.lang,
-    event.detected_language,
-    event.transcript_language,
-    event.locale,
-  ]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
+  const value = String(detectedLanguage || "").trim().toLowerCase();
 
-  for (const candidate of candidates) {
-    const normalized = normalizeLocale(candidate);
-    if (normalized) return normalized;
-  }
+  if (!value) return null;
+  if (value === "es") return "es-ES";
+  if (value === "en") return "en-US";
+  if (value === "pt") return "pt-BR";
 
   return null;
 }
@@ -265,6 +258,37 @@ function buildOpenAiSessionUpdate(params: {
       ],
       tool_choice: "auto",
     },
+  };
+}
+
+function refreshRealtimeSession(params: {
+  openAiSocket: WebSocket;
+  model: string;
+  locale: "en-US" | "es-ES" | "pt-BR";
+  businessName: string;
+  businessInfo?: string | null;
+  systemPrompt?: string | null;
+}): { voice: string } | null {
+  if (params.openAiSocket.readyState !== WebSocket.OPEN) return null;
+
+  const session = buildRealtimeVoiceSession({
+    businessName: params.businessName,
+    businessInfo: params.businessInfo || "",
+    systemPrompt: params.systemPrompt || "",
+    locale: params.locale,
+  });
+
+  sendJson(
+    params.openAiSocket,
+    buildOpenAiSessionUpdate({
+      instructions: session.instructions,
+      voice: session.voice,
+      model: params.model,
+    })
+  );
+
+  return {
+    voice: session.voice,
   };
 }
 
@@ -975,38 +999,85 @@ export async function createOpenAiRealtimeBridge({
       event.type === "response.audio_transcript.done" ||
       event.type === "conversation.item.input_audio_transcription.completed"
     ) {
-      lastUserTranscript = clean(event.transcript || "");
+      const transcript = clean(event.transcript || "");
+      lastUserTranscript = transcript;
 
-      const detectedLocale = extractDetectedLocaleFromTranscriptEvent(
-        event as Record<string, any>
-      );
-
-      if (detectedLocale && detectedLocale !== currentLocale) {
-        currentLocale = detectedLocale;
-        realtimeState = {
-          ...realtimeState,
-          lang: currentLocale,
-        };
-
-        console.log("[VOICE_REALTIME][LANGUAGE_SWITCH]", {
+      if (!transcript) {
+        console.log("[VOICE_REALTIME][TRANSCRIPT]", {
           callSid,
-          locale: currentLocale,
-          transcript: lastUserTranscript,
+          transcript: event.transcript,
+          activeLocale: currentLocale,
+          detectedLanguage: null,
+          detectedConfidence: 0,
+          detectedSource: "none",
         });
+        return;
       }
 
-      console.log("[VOICE_REALTIME][TRANSCRIPT]", {
-        callSid,
-        transcript: event.transcript,
-        activeLocale: currentLocale,
-        detectedLanguage:
-          (event as any).language ||
-          (event as any).lang ||
-          (event as any).detected_language ||
-          (event as any).transcript_language ||
-          (event as any).locale ||
-          null,
-      });
+      detectarIdioma(transcript)
+        .then((detection) => {
+          const detectedLocale = mapDetectedLanguageToLocale(detection?.lang || null);
+
+          const shouldSwitch =
+            detectedLocale !== null &&
+            detectedLocale !== currentLocale &&
+            typeof detection?.confidence === "number" &&
+            detection.confidence >= 0.75;
+
+          if (shouldSwitch) {
+            currentLocale = detectedLocale;
+            realtimeState = {
+              ...realtimeState,
+              lang: currentLocale,
+            };
+
+            const refreshed = refreshRealtimeSession({
+              openAiSocket,
+              model,
+              locale: currentLocale,
+              businessName:
+                clean(realtimeTenant?.name) ||
+                clean(realtimeTenant?.business_name) ||
+                "the business",
+              businessInfo: clean(realtimeTenant?.info_clave),
+              systemPrompt: clean(realtimeCfg?.system_prompt),
+            });
+
+            console.log("[VOICE_REALTIME][LANGUAGE_SWITCH]", {
+              callSid,
+              transcript,
+              lang: detection?.lang || null,
+              confidence: detection?.confidence ?? 0,
+              locale: currentLocale,
+              voice: refreshed?.voice || null,
+            });
+          }
+
+          console.log("[VOICE_REALTIME][TRANSCRIPT]", {
+            callSid,
+            transcript: event.transcript,
+            activeLocale: currentLocale,
+            detectedLanguage: detection?.lang || null,
+            detectedConfidence: detection?.confidence ?? 0,
+            detectedSource: detection?.source || "none",
+          });
+        })
+        .catch((error) => {
+          console.error("[VOICE_REALTIME][LANGUAGE_DETECTION_ERROR]", {
+            callSid,
+            transcript,
+            error: error instanceof Error ? error.message : String(error),
+          });
+
+          console.log("[VOICE_REALTIME][TRANSCRIPT]", {
+            callSid,
+            transcript: event.transcript,
+            activeLocale: currentLocale,
+            detectedLanguage: null,
+            detectedConfidence: 0,
+            detectedSource: "none",
+          });
+        });
     }
 
     if (event.type === "response.done") {
