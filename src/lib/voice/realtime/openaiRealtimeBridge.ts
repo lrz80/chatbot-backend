@@ -433,10 +433,10 @@ function buildToolFollowupInstructions(params: {
     if (awaitingConfirmation && nextStepPrompt) {
       return [
         "Use only the tool result as source of truth.",
-        "Do not call create_appointment yet.",
-        "Wait for the caller explicit confirmation first.",
-        "Present one short summary of the booking details already collected.",
-        `Then ask exactly this confirmation question: ${nextStepPrompt}`,
+        `Say exactly this confirmation question: ${nextStepPrompt}`,
+        "Do not paraphrase it.",
+        "Do not add a summary before it.",
+        "Ask one short question only.",
       ].join(" ");
     }
 

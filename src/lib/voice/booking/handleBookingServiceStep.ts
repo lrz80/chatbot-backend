@@ -63,6 +63,139 @@ export type CanonicalBookingServiceStepResult =
       resolvedValue: string;
     };
 
+function cleanText(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function normalizeServiceKey(value: unknown): string {
+  return cleanText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function toCleanStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => cleanText(item)).filter(Boolean);
+  }
+
+  const single = cleanText(value);
+  return single ? [single] : [];
+}
+
+function buildVoiceServiceConfigFromStep(step: BookingStep): string {
+  const validationConfig =
+    step.validation_config && typeof step.validation_config === "object"
+      ? (step.validation_config as Record<string, unknown>)
+      : null;
+
+  const options = Array.isArray(validationConfig?.options)
+    ? validationConfig.options
+    : [];
+
+  const lines: string[] = [];
+
+  for (const option of options) {
+    if (typeof option === "string") {
+      const canonical = cleanText(option);
+      if (!canonical) continue;
+
+      lines.push(canonical);
+      continue;
+    }
+
+    if (!option || typeof option !== "object") {
+      continue;
+    }
+
+    const record = option as Record<string, unknown>;
+
+    const canonical =
+      cleanText(record.value) ||
+      cleanText(record.label) ||
+      cleanText(record.name) ||
+      cleanText(record.title);
+
+    if (!canonical) {
+      continue;
+    }
+
+    const aliases = Array.from(
+      new Set(
+        [
+          cleanText(record.label),
+          cleanText(record.name),
+          cleanText(record.title),
+          ...toCleanStringArray(record.aliases),
+          ...toCleanStringArray(record.synonyms),
+          ...toCleanStringArray(record.keywords),
+          ...toCleanStringArray(record.examples),
+          ...toCleanStringArray(record.speech_hints),
+        ].filter(Boolean)
+      )
+    );
+
+    lines.push(
+      aliases.length > 0
+        ? `${canonical} | ${aliases.join(", ")}`
+        : canonical
+    );
+  }
+
+  return lines.join("\n").trim();
+}
+
+function mergeVoiceServiceConfigs(params: {
+  rawConfig: string;
+  step: BookingStep;
+}): string {
+  const merged = new Map<string, { canonical: string; aliases: Set<string> }>();
+
+  const ingestConfig = (raw: string) => {
+    const lines = String(raw || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      const [canonicalPart, aliasesPart = ""] = line.split("|");
+      const canonical = cleanText(canonicalPart);
+
+      if (!canonical) continue;
+
+      const key = normalizeServiceKey(canonical);
+      const entry =
+        merged.get(key) ||
+        { canonical, aliases: new Set<string>() };
+
+      aliasesPart
+        .split(",")
+        .map((item) => cleanText(item))
+        .filter(Boolean)
+        .forEach((alias) => entry.aliases.add(alias));
+
+      merged.set(key, entry);
+    }
+  };
+
+  ingestConfig(params.rawConfig);
+  ingestConfig(buildVoiceServiceConfigFromStep(params.step));
+
+  return Array.from(merged.values())
+    .map((entry) => {
+      const aliases = Array.from(entry.aliases).filter(
+        (alias) =>
+          normalizeServiceKey(alias) !== normalizeServiceKey(entry.canonical)
+      );
+
+      return aliases.length > 0
+        ? `${entry.canonical} | ${aliases.join(", ")}`
+        : entry.canonical;
+    })
+    .join("\n")
+    .trim();
+}
+
 function buildServiceSpeechHints(rawConfig: string): string | undefined {
   const text = String(rawConfig || "").trim();
   if (!text) return undefined;
@@ -108,11 +241,16 @@ export async function executeCanonicalBookingServiceStep(
     rawConfig,
   } = params;
 
-  const serviceHints = buildServiceSpeechHints(rawConfig);
+  const mergedServiceConfig = mergeVoiceServiceConfigs({
+    rawConfig,
+    step: currentStep,
+  });
+
+  const serviceHints = buildServiceSpeechHints(mergedServiceConfig);
 
   const serviceResolution = resolveVoiceBookingService({
     userInput: effectiveUserInput,
-    rawConfig,
+    rawConfig: mergedServiceConfig,
   });
 
   if (serviceResolution.kind === "none") {
