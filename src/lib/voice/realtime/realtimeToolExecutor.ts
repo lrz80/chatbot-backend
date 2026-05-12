@@ -43,6 +43,32 @@ function getStepSlot(step: BookingFlowStepLike): string {
   return clean(step.step_key);
 }
 
+function getStepAliases(step: BookingFlowStepLike): string[] {
+  const aliases = new Set<string>();
+
+  const stepKey = clean(step.step_key);
+  const canonicalSlot = getStepSlot(step);
+
+  if (stepKey) aliases.add(stepKey);
+  if (canonicalSlot) aliases.add(canonicalSlot);
+
+  return Array.from(aliases);
+}
+
+function getAnswerValueForStep(
+  step: BookingFlowStepLike,
+  answersBySlot: Record<string, string>
+): string {
+  for (const alias of getStepAliases(step)) {
+    const value = clean(answersBySlot[alias]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
 function isConfirmationStep(step: BookingFlowStepLike): boolean {
   const slot = getStepSlot(step).toLowerCase();
   const stepKey = clean(step.step_key).toLowerCase();
@@ -134,7 +160,7 @@ function getMissingRequiredFlowSlots(params: {
     const slot = getStepSlot(step);
     if (!slot) continue;
 
-    const value = clean(answersBySlot[slot]);
+    const value = getAnswerValueForStep(step, answersBySlot);
     if (!value) {
       missing.push(slot);
     }
@@ -184,7 +210,7 @@ function getNextMissingRequiredStep(params: {
     const slot = getStepSlot(step);
     if (!slot) continue;
 
-    const value = clean(answersBySlot[slot]);
+    const value = getAnswerValueForStep(step, answersBySlot);
     if (!value) {
       return {
         step_key: clean(step.step_key),
@@ -231,6 +257,21 @@ export async function executeRealtimeTool({
         args,
         callerPhone,
       });
+
+      for (const step of flowSteps) {
+        const canonicalSlot = getStepSlot(step);
+        if (!canonicalSlot) continue;
+
+        const value = getAnswerValueForStep(step, answersBySlot);
+        if (!value) continue;
+
+        answersBySlot[canonicalSlot] = value;
+
+        const stepKey = clean(step.step_key);
+        if (stepKey) {
+          answersBySlot[stepKey] = value;
+        }
+      }
 
       const missingRequiredSlots = getMissingRequiredFlowSlots({
         steps: flowSteps,
