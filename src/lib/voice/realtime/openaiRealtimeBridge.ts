@@ -305,6 +305,49 @@ function refreshRealtimeSession(params: {
   };
 }
 
+async function refreshRealtimeVoiceContext(params: {
+  callSid: string | null;
+  didNumber: string | null;
+  currentLocale: "en-US" | "es-ES" | "pt-BR";
+  realtimeState: CallState;
+}): Promise<{
+  tenantId: string | null;
+  tenant: any;
+  cfg: any;
+  brand: string;
+  voiceName: string | null;
+} | null> {
+  if (!params.callSid || !params.didNumber) return null;
+
+  const context = await resolveVoiceRequestContext({
+    callSid: params.callSid,
+    didNumber: params.didNumber,
+    state: {
+      ...params.realtimeState,
+      lang: params.currentLocale,
+    },
+    langParam:
+      params.currentLocale === "es-ES"
+        ? "es"
+        : params.currentLocale === "pt-BR"
+        ? "pt"
+        : "en",
+    channelKey: "voice",
+  });
+
+  if (!context.ok) {
+    return null;
+  }
+
+  return {
+    tenantId: context.tenant.id,
+    tenant: context.tenant,
+    cfg: context.cfg || {},
+    brand: context.brand,
+    voiceName: context.voiceName || null,
+  };
+}
+
 function sendTwilioAudio(params: {
   twilioSocket: WebSocket;
   streamSid: string;
@@ -1220,26 +1263,48 @@ export async function createOpenAiRealtimeBridge({
               lang: currentLocale,
             };
 
-            const refreshed = refreshRealtimeSession({
-              openAiSocket,
-              model,
-              locale: currentLocale,
-              businessName:
-                clean(realtimeTenant?.name) ||
-                clean(realtimeTenant?.business_name) ||
-                "the business",
-              businessInfo: clean(realtimeTenant?.info_clave),
-              systemPrompt: clean(realtimeCfg?.system_prompt),
-            });
-
-            console.log("[VOICE_REALTIME][LANGUAGE_SWITCH]", {
+            refreshRealtimeVoiceContext({
               callSid,
-              transcript,
-              lang: detection?.lang || null,
-              confidence: detection?.confidence ?? 0,
-              locale: currentLocale,
-              voice: refreshed?.voice || null,
-            });
+              didNumber,
+              currentLocale,
+              realtimeState,
+            })
+              .then((contextRefresh) => {
+                if (contextRefresh) {
+                  tenantId = contextRefresh.tenantId;
+                  realtimeTenant = contextRefresh.tenant;
+                  realtimeCfg = contextRefresh.cfg;
+                }
+
+                const refreshed = refreshRealtimeSession({
+                  openAiSocket,
+                  model,
+                  locale: currentLocale,
+                  businessName:
+                    clean(contextRefresh?.brand) ||
+                    clean(realtimeTenant?.name) ||
+                    clean(realtimeTenant?.business_name) ||
+                    "the business",
+                  businessInfo: clean(realtimeTenant?.info_clave),
+                  systemPrompt: clean(realtimeCfg?.system_prompt),
+                });
+
+                console.log("[VOICE_REALTIME][LANGUAGE_SWITCH]", {
+                  callSid,
+                  transcript,
+                  lang: detection?.lang || null,
+                  confidence: detection?.confidence ?? 0,
+                  locale: currentLocale,
+                  voice: refreshed?.voice || null,
+                });
+              })
+              .catch((error) => {
+                console.error("[VOICE_REALTIME][CONTEXT_REFRESH_ERROR]", {
+                  callSid,
+                  locale: currentLocale,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              });
           }
 
           console.log("[VOICE_REALTIME][TRANSCRIPT]", {
