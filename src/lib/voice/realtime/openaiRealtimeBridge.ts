@@ -753,10 +753,16 @@ export async function createOpenAiRealtimeBridge({
     }
   });
 
-  twilioSocket.on("close", () => {
+  twilioSocket.on("close", (code, reason) => {
     console.log("[VOICE_REALTIME][TWILIO_CLOSED]", {
       callSid,
       streamSid,
+      code,
+      reason: reason?.toString?.() || "",
+      openAiReady,
+      sessionConfigured,
+      callEnding,
+      hangupRequestedByTool,
     });
 
     if (openAiSocket.readyState === WebSocket.OPEN) {
@@ -765,7 +771,11 @@ export async function createOpenAiRealtimeBridge({
   });
 
   twilioSocket.on("error", (error) => {
-    console.error("[VOICE_REALTIME][TWILIO_SOCKET_ERROR]", error);
+    console.error("[VOICE_REALTIME][TWILIO_SOCKET_ERROR]", {
+      callSid,
+      streamSid,
+      error: error instanceof Error ? error.message : String(error),
+    });
 
     if (openAiSocket.readyState === WebSocket.OPEN) {
       openAiSocket.close();

@@ -153,6 +153,23 @@ async function resolveConfirmationMetaSignal(params: {
   };
 }
 
+function resolveSmsDestination(params: {
+  state: CallState;
+  callerE164: string | null;
+}): string {
+  const { state, callerE164 } = params;
+
+  const fromState = [
+    state.bookingData?.customer_phone,
+    state.bookingData?.phone,
+    callerE164,
+  ]
+    .map((value) => String(value || "").trim())
+    .find((value) => value.length >= 7);
+
+  return fromState || "";
+}
+
 export async function executeCanonicalBookingConfirmationStep(
   params: CanonicalBookingConfirmationStepParams
 ): Promise<CanonicalBookingConfirmationStepResult> {
@@ -186,12 +203,69 @@ export async function executeCanonicalBookingConfirmationStep(
 
   const isOfferBookingSmsStep = currentStep.step_key === "offer_booking_sms";
 
-  if (isOfferBookingSmsStep) {
+    if (isOfferBookingSmsStep) {
     if (confirmationMetaSignal.intent === "affirm") {
       const preservedBookingSmsPayload =
         typeof state.bookingData?.booking_sms_payload === "string"
           ? state.bookingData.booking_sms_payload
           : "";
+
+      const smsDestination = resolveSmsDestination({
+        state,
+        callerE164,
+      });
+
+      if (smsDestination) {
+        const postBookingStateData = {
+          ...(state.bookingData || {}),
+          booking_sms_payload: preservedBookingSmsPayload,
+          customer_phone:
+            String(state.bookingData?.customer_phone || "").trim() || smsDestination,
+          __last_voice_domain: "booking",
+          __last_booking_outcome: "confirmed",
+          __last_assistant_text: currentLocale.startsWith("es")
+            ? "Perfecto, te enviaré los detalles por SMS a este número."
+            : currentLocale.startsWith("pt")
+              ? "Perfeito, vou enviar os detalhes por SMS para este número."
+              : "Perfect, I will send the booking details by SMS to this number.",
+        };
+
+        const nextState: CallState = {
+          ...state,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+          smsSent: false,
+          bookingStepIndex: undefined,
+          altDest: smsDestination,
+          bookingData: postBookingStateData,
+        };
+
+        await upsertVoiceCallState({
+          callSid,
+          tenantId: tenant.id,
+          lang: nextState.lang ?? currentLocale,
+          turn: nextState.turn ?? 0,
+          awaiting: false,
+          pendingType: null,
+          awaitingNumber: false,
+          altDest: smsDestination,
+          smsSent: false,
+          bookingStepIndex: null,
+          bookingData: postBookingStateData,
+        });
+
+        return {
+          kind: "success",
+          state: nextState,
+          prompt: currentLocale.startsWith("es")
+            ? "Perfecto, te enviaré los detalles por SMS a este número."
+            : currentLocale.startsWith("pt")
+              ? "Perfeito, vou enviar os detalhes por SMS para este número."
+              : "Perfect, I will send the booking details by SMS to this number.",
+          context: "booking_success",
+        };
+      }
 
       const postBookingStateData = {
         ...(state.bookingData || {}),
@@ -209,7 +283,7 @@ export async function executeCanonicalBookingConfirmationStep(
         ...state,
         awaiting: true,
         pendingType: "reservar",
-        awaitingNumber: false,
+        awaitingNumber: true,
         smsSent: false,
         bookingStepIndex: undefined,
         bookingData: postBookingStateData,
@@ -222,7 +296,7 @@ export async function executeCanonicalBookingConfirmationStep(
         turn: nextState.turn ?? 0,
         awaiting: true,
         pendingType: "reservar",
-        awaitingNumber: false,
+        awaitingNumber: true,
         altDest: nextState.altDest ?? null,
         smsSent: false,
         bookingStepIndex: null,
