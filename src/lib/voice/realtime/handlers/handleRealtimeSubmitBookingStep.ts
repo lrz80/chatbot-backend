@@ -1,8 +1,6 @@
 //src/lib/voice/realtime/handlers/handleRealtimeSubmitBookingStep.ts
 import { executeCanonicalBookingServiceStep } from "../../booking/handleBookingServiceStep";
 import { executeCanonicalBookingDatetimeStep } from "../../booking/handleBookingDatetimeStep";
-import { executeCanonicalBookingConfirmationStep } from "../../booking/handleBookingConfirmationStep";
-import { upsertVoiceCallState } from "../../upsertVoiceCallState";
 import type { CallState, VoiceLocale } from "../../types";
 import {
   clean,
@@ -431,17 +429,40 @@ export async function handleRealtimeSubmitBookingStep(
     locale: bookingContext.currentLocale,
   });
 
-  const bookingState = buildRealtimeBookingState({
-    steps,
-    state: advancedState,
-    explicitCurrentIndex: nextIndex,
-  });
+  const isFlowComplete = nextIndex === null;
 
-  const nextRequiredStep = buildNextRequiredStep({
-    steps,
-    bookingState,
-    locale: bookingContext.currentLocale,
-  });
+  const bookingState = isFlowComplete
+    ? {
+        current_step_key: null,
+        current_step_slot: null,
+        awaiting_confirmation: false,
+        final_confirmation_granted: Boolean(
+          clean(advancedState.bookingData?.confirmation) ||
+            clean(advancedState.bookingData?.customer_confirmed)
+        ),
+        ready_to_create: false,
+        collected_slots: normalizeAnswersToCanonicalSlots({
+          steps,
+          answersBySlot: buildAnswersBySlot({
+            args: {},
+            callerPhone,
+            state: advancedState,
+          }),
+        }),
+      }
+    : buildRealtimeBookingState({
+        steps,
+        state: advancedState,
+        explicitCurrentIndex: nextIndex,
+      });
+
+  const nextRequiredStep = isFlowComplete
+    ? null
+    : buildNextRequiredStep({
+        steps,
+        bookingState,
+        locale: bookingContext.currentLocale,
+      });
 
   const nextStepKey = clean(nextRequiredStep?.step_key || "");
 
