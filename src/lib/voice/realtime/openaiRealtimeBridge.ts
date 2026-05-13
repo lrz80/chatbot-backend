@@ -606,16 +606,22 @@ function buildToolFollowupInstructions(params: {
   return "Explain the issue briefly and ask one clear follow-up question.";
 }
 
-async function endTwilioCall(callSid: string | null): Promise<void> {
+async function endTwilioCall(params: {
+  callSid: string | null;
+  accountSid?: string | null;
+}): Promise<void> {
+  const callSid = params.callSid;
   if (!callSid) return;
 
-  const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
+  const accountSid =
+    clean(params.accountSid) || process.env.TWILIO_ACCOUNT_SID?.trim() || "";
   const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
 
   if (!accountSid || !authToken) {
     console.warn("[VOICE_REALTIME][TWILIO_HANGUP_SKIPPED]", {
       callSid,
       reason: "MISSING_TWILIO_CREDENTIALS",
+      accountSid,
     });
     return;
   }
@@ -629,10 +635,12 @@ async function endTwilioCall(callSid: string | null): Promise<void> {
 
     console.log("[VOICE_REALTIME][TWILIO_CALL_COMPLETED]", {
       callSid,
+      accountSid,
     });
   } catch (error) {
     console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
       callSid,
+      accountSid,
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -665,8 +673,10 @@ export async function createOpenAiRealtimeBridge({
   let readyToCreateAppointment = false;
   let hangupRequestedByTool = false;
   let currentBookingStepKey: string | null = null;
+  let callEnding = false;
   let collectedBookingSlots: Record<string, string> = {};
   let localeLocked = false;
+  let twilioAccountSid: string | null = null;
 
   const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime";
 
@@ -784,6 +794,24 @@ export async function createOpenAiRealtimeBridge({
       const callId = String(event.call_id || "").trim();
 
       let toolArgs: Record<string, any> = {};
+
+      if (callEnding && toolName !== "end_call") {
+        const blockedResult: RealtimeToolResult = {
+          ok: false,
+          error: "CALL_ENDING",
+        };
+
+        sendJson(openAiSocket, {
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: callId,
+            output: JSON.stringify(blockedResult),
+          },
+        });
+
+        return;
+      }
 
       try {
         toolArgs = JSON.parse(String(event.arguments || "{}"));
@@ -1144,6 +1172,7 @@ export async function createOpenAiRealtimeBridge({
 
           if (toolName === "end_call" && toolResult?.ok === true && toolResult?.hangup === true) {
             hangupRequestedByTool = true;
+            callEnding = true;
           }
 
           console.log("[VOICE_REALTIME][TOOL_RESULT]", {
@@ -1218,6 +1247,10 @@ export async function createOpenAiRealtimeBridge({
         : null;
 
     if (audioDelta && streamSid) {
+      if (callEnding) {
+        return;
+      }
+
       sendTwilioAudio({
         twilioSocket,
         streamSid,
@@ -1230,6 +1263,9 @@ export async function createOpenAiRealtimeBridge({
       event.type === "response.audio_transcript.done" ||
       event.type === "conversation.item.input_audio_transcription.completed"
     ) {
+      if (callEnding) {
+        return;
+      }
       const transcript = clean(event.transcript || "");
       lastUserTranscript = transcript;
 
@@ -1347,9 +1383,13 @@ export async function createOpenAiRealtimeBridge({
       if (hangupRequestedByTool) {
         hangupRequestedByTool = false;
 
-        endTwilioCall(callSid).catch((error) => {
+        endTwilioCall({
+          callSid,
+          accountSid: twilioAccountSid,
+        }).catch((error) => {
           console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
             callSid,
+            accountSid: twilioAccountSid,
             error: error instanceof Error ? error.message : String(error),
           });
         });
@@ -1392,6 +1432,8 @@ export async function createOpenAiRealtimeBridge({
       finalConfirmationGranted = false;
       readyToCreateAppointment = false;
       hangupRequestedByTool = false;
+      callEnding = false;
+      twilioAccountSid = clean((event as any)?.start?.accountSid || "") || null;
       localeLocked = false;
       currentBookingStepKey = null;
       collectedBookingSlots = {};
