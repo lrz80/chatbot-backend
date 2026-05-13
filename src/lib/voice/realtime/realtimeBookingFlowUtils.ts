@@ -441,35 +441,17 @@ export function buildBookingPromptTemplateValues(
 ): Record<string, string> {
   const slots = bookingState.collected_slots || {};
 
-  const readFirst = (...keys: string[]): string => {
-    for (const key of keys) {
-      const value = clean(slots[key]);
-      if (value) return value;
-    }
-    return "";
-  };
-
   return {
-    service: readFirst(
-      "service_display",
-      "service",
-      "service_name",
-      "requested_service",
-      "selected_service",
-      "appointment_service"
-    ),
-    datetime: readFirst(
-      "datetime_display",
-      "datetime",
-      "datetime_iso",
-      "requested_datetime",
-      "appointment_datetime",
-      "start_time"
-    ),
-    customer_name: readFirst("customer_name", "name"),
-    customer_phone: readFirst("customer_phone", "phone"),
-    pet_name: readFirst("pet_name"),
-    pet_weight: readFirst("pet_weight", "subject_detail"),
-    location_detail: readFirst("location_detail"),
+    appointment_type: clean(slots.appointment_type),
+    service: clean(slots.service),
+    datetime: clean(slots.datetime),
+    customer_name: clean(slots.customer_name),
+    customer_phone: clean(slots.customer_phone),
+    customer_email: clean(slots.customer_email),
+    confirmation: clean(slots.confirmation),
+    customer_subject: clean(slots.customer_subject),
+    subject_detail: clean(slots.subject_detail),
+    location_detail: clean(slots.location_detail),
+    notes: clean(slots.notes),
   };
 }

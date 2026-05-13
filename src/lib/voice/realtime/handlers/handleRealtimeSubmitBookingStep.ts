@@ -2,14 +2,12 @@
 import { executeCanonicalBookingServiceStep } from "../../booking/handleBookingServiceStep";
 import { executeCanonicalBookingDatetimeStep } from "../../booking/handleBookingDatetimeStep";
 import { executeCanonicalBookingConfirmationStep } from "../../booking/handleBookingConfirmationStep";
-import { executeCanonicalBookingSlotBusyRecovery } from "../../voiceBookingBusyRecovery";
 import { upsertVoiceCallState } from "../../upsertVoiceCallState";
 import type { CallState, VoiceLocale } from "../../types";
 import {
   clean,
   normalizeComparable,
   getStepSlot,
-  isConfirmationLikeStep,
   canonicalizeGenericStepValue,
   buildAnswersBySlot,
   normalizeAnswersToCanonicalSlots,
@@ -143,7 +141,7 @@ export async function handleRealtimeSubmitBookingStep(
   const isDatetimeStep =
     clean(currentStep.step_key) === "datetime" || rawSlot === "datetime";
 
-  const isConfirmationStep = isConfirmationLikeStep(currentStep);
+  const isOfferBookingSmsStep = clean(currentStep.step_key) === "offer_booking_sms";
 
   if (isServiceStep) {
     const serviceResult = await executeCanonicalBookingServiceStep({
@@ -256,7 +254,7 @@ export async function handleRealtimeSubmitBookingStep(
       answersBySlot: nextAnswers,
       bookingStepIndex: currentIndex,
     });
-  } else if (isConfirmationStep) {
+  } else if (isOfferBookingSmsStep) {
     const confirmationResult = await executeCanonicalBookingConfirmationStep({
       tenant: bookingContext.tenant,
       cfg: bookingContext.cfg,
@@ -271,42 +269,6 @@ export async function handleRealtimeSubmitBookingStep(
       state: workingState,
       upsertVoiceCallState,
     });
-
-    if (confirmationResult.kind === "busy_recovery") {
-      const busyRecovered = await executeCanonicalBookingSlotBusyRecovery({
-        flow: steps as any,
-        state: confirmationResult.state,
-        tenantId,
-        callSid: bookingContext.callSid,
-        currentLocale: bookingContext.currentLocale,
-        callerE164: callerPhone,
-        timeZone: confirmationResult.busyRecovery.timeZone,
-        suggestedStarts: confirmationResult.busyRecovery.suggestedStarts,
-      });
-
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: busyRecovered.state,
-        explicitCurrentIndex: busyRecovered.datetimeStepIndex,
-      });
-
-      return {
-        ok: false,
-        error: "SLOT_UNAVAILABLE",
-        message: busyRecovered.prompt,
-        assistant_prompt: busyRecovered.prompt,
-        suggested_times: parseJsonStringArray(
-          busyRecovered.state.bookingData?.__booking_busy_suggested_starts
-        ),
-        booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: bookingContext.currentLocale,
-          overridePrompt: busyRecovered.prompt,
-        }),
-      };
-    }
 
     if (confirmationResult.kind === "retry") {
       const bookingState = buildRealtimeBookingState({
@@ -327,24 +289,6 @@ export async function handleRealtimeSubmitBookingStep(
           locale: bookingContext.currentLocale,
           overridePrompt: confirmationResult.prompt,
         }),
-      };
-    }
-
-    if (confirmationResult.kind === "failed") {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: confirmationResult.state,
-        explicitCurrentIndex: null,
-      });
-
-      return {
-        ok: false,
-        error: "BOOKING_FAILED",
-        message: confirmationResult.prompt,
-        assistant_prompt: confirmationResult.prompt,
-        booking_outcome: "failed",
-        booking_state: bookingState,
-        next_required_step: null,
       };
     }
 
@@ -376,48 +320,6 @@ export async function handleRealtimeSubmitBookingStep(
         ok: true,
         booking_outcome: "awaiting_sms_destination",
         requires_sms_destination: true,
-        booking_state: bookingState,
-        next_required_step: null,
-      };
-    }
-
-    if (confirmationResult.kind === "success_offer_sms") {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: confirmationResult.state,
-        explicitCurrentIndex:
-          typeof confirmationResult.state.bookingStepIndex === "number"
-            ? confirmationResult.state.bookingStepIndex
-            : null,
-      });
-
-      return {
-        ok: true,
-        message: `${confirmationResult.successPrompt} ${confirmationResult.smsOfferPrompt}`,
-        assistant_prompt: `${confirmationResult.successPrompt} ${confirmationResult.smsOfferPrompt}`,
-        booking_outcome: "confirmed_offer_sms",
-        booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: bookingContext.currentLocale,
-          overridePrompt: confirmationResult.smsOfferPrompt,
-        }),
-      };
-    }
-
-    if (confirmationResult.kind === "success") {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: confirmationResult.state,
-        explicitCurrentIndex: null,
-      });
-
-      return {
-        ok: true,
-        message: confirmationResult.prompt,
-        assistant_prompt: confirmationResult.prompt,
-        booking_outcome: "confirmed",
         booking_state: bookingState,
         next_required_step: null,
       };
@@ -476,10 +378,33 @@ export async function handleRealtimeSubmitBookingStep(
       }
     }
 
+    const validationMode = clean(currentStep.validation_config?.mode);
+    const useInboundCaller =
+      currentStep.validation_config?.use_inbound_caller === true;
+
+    let resolvedStepValue = normalizedStepValue;
+
+    if (
+      targetSlot === "customer_phone" &&
+      validationMode === "confirm_or_replace" &&
+      useInboundCaller
+    ) {
+      const existingPhone =
+        clean(rawAnswers.customer_phone) || clean(callerPhone);
+
+      const digitsOnly = clean(value).replace(/\D+/g, "");
+
+      if (digitsOnly.length >= 7) {
+        resolvedStepValue = clean(value);
+      } else if (existingPhone) {
+        resolvedStepValue = existingPhone;
+      }
+    }
+
     const nextAnswers = {
       ...rawAnswers,
-      [targetSlot]: normalizedStepValue,
-      [stepKey]: normalizedStepValue,
+      [targetSlot]: resolvedStepValue,
+      [stepKey]: resolvedStepValue,
     };
 
     workingState = buildCanonicalCallState({

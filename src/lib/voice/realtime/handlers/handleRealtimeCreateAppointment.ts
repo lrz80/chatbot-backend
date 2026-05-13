@@ -121,39 +121,39 @@ export async function handleRealtimeCreateAppointment(
 
   if (confirmationResult.kind === "busy_recovery") {
     const busyRecovered = await executeCanonicalBookingSlotBusyRecovery({
-      flow: steps as any,
-      state: confirmationResult.state,
-      tenantId,
-      callSid: bookingContext.callSid,
-      currentLocale: bookingContext.currentLocale,
-      callerE164: callerPhone,
-      timeZone: confirmationResult.busyRecovery.timeZone,
-      suggestedStarts: confirmationResult.busyRecovery.suggestedStarts,
+        flow: steps as any,
+        state: confirmationResult.state,
+        tenantId,
+        callSid: bookingContext.callSid,
+        currentLocale: bookingContext.currentLocale,
+        callerE164: callerPhone,
+        timeZone: confirmationResult.busyRecovery.timeZone,
+        suggestedStarts: confirmationResult.busyRecovery.suggestedStarts,
     });
 
     const bookingState = buildRealtimeBookingState({
-      steps,
-      state: busyRecovered.state,
-      explicitCurrentIndex: busyRecovered.datetimeStepIndex,
+        steps,
+        state: busyRecovered.state,
+        explicitCurrentIndex: busyRecovered.datetimeStepIndex,
     });
 
     return {
-      ok: false,
-      error: "SLOT_UNAVAILABLE",
-      message: busyRecovered.prompt,
-      assistant_prompt: busyRecovered.prompt,
-      suggested_times: parseJsonStringArray(
+        ok: false,
+        error: "SLOT_UNAVAILABLE",
+        message: busyRecovered.prompt,
+        assistant_prompt: busyRecovered.prompt,
+        suggested_times: parseJsonStringArray(
         busyRecovered.state.bookingData?.__booking_busy_suggested_starts
-      ),
-      booking_state: bookingState,
-      next_required_step: buildNextRequiredStep({
+        ),
+        booking_state: bookingState,
+        next_required_step: buildNextRequiredStep({
         steps,
         bookingState,
         locale: bookingContext.currentLocale,
         overridePrompt: busyRecovered.prompt,
-      }),
+        }),
     };
-  }
+    }
 
   if (confirmationResult.kind === "retry") {
     const bookingState = buildRealtimeBookingState({
