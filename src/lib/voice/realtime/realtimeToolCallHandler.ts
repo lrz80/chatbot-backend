@@ -221,20 +221,26 @@ export async function handleRealtimeToolCall(
       type: "response.create",
       response: {
         instructions: [
-          "Do not submit any booking step yet.",
-          "Call get_booking_flow first.",
-          "Then ask only the first required booking question from the tool result.",
+          "Call get_booking_flow now.",
+          "Do not ask for any booking data yet.",
+          "Do not call submit_booking_step again until get_booking_flow returns.",
+          "After get_booking_flow returns, ask exactly next_required_step.prompt.",
+          "Do not invent the current booking step."
         ].join(" "),
       },
     });
 
     return {
       consumed: true,
-      realtimeState,
-      bookingFlowLoaded,
+      realtimeState: {
+        ...realtimeState,
+        bookingStepIndex: undefined,
+        pendingBookingStepKey: undefined,
+      } as CallState,
+      bookingFlowLoaded: false,
       hangupRequestedByTool: false,
       callEnding,
-      resetLastUserDigits: false,
+      resetLastUserDigits: true,
     };
   }
 
