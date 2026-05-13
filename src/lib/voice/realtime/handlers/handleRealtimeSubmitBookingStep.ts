@@ -206,7 +206,15 @@ export async function handleRealtimeSubmitBookingStep(
   const isDatetimeStep =
     clean(currentStep.step_key) === "datetime" || rawSlot === "datetime";
 
-  const isOfferBookingSmsStep = clean(currentStep.step_key) === "offer_booking_sms";
+  const appointmentAlreadyCreated =
+    Boolean(clean(workingState.bookingData?.appointment_id)) ||
+    Boolean(clean(workingState.bookingData?.external_calendar_event_id)) ||
+    Boolean(clean(workingState.bookingData?.google_event_id)) ||
+    Boolean(clean(workingState.bookingData?.google_event_link));
+
+  const isPostBookingStep =
+    appointmentAlreadyCreated &&
+    clean(currentStep.expected_type) === "confirmation";
 
   if (isServiceStep) {
     const serviceResult = await executeCanonicalBookingServiceStep({
@@ -319,96 +327,23 @@ export async function handleRealtimeSubmitBookingStep(
       answersBySlot: nextAnswers,
       bookingStepIndex: currentIndex,
     });
-  } else if (isOfferBookingSmsStep) {
-    const confirmationResult = await executeCanonicalBookingConfirmationStep({
-      tenant: bookingContext.tenant,
-      cfg: bookingContext.cfg,
-      flow: steps as any,
-      currentStep: currentStep as any,
-      currentLocale: bookingContext.currentLocale,
-      callSid: bookingContext.callSid,
-      didNumber: bookingContext.didNumber,
-      callerE164: callerPhone,
-      userInput: bookingContext.userInput || value,
-      digits: bookingContext.digits,
+  } else if (isPostBookingStep) {
+    const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
+
+    const storageSlot =
+      targetSlot && targetSlot !== "none" ? targetSlot : stepKey;
+
+    const nextAnswers = {
+      ...rawAnswers,
+      [storageSlot]: normalizedStepValue,
+      [stepKey]: normalizedStepValue,
+    };
+
+    workingState = buildCanonicalCallState({
       state: workingState,
-      upsertVoiceCallState,
+      answersBySlot: nextAnswers,
+      bookingStepIndex: currentIndex,
     });
-
-    if (confirmationResult.kind === "retry") {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: confirmationResult.state,
-        explicitCurrentIndex: currentIndex,
-      });
-
-      return {
-        ok: false,
-        error: "CONFIRMATION_RETRY",
-        message: confirmationResult.prompt,
-        assistant_prompt: confirmationResult.prompt,
-        booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: bookingContext.currentLocale,
-          overridePrompt: confirmationResult.prompt,
-        }),
-      };
-    }
-
-    if (confirmationResult.kind === "cancelled") {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: confirmationResult.state,
-        explicitCurrentIndex: null,
-      });
-
-      return {
-        ok: true,
-        message: confirmationResult.prompt,
-        assistant_prompt: confirmationResult.prompt,
-        booking_outcome: "cancelled",
-        booking_state: bookingState,
-        next_required_step: null,
-      };
-    }
-
-    if (confirmationResult.kind === "awaiting_sms_destination") {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: confirmationResult.state,
-        explicitCurrentIndex: null,
-      });
-
-      return {
-        ok: true,
-        booking_outcome: "awaiting_sms_destination",
-        requires_sms_destination: true,
-        booking_state: bookingState,
-        next_required_step: null,
-      };
-    }
-
-    if (confirmationResult.kind === "pass_through") {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: confirmationResult.state,
-        explicitCurrentIndex: currentIndex,
-      });
-
-      return {
-        ok: false,
-        error: "INVALID_CONFIRMATION_STEP",
-        message: "Confirmation step could not be processed.",
-        booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: bookingContext.currentLocale,
-        }),
-      };
-    }
   } else {
     const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
     const optionCandidates = extractStepOptionCandidates(currentStep);
@@ -486,6 +421,8 @@ export async function handleRealtimeSubmitBookingStep(
     bookingStepIndex:
       typeof nextIndex === "number" ? nextIndex : undefined,
   };
+
+  Object.assign(bookingContext.state, advancedState);
 
   await persistVoiceState({
     tenantId,
