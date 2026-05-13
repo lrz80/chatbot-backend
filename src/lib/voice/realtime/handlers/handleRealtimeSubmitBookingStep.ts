@@ -12,6 +12,7 @@ import {
   buildAnswersBySlot,
   normalizeAnswersToCanonicalSlots,
   getStepIndexByKey,
+  resolveCurrentStepIndex,
   buildCanonicalCallState,
   parseJsonStringArray,
   extractStepOptionCandidates,
@@ -95,8 +96,9 @@ export async function handleRealtimeSubmitBookingStep(
     };
   }
 
-  const currentIndex = getStepIndexByKey(steps, stepKey);
-  if (currentIndex === -1) {
+  const providedIndex = getStepIndexByKey(steps, stepKey);
+
+  if (providedIndex === -1) {
     return {
       ok: false,
       error: "UNKNOWN_BOOKING_STEP",
@@ -104,6 +106,69 @@ export async function handleRealtimeSubmitBookingStep(
     };
   }
 
+  const persistedAnswers = normalizeAnswersToCanonicalSlots({
+    steps,
+    answersBySlot: buildAnswersBySlot({
+      args: {},
+      callerPhone,
+      state: bookingContext.state,
+    }),
+  });
+
+  const expectedIndex =
+    typeof bookingContext.state.bookingStepIndex === "number" &&
+    bookingContext.state.bookingStepIndex >= 0 &&
+    bookingContext.state.bookingStepIndex < steps.length
+      ? bookingContext.state.bookingStepIndex
+      : resolveCurrentStepIndex({
+          steps,
+          state: bookingContext.state,
+          answersBySlot: persistedAnswers,
+        });
+
+  if (typeof expectedIndex !== "number" || expectedIndex < 0) {
+    const bookingState = buildRealtimeBookingState({
+      steps,
+      state: bookingContext.state,
+      explicitCurrentIndex: null,
+    });
+
+    return {
+      ok: false,
+      error: "BOOKING_FLOW_NOT_LOADED",
+      message: "Booking flow state is not ready for this realtime call.",
+      booking_state: bookingState,
+      next_required_step: null,
+    };
+  }
+
+  if (providedIndex !== expectedIndex) {
+    const expectedStep = steps[expectedIndex];
+
+    const bookingState = buildRealtimeBookingState({
+      steps,
+      state: bookingContext.state,
+      explicitCurrentIndex: expectedIndex,
+    });
+
+    return {
+      ok: false,
+      error: "BOOKING_STEP_MISMATCH",
+      message: `Received step ${stepKey}, but expected ${clean(
+        expectedStep?.step_key
+      )}.`,
+      expected_step_key: clean(expectedStep?.step_key),
+      received_step_key: stepKey,
+      booking_state: bookingState,
+      next_required_step: buildNextRequiredStep({
+        steps,
+        bookingState,
+        locale: bookingContext.currentLocale,
+      }),
+    };
+  }
+
+  const currentIndex = expectedIndex;
   const currentStep = steps[currentIndex];
   const targetSlot = getStepSlot(currentStep);
 
