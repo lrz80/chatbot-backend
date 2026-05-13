@@ -429,8 +429,10 @@ function buildToolFollowupInstructions(params: {
     if (assistantPrompt && bookingOutcome === "confirmed_offer_sms") {
       return [
         "Use only the tool result as source of truth.",
-        `Tell the caller this exact combined message: ${assistantPrompt}`,
-        "Do not invent any extra booking details.",
+        `Tell the caller this exact message: ${assistantPrompt}`,
+        "This is not the end of the call yet.",
+        "Do not call end_call after this message.",
+        "Wait for the caller answer to the SMS offer.",
       ].join(" ");
     }
 
@@ -586,6 +588,7 @@ function buildToolFollowupInstructions(params: {
       return [
         "Say a short goodbye only.",
         "Do not ask any more questions.",
+        "Only do this when the conversation is fully finished.",
       ].join(" ");
     }
 
