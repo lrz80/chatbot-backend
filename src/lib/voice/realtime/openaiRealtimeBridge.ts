@@ -7,6 +7,10 @@ import { resolveVoiceRequestContext } from "../runtime/resolveVoiceRequestContex
 import type { CallState } from "../types";
 import { executeRealtimeTool } from "./realtimeToolExecutor";
 import { detectarIdioma } from "../../detectarIdioma";
+import {
+  buildToolFollowupInstructions,
+  type RealtimeToolResult,
+} from "./buildToolFollowupInstructions";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -37,12 +41,6 @@ type TwilioStopPayload = {
 
 type TwilioUnknownPayload = {
   event?: string;
-  [key: string]: unknown;
-};
-
-type RealtimeToolResult = {
-  ok?: boolean;
-  error?: string;
   [key: string]: unknown;
 };
 
@@ -108,18 +106,6 @@ function mapDetectedLanguageToLocale(
 
 function clean(value: unknown): string {
   return String(value ?? "").trim();
-}
-
-function isAwaitingFinalConfirmation(params: {
-  currentBookingStepKey: string | null;
-  finalConfirmationGranted: boolean;
-  readyToCreateAppointment: boolean;
-}): boolean {
-  if (params.finalConfirmationGranted || params.readyToCreateAppointment) {
-    return false;
-  }
-
-  return clean(params.currentBookingStepKey).toLowerCase() === "confirm";
 }
 
 function buildInitialGreetingInstruction(params: {
@@ -362,253 +348,6 @@ function sendTwilioAudio(params: {
   });
 }
 
-function buildToolFollowupInstructions(params: {
-  toolName: string;
-  toolResult: RealtimeToolResult;
-}): string {
-  const { toolName, toolResult } = params;
-  const ok = toolResult?.ok === true;
-  const error = String(toolResult?.error || "").trim();
-  const assistantPrompt = clean((toolResult as any)?.assistant_prompt || "");
-  const bookingOutcome = clean((toolResult as any)?.booking_outcome || "");
-  const requiresSmsDestination =
-    (toolResult as any)?.requires_sms_destination === true;
-
-  const nextRequiredStep =
-    toolResult &&
-    typeof toolResult.next_required_step === "object" &&
-    toolResult.next_required_step !== null
-      ? (toolResult.next_required_step as Record<string, unknown>)
-      : null;
-
-  const nextStepSlot = String(nextRequiredStep?.slot || "").trim();
-  const nextStepPrompt = String(nextRequiredStep?.prompt || "").trim();
-
-  const nextStepKey = String(nextRequiredStep?.step_key || "").trim().toLowerCase();
-  const isConfirmationStep = nextStepSlot === "confirmation" || nextStepKey === "confirm";
-
-  const missingRequiredSlots = Array.isArray((toolResult as any)?.missing_required_slots)
-    ? (toolResult as any).missing_required_slots
-        .map((item: unknown) => String(item || "").trim())
-        .filter(Boolean)
-    : [];
-
-  if (toolName === "get_booking_flow") {
-    if (ok && nextStepPrompt) {
-      return [
-        "Use only the tool result as source of truth.",
-        `Ask exactly this next booking question: ${nextStepPrompt}`,
-        "Ask one short question only.",
-      ].join(" ");
-    }
-
-    if (ok) {
-      return [
-        "Use only the tool result as source of truth.",
-        "Ask only the next required booking question.",
-        "Ask one short question only.",
-      ].join(" ");
-    }
-
-    return [
-      "Tell the caller briefly that booking cannot continue right now.",
-      "Do not invent booking steps.",
-    ].join(" ");
-  }
-
-  if (toolName === "submit_booking_step") {
-    if (assistantPrompt && bookingOutcome === "confirmed") {
-      return [
-        "Use only the tool result as source of truth.",
-        `Tell the caller this confirmation message: ${assistantPrompt}`,
-        "Do not ask for more booking fields.",
-        "Then ask briefly if they need anything else.",
-      ].join(" ");
-    }
-
-    if (assistantPrompt && bookingOutcome === "confirmed_offer_sms") {
-      return [
-        "Use only the tool result as source of truth.",
-        `Tell the caller this exact message: ${assistantPrompt}`,
-        "This is not the end of the call yet.",
-        "Do not call end_call after this message.",
-        "Wait for the caller answer to the SMS offer.",
-      ].join(" ");
-    }
-
-    if (assistantPrompt && bookingOutcome === "cancelled") {
-      return [
-        "Use only the tool result as source of truth.",
-        `Tell the caller this cancellation message: ${assistantPrompt}`,
-        "Then ask briefly if they need anything else.",
-      ].join(" ");
-    }
-
-    if (requiresSmsDestination) {
-      return [
-        "Use only the tool result as source of truth.",
-        "Ask the caller what phone number should receive the booking details by SMS.",
-        "Ask one short question only.",
-      ].join(" ");
-    }
-
-    if (
-      assistantPrompt &&
-      (
-        error === "UNRESOLVED_BOOKING_SERVICE" ||
-        error === "AMBIGUOUS_BOOKING_SERVICE" ||
-        error === "INVALID_DATETIME_STEP" ||
-        error === "SLOT_UNAVAILABLE" ||
-        error === "CONFIRMATION_RETRY" ||
-        error === "BOOKING_FAILED"
-      )
-    ) {
-      return [
-        "Use only the tool result as source of truth.",
-        `Tell the caller this exact retry or error prompt: ${assistantPrompt}`,
-        "Do not move to the next booking step unless the tool result says so.",
-      ].join(" ");
-    }
-
-    const bookingState =
-      toolResult &&
-      typeof toolResult.booking_state === "object" &&
-      toolResult.booking_state !== null
-        ? (toolResult.booking_state as Record<string, unknown>)
-        : null;
-
-    const awaitingConfirmation = bookingState?.awaiting_confirmation === true;
-
-    if ((awaitingConfirmation || isConfirmationStep) && nextStepPrompt) {
-      return [
-        "Use only the tool result as source of truth.",
-        `Say exactly this confirmation question verbatim: ${nextStepPrompt}`,
-        "Do not paraphrase it.",
-        "Do not shorten it.",
-        "Do not omit any final confirmation words.",
-        "Do not add a summary before it.",
-        "Ask one short question only.",
-      ].join(" ");
-    }
-
-    if (ok && nextStepPrompt) {
-      return [
-        "Use only the tool result as source of truth.",
-        "Do not call create_appointment unless a later tool result explicitly allows it.",
-        `Ask exactly this next booking question: ${nextStepPrompt}`,
-        "Do not ask any other field.",
-      ].join(" ");
-    }
-
-    return [
-      "Use only the tool result as source of truth.",
-      "Respond briefly and do not invent booking progress.",
-    ].join(" ");
-  }
-
-  if (toolName === "create_appointment") {
-    if (assistantPrompt && bookingOutcome === "confirmed") {
-      return [
-        "Use only the tool result as source of truth.",
-        `Tell the caller this booking confirmation message: ${assistantPrompt}`,
-        "Then ask briefly if they need anything else.",
-      ].join(" ");
-    }
-
-    if (assistantPrompt && bookingOutcome === "confirmed_offer_sms") {
-      return [
-        "Use only the tool result as source of truth.",
-        `Tell the caller this exact combined message: ${assistantPrompt}`,
-      ].join(" ");
-    }
-
-    if (assistantPrompt && bookingOutcome === "cancelled") {
-      return [
-        "Use only the tool result as source of truth.",
-        `Tell the caller this cancellation message: ${assistantPrompt}`,
-        "Then ask briefly if they need anything else.",
-      ].join(" ");
-    }
-
-    if (requiresSmsDestination) {
-      return [
-        "Use only the tool result as source of truth.",
-        "Ask the caller what phone number should receive the booking details by SMS.",
-        "Ask one short question only.",
-      ].join(" ");
-    }
-
-    if (assistantPrompt && !ok) {
-      return [
-        "Use only the tool result as source of truth.",
-        `Tell the caller this exact prompt: ${assistantPrompt}`,
-      ].join(" ");
-    }
-
-    if (error === "MISSING_REQUIRED_BOOKING_FIELDS") {
-      const parts = [
-        "Do not say the appointment was created.",
-        "A required booking field is still missing.",
-      ];
-
-      if (missingRequiredSlots.length > 0) {
-        parts.push(`Missing required slots: ${missingRequiredSlots.join(", ")}.`);
-      }
-
-      if (nextStepSlot) {
-        parts.push(`The next missing required slot is ${nextStepSlot}.`);
-      }
-
-      if (nextStepPrompt) {
-        parts.push(`Ask exactly this next question: ${nextStepPrompt}`);
-      } else {
-        parts.push("Ask one short question only for the next missing required field.");
-      }
-
-      return parts.join(" ");
-    }
-
-    if (error === "MISSING_FINAL_CONFIRMATION") {
-      return [
-        "Do not say the appointment was created.",
-        "Present one short final summary of the booking details already collected.",
-        "Ask for explicit confirmation.",
-      ].join(" ");
-    }
-
-    return [
-      "Do not say the appointment was created.",
-      "Explain the issue briefly using the tool result.",
-      "Ask one clear follow-up question.",
-    ].join(" ");
-  }
-
-  if (toolName === "end_call") {
-    if (ok && toolResult?.hangup === true) {
-      return [
-        "Say a short goodbye only.",
-        "Do not ask any more questions.",
-        "Only do this when the conversation is fully finished.",
-      ].join(" ");
-    }
-
-    return [
-      "Do not end the call yet.",
-      "Continue helping the caller briefly using the tool result as source of truth.",
-    ].join(" ");
-  }
-
-  if (assistantPrompt) {
-    return `Use this exact tool-result prompt: ${assistantPrompt}`;
-  }
-
-  if (ok) {
-    return "Respond briefly using the tool result as the source of truth.";
-  }
-
-  return "Explain the issue briefly and ask one clear follow-up question.";
-}
-
 async function endTwilioCall(params: {
   callSid: string | null;
   accountSid?: string | null;
@@ -672,12 +411,11 @@ export async function createOpenAiRealtimeBridge({
   let sessionConfigured = false;
   let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
   let bookingFlowLoaded = false;
-  let finalConfirmationGranted = false;
-  let readyToCreateAppointment = false;
+  
   let hangupRequestedByTool = false;
-  let currentBookingStepKey: string | null = null;
+  
   let callEnding = false;
-  let collectedBookingSlots: Record<string, string> = {};
+  
   let localeLocked = false;
   let twilioAccountSid: string | null = null;
 
@@ -889,229 +627,16 @@ export async function createOpenAiRealtimeBridge({
         return;
       }
 
-      if (toolName === "create_appointment") {
-        if (!bookingFlowLoaded) {
-          const blockedResult: RealtimeToolResult = {
-            ok: false,
-            error: "BOOKING_FLOW_NOT_LOADED",
-          };
-
-          console.log("[VOICE_REALTIME][TOOL_RESULT]", {
-            callSid,
-            toolName,
-            ok: false,
-            error: blockedResult.error,
-          });
-
-          sendJson(openAiSocket, {
-            type: "conversation.item.create",
-            item: {
-              type: "function_call_output",
-              call_id: callId,
-              output: JSON.stringify(blockedResult),
-            },
-          });
-
-          sendJson(openAiSocket, {
-            type: "response.create",
-            response: {
-              instructions: [
-                "Do not say the appointment was created.",
-                "Tell the caller briefly that you first need to collect the required booking details.",
-                "Call get_booking_flow before continuing the booking.",
-              ].join(" "),
-            },
-          });
-
-          return;
-        }
-
-        const awaitingFinalConfirmation = isAwaitingFinalConfirmation({
-          currentBookingStepKey,
-          finalConfirmationGranted,
-          readyToCreateAppointment,
-        });
-
-        if (awaitingFinalConfirmation) {
-          const confirmArgs = {
-            ...collectedBookingSlots,
-            step_key: "confirm",
-            value: clean(lastUserTranscript),
-          };
-
-          executeRealtimeTool({
-            tenantId,
-            callerPhone,
-            toolName: "submit_booking_step",
-            args: confirmArgs,
-            tenant: realtimeTenant,
-            cfg: realtimeCfg,
-            callSid: callSid || undefined,
-            didNumber: didNumber || undefined,
-            currentLocale,
-            state: realtimeState,
-            userInput: lastUserTranscript,
-            digits: lastUserDigits,
-          })
-            .then((toolResult) => {
-              const bookingState =
-                toolResult &&
-                typeof toolResult.booking_state === "object" &&
-                toolResult.booking_state !== null
-                  ? (toolResult.booking_state as Record<string, unknown>)
-                  : null;
-
-              if (bookingState) {
-                finalConfirmationGranted = bookingState.final_confirmation_granted === true;
-                readyToCreateAppointment = bookingState.ready_to_create === true;
-
-                currentBookingStepKey =
-                  typeof bookingState.current_step_key === "string" && bookingState.current_step_key.trim()
-                    ? bookingState.current_step_key.trim()
-                    : null;
-
-                collectedBookingSlots =
-                  bookingState.collected_slots &&
-                  typeof bookingState.collected_slots === "object"
-                    ? Object.fromEntries(
-                        Object.entries(bookingState.collected_slots as Record<string, unknown>)
-                          .map(([key, value]) => [clean(key), clean(value)])
-                          .filter(([key, value]) => key && value)
-                      )
-                    : collectedBookingSlots;
-              }
-
-              realtimeState = {
-                ...realtimeState,
-                lang: currentLocale,
-                bookingData: {
-                  ...(realtimeState.bookingData || {}),
-                  ...collectedBookingSlots,
-                },
-              };
-
-              console.log("[VOICE_REALTIME][TOOL_REDIRECT]", {
-                callSid,
-                fromTool: "create_appointment",
-                toTool: "submit_booking_step",
-                step_key: "confirm",
-                transcript: lastUserTranscript,
-                ok: toolResult?.ok,
-                error: toolResult?.error,
-              });
-
-              sendJson(openAiSocket, {
-                type: "conversation.item.create",
-                item: {
-                  type: "function_call_output",
-                  call_id: callId,
-                  output: JSON.stringify(toolResult),
-                },
-              });
-
-              sendJson(openAiSocket, {
-                type: "response.create",
-                response: {
-                  instructions: buildToolFollowupInstructions({
-                    toolName: "submit_booking_step",
-                    toolResult: (toolResult || {}) as RealtimeToolResult,
-                  }),
-                },
-              });
-
-              lastUserDigits = "";
-            })
-            .catch((error) => {
-              console.error("[VOICE_REALTIME][TOOL_REDIRECT_ERROR]", {
-                callSid,
-                fromTool: "create_appointment",
-                toTool: "submit_booking_step",
-                step_key: "confirm",
-                error: error instanceof Error ? error.message : String(error),
-              });
-
-              const toolErrorResult: RealtimeToolResult = {
-                ok: false,
-                error: error instanceof Error ? error.message : "TOOL_ERROR",
-              };
-
-              sendJson(openAiSocket, {
-                type: "conversation.item.create",
-                item: {
-                  type: "function_call_output",
-                  call_id: callId,
-                  output: JSON.stringify(toolErrorResult),
-                },
-              });
-
-              sendJson(openAiSocket, {
-                type: "response.create",
-                response: {
-                  instructions: buildToolFollowupInstructions({
-                    toolName: "submit_booking_step",
-                    toolResult: toolErrorResult,
-                  }),
-                },
-              });
-            });
-
-          return;
-        }
-
-        if (!finalConfirmationGranted || !readyToCreateAppointment) {
-          const blockedResult: RealtimeToolResult = {
-            ok: false,
-            error: "MISSING_FINAL_CONFIRMATION",
-          };
-
-          console.log("[VOICE_REALTIME][TOOL_RESULT]", {
-            callSid,
-            toolName,
-            ok: false,
-            error: blockedResult.error,
-          });
-
-          sendJson(openAiSocket, {
-            type: "conversation.item.create",
-            item: {
-              type: "function_call_output",
-              call_id: callId,
-              output: JSON.stringify(blockedResult),
-            },
-          });
-
-          sendJson(openAiSocket, {
-            type: "response.create",
-            response: {
-              instructions: buildToolFollowupInstructions({
-                toolName,
-                toolResult: blockedResult,
-              }),
-            },
-          });
-
-          return;
-        }
-      }
-
       const effectiveToolArgs =
-        toolName === "create_appointment"
+        toolName === "submit_booking_step"
           ? {
-              ...collectedBookingSlots,
               ...toolArgs,
-              final_confirmation_granted: finalConfirmationGranted,
+              step_key: clean(toolArgs.step_key || ""),
+              value: clean(toolArgs.value || lastUserTranscript || ""),
             }
-          : toolName === "submit_booking_step"
-            ? {
-                ...collectedBookingSlots,
-                ...toolArgs,
-                step_key: clean(toolArgs.step_key || currentBookingStepKey || ""),
-                value: clean(toolArgs.value || lastUserTranscript || ""),
-              }
-            : {
-                ...collectedBookingSlots,
-                ...toolArgs,
-              };
+          : {
+              ...toolArgs,
+            };
 
       executeRealtimeTool({
         tenantId,
@@ -1139,37 +664,23 @@ export async function createOpenAiRealtimeBridge({
               ? (toolResult.booking_state as Record<string, unknown>)
               : null;
 
-          if (bookingState) {
-            finalConfirmationGranted = bookingState.final_confirmation_granted === true;
-            readyToCreateAppointment = bookingState.ready_to_create === true;
-
-            currentBookingStepKey =
-              typeof bookingState.current_step_key === "string" && bookingState.current_step_key.trim()
-                ? bookingState.current_step_key.trim()
-                : null;
-
-            collectedBookingSlots =
-              bookingState.collected_slots &&
-              typeof bookingState.collected_slots === "object"
-                ? Object.fromEntries(
-                    Object.entries(bookingState.collected_slots as Record<string, unknown>)
-                      .map(([key, value]) => [clean(key), clean(value)])
-                      .filter(([key, value]) => key && value)
-                  )
-                : collectedBookingSlots;
-          }
+          const collectedSlots =
+            bookingState &&
+            bookingState.collected_slots &&
+            typeof bookingState.collected_slots === "object"
+              ? Object.fromEntries(
+                  Object.entries(bookingState.collected_slots as Record<string, unknown>)
+                    .map(([key, value]) => [clean(key), clean(value)])
+                    .filter(([key, value]) => key && value)
+                )
+              : {};
 
           realtimeState = {
             ...realtimeState,
             lang: currentLocale,
-            bookingStepIndex:
-              typeof toolResult?.booking_state?.current_step_key === "string" &&
-              toolResult?.booking_state?.current_step_key
-                ? undefined
-                : realtimeState.bookingStepIndex,
             bookingData: {
               ...(realtimeState.bookingData || {}),
-              ...collectedBookingSlots,
+              ...collectedSlots,
             },
           };
 
@@ -1205,6 +716,7 @@ export async function createOpenAiRealtimeBridge({
               }),
             },
           });
+
           lastUserDigits = "";
         })
         .catch((error) => {
@@ -1432,14 +944,12 @@ export async function createOpenAiRealtimeBridge({
       callerPhone = event.start.customParameters?.callerPhone || null;
 
       bookingFlowLoaded = false;
-      finalConfirmationGranted = false;
-      readyToCreateAppointment = false;
+      
       hangupRequestedByTool = false;
       callEnding = false;
       twilioAccountSid = clean((event as any)?.start?.accountSid || "") || null;
       localeLocked = false;
-      currentBookingStepKey = null;
-      collectedBookingSlots = {};
+      
       realtimeState = {};
       realtimeTenant = null;
       realtimeCfg = null;
