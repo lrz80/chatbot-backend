@@ -290,14 +290,16 @@ export function normalizeAnswersToCanonicalSlots(params: {
     const canonicalSlot = getStepSlot(step);
     if (!canonicalSlot) continue;
 
-    const value = getAnswerValueForStep(step, normalized);
-    if (!value) continue;
+    const rawValue = getAnswerValueForStep(step, normalized);
+    if (!rawValue) continue;
 
-    normalized[canonicalSlot] = value;
+    const canonicalValue = canonicalizeGenericStepValue(step, rawValue);
+
+    normalized[canonicalSlot] = canonicalValue;
 
     const stepKey = clean(step.step_key);
     if (stepKey) {
-      normalized[stepKey] = value;
+    normalized[stepKey] = canonicalValue;
     }
   }
 
@@ -439,16 +441,35 @@ export function buildBookingPromptTemplateValues(
 ): Record<string, string> {
   const slots = bookingState.collected_slots || {};
 
+  const readFirst = (...keys: string[]): string => {
+    for (const key of keys) {
+      const value = clean(slots[key]);
+      if (value) return value;
+    }
+    return "";
+  };
+
   return {
-    service:
-      clean(slots.service_display) ||
-      clean(slots.service) ||
-      clean(slots.service_name) ||
-      "",
-    datetime:
-      clean(slots.datetime_display) ||
-      clean(slots.datetime) ||
-      clean(slots.datetime_iso) ||
-      "",
+    service: readFirst(
+      "service_display",
+      "service",
+      "service_name",
+      "requested_service",
+      "selected_service",
+      "appointment_service"
+    ),
+    datetime: readFirst(
+      "datetime_display",
+      "datetime",
+      "datetime_iso",
+      "requested_datetime",
+      "appointment_datetime",
+      "start_time"
+    ),
+    customer_name: readFirst("customer_name", "name"),
+    customer_phone: readFirst("customer_phone", "phone"),
+    pet_name: readFirst("pet_name"),
+    pet_weight: readFirst("pet_weight", "subject_detail"),
+    location_detail: readFirst("location_detail"),
   };
 }
