@@ -67,7 +67,6 @@ export async function handleRealtimeCreateAppointment(
   const {
     tenantId,
     callerPhone,
-    args,
     bookingContext,
     steps,
     buildRealtimeBookingState,
@@ -92,7 +91,7 @@ export async function handleRealtimeCreateAppointment(
   const answersBySlot = normalizeAnswersToCanonicalSlots({
     steps,
     answersBySlot: buildAnswersBySlot({
-      args,
+      args: {},
       callerPhone,
       state: bookingContext.state,
     }),
@@ -131,10 +130,12 @@ export async function handleRealtimeCreateAppointment(
         suggestedStarts: confirmationResult.busyRecovery.suggestedStarts,
     });
 
+    Object.assign(bookingContext.state, busyRecovered.state);
+
     const bookingState = buildRealtimeBookingState({
-        steps,
-        state: busyRecovered.state,
-        explicitCurrentIndex: busyRecovered.datetimeStepIndex,
+      steps,
+      state: busyRecovered.state,
+      explicitCurrentIndex: busyRecovered.datetimeStepIndex,
     });
 
     return {
@@ -156,6 +157,8 @@ export async function handleRealtimeCreateAppointment(
     }
 
   if (confirmationResult.kind === "retry") {
+    Object.assign(bookingContext.state, confirmationResult.state);
+
     const bookingState = buildRealtimeBookingState({
       steps,
       state: confirmationResult.state,
@@ -178,6 +181,8 @@ export async function handleRealtimeCreateAppointment(
   }
 
   if (confirmationResult.kind === "failed") {
+    Object.assign(bookingContext.state, confirmationResult.state);
+
     const bookingState = buildRealtimeBookingState({
       steps,
       state: confirmationResult.state,
@@ -196,6 +201,8 @@ export async function handleRealtimeCreateAppointment(
   }
 
   if (confirmationResult.kind === "cancelled") {
+    Object.assign(bookingContext.state, confirmationResult.state);
+
     const bookingState = buildRealtimeBookingState({
       steps,
       state: confirmationResult.state,
@@ -213,6 +220,8 @@ export async function handleRealtimeCreateAppointment(
   }
 
   if (confirmationResult.kind === "awaiting_sms_destination") {
+    Object.assign(bookingContext.state, confirmationResult.state);
+
     const bookingState = buildRealtimeBookingState({
       steps,
       state: confirmationResult.state,
@@ -229,6 +238,8 @@ export async function handleRealtimeCreateAppointment(
   }
 
   if (confirmationResult.kind === "success_offer_sms") {
+    Object.assign(bookingContext.state, confirmationResult.state);
+
     const bookingState = buildRealtimeBookingState({
       steps,
       state: confirmationResult.state,
@@ -257,6 +268,8 @@ export async function handleRealtimeCreateAppointment(
   }
 
   if (confirmationResult.kind === "success") {
+    Object.assign(bookingContext.state, confirmationResult.state);
+    
     const bookingState = buildRealtimeBookingState({
       steps,
       state: confirmationResult.state,

@@ -193,50 +193,12 @@ function buildOpenAiSessionUpdate(params: {
           type: "function",
           name: "create_appointment",
           description:
-            "Create a real appointment only when the server-side booking state says final_confirmation_granted=true and ready_to_create=true. Never skip tenant-configured booking steps.",
+            "Create a real appointment only after the tenant-configured booking flow is complete and the server-side booking state confirms the caller has accepted the final confirmation. Do not pass tenant-specific fields. The server must create the appointment from the validated canonical booking state, not from model-inferred arguments.",
           parameters: {
             type: "object",
             additionalProperties: false,
-            properties: {
-              service: {
-                type: "string",
-                description: "The canonical service requested by the caller.",
-              },
-              datetime: {
-                type: "string",
-                description:
-                  "The requested appointment date and time in natural language, for example 'tomorrow at 10 AM'.",
-              },
-              datetime_iso: {
-                type: "string",
-                description: "Optional ISO datetime if already known. Leave empty if uncertain.",
-              },
-              customer_name: {
-                type: "string",
-                description: "The human customer name, not the pet name.",
-              },
-              customer_phone: {
-                type: "string",
-                description: "The customer phone number. Use the caller phone if not provided.",
-              },
-              customer_email: {
-                type: "string",
-                description: "Optional customer email.",
-              },
-              pet_name: {
-                type: "string",
-                description: "The pet name only.",
-              },
-              pet_weight: {
-                type: "string",
-                description: "The pet weight only.",
-              },
-              location_detail: {
-                type: "string",
-                description: "Appointment location detail such as salon or mobile.",
-              },
-            },
-            required: ["service", "datetime", "customer_name"],
+            properties: {},
+            required: [],
           },
         },
         {
