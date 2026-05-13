@@ -5,12 +5,9 @@ import twilio from "twilio";
 import { buildRealtimeVoiceSession } from "./buildRealtimeVoiceSession";
 import { resolveVoiceRequestContext } from "../runtime/resolveVoiceRequestContext";
 import type { CallState } from "../types";
-import { executeRealtimeTool } from "./realtimeToolExecutor";
-import { detectarIdioma } from "../../detectarIdioma";
-import {
-  buildToolFollowupInstructions,
-  type RealtimeToolResult,
-} from "./buildToolFollowupInstructions";
+
+import { handleRealtimeTranscriptEvent } from "./realtimeTranscriptHandler";
+import { handleRealtimeToolCall } from "./realtimeToolCallHandler";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -530,227 +527,48 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
-    if (event.type === "response.function_call_arguments.done") {
-      const toolName = String(event.name || "").trim();
-      const callId = String(event.call_id || "").trim();
+    handleRealtimeToolCall({
+      event,
+      openAiSocket,
+      callSid,
+      tenantId,
+      callerPhone,
+      didNumber,
+      realtimeTenant,
+      realtimeCfg,
+      realtimeState,
+      currentLocale,
+      bookingFlowLoaded,
+      callEnding,
+      lastUserTranscript,
+      lastUserDigits,
+    })
+      .then((toolCallResult) => {
+        if (!toolCallResult.consumed) {
+          return;
+        }
 
-      let toolArgs: Record<string, any> = {};
+        realtimeState = toolCallResult.realtimeState;
+        bookingFlowLoaded = toolCallResult.bookingFlowLoaded;
 
-      if (callEnding && toolName !== "end_call") {
-        const blockedResult: RealtimeToolResult = {
-          ok: false,
-          error: "CALL_ENDING",
-        };
+        if (toolCallResult.hangupRequestedByTool) {
+          hangupRequestedByTool = true;
+        }
 
-        sendJson(openAiSocket, {
-          type: "conversation.item.create",
-          item: {
-            type: "function_call_output",
-            call_id: callId,
-            output: JSON.stringify(blockedResult),
-          },
+        callEnding = toolCallResult.callEnding;
+
+        if (toolCallResult.resetLastUserDigits) {
+          lastUserDigits = "";
+        }
+      })
+      .catch((error) => {
+        console.error("[VOICE_REALTIME][TOOL_HANDLER_FATAL_ERROR]", {
+          callSid,
+          error: error instanceof Error ? error.message : String(error),
         });
-
-        return;
-      }
-
-      try {
-        toolArgs = JSON.parse(String(event.arguments || "{}"));
-      } catch {
-        toolArgs = {};
-      }
-
-      console.log("[VOICE_REALTIME][TOOL_CALL]", {
-        callSid,
-        toolName,
-        callId,
-        toolArgs,
       });
 
-      if (!tenantId) {
-        sendJson(openAiSocket, {
-          type: "conversation.item.create",
-          item: {
-            type: "function_call_output",
-            call_id: callId,
-            output: JSON.stringify({
-              ok: false,
-              error: "TENANT_NOT_READY",
-            }),
-          },
-        });
-
-        sendJson(openAiSocket, {
-          type: "response.create",
-          response: {
-            instructions:
-              "Tell the caller briefly that the system is not ready to complete that action yet.",
-          },
-        });
-
-        return;
-      }
-
-      if (toolName === "submit_booking_step" && !bookingFlowLoaded) {
-        const blockedResult: RealtimeToolResult = {
-          ok: false,
-          error: "BOOKING_FLOW_NOT_LOADED",
-        };
-
-        console.log("[VOICE_REALTIME][TOOL_RESULT]", {
-          callSid,
-          toolName,
-          ok: false,
-          error: blockedResult.error,
-        });
-
-        sendJson(openAiSocket, {
-          type: "conversation.item.create",
-          item: {
-            type: "function_call_output",
-            call_id: callId,
-            output: JSON.stringify(blockedResult),
-          },
-        });
-
-        sendJson(openAiSocket, {
-          type: "response.create",
-          response: {
-            instructions: [
-              "Do not submit any booking step yet.",
-              "Call get_booking_flow first.",
-              "Then ask only the first required booking question from the tool result.",
-            ].join(" "),
-          },
-        });
-
-        return;
-      }
-
-      const effectiveToolArgs =
-        toolName === "submit_booking_step"
-          ? {
-              ...toolArgs,
-              step_key: clean(toolArgs.step_key || ""),
-              value: clean(toolArgs.value || lastUserTranscript || ""),
-            }
-          : {
-              ...toolArgs,
-            };
-
-      executeRealtimeTool({
-        tenantId,
-        callerPhone,
-        toolName,
-        args: effectiveToolArgs,
-        tenant: realtimeTenant,
-        cfg: realtimeCfg,
-        callSid: callSid || undefined,
-        didNumber: didNumber || undefined,
-        currentLocale,
-        state: realtimeState,
-        userInput: lastUserTranscript,
-        digits: lastUserDigits,
-      })
-        .then((toolResult) => {
-          if (toolName === "get_booking_flow" && toolResult?.ok) {
-            bookingFlowLoaded = true;
-          }
-
-          const bookingState =
-            toolResult &&
-            typeof toolResult.booking_state === "object" &&
-            toolResult.booking_state !== null
-              ? (toolResult.booking_state as Record<string, unknown>)
-              : null;
-
-          const collectedSlots =
-            bookingState &&
-            bookingState.collected_slots &&
-            typeof bookingState.collected_slots === "object"
-              ? Object.fromEntries(
-                  Object.entries(bookingState.collected_slots as Record<string, unknown>)
-                    .map(([key, value]) => [clean(key), clean(value)])
-                    .filter(([key, value]) => key && value)
-                )
-              : {};
-
-          realtimeState = {
-            ...realtimeState,
-            lang: currentLocale,
-            bookingData: {
-              ...(realtimeState.bookingData || {}),
-              ...collectedSlots,
-            },
-          };
-
-          if (toolName === "end_call" && toolResult?.ok === true && toolResult?.hangup === true) {
-            hangupRequestedByTool = true;
-            callEnding = true;
-          }
-
-          console.log("[VOICE_REALTIME][TOOL_RESULT]", {
-            callSid,
-            toolName,
-            ok: toolResult?.ok,
-            error: toolResult?.error,
-            missing_required_slots: toolResult?.missing_required_slots,
-            next_required_step: toolResult?.next_required_step,
-          });
-
-          sendJson(openAiSocket, {
-            type: "conversation.item.create",
-            item: {
-              type: "function_call_output",
-              call_id: callId,
-              output: JSON.stringify(toolResult),
-            },
-          });
-
-          sendJson(openAiSocket, {
-            type: "response.create",
-            response: {
-              instructions: buildToolFollowupInstructions({
-                toolName,
-                toolResult: (toolResult || {}) as RealtimeToolResult,
-              }),
-            },
-          });
-
-          lastUserDigits = "";
-        })
-        .catch((error) => {
-          console.error("[VOICE_REALTIME][TOOL_ERROR]", {
-            callSid,
-            toolName,
-            error: error instanceof Error ? error.message : String(error),
-          });
-
-          const toolErrorResult: RealtimeToolResult = {
-            ok: false,
-            error: error instanceof Error ? error.message : "TOOL_ERROR",
-          };
-
-          sendJson(openAiSocket, {
-            type: "conversation.item.create",
-            item: {
-              type: "function_call_output",
-              call_id: callId,
-              output: JSON.stringify(toolErrorResult),
-            },
-          });
-
-          sendJson(openAiSocket, {
-            type: "response.create",
-            response: {
-              instructions: buildToolFollowupInstructions({
-                toolName,
-                toolResult: toolErrorResult,
-              }),
-            },
-          });
-        });
-
+    if (event.type === "response.function_call_arguments.done") {
       return;
     }
 
@@ -781,113 +599,45 @@ export async function createOpenAiRealtimeBridge({
       if (callEnding) {
         return;
       }
-      const transcript = clean(event.transcript || "");
-      lastUserTranscript = transcript;
 
-      if (!transcript) {
-        console.log("[VOICE_REALTIME][TRANSCRIPT]", {
-          callSid,
-          transcript: event.transcript,
-          activeLocale: currentLocale,
-          detectedLanguage: null,
-          detectedConfidence: 0,
-          detectedSource: "none",
-        });
-        return;
-      }
-
-      detectarIdioma(transcript)
-        .then((detection) => {
-          const detectedLocale = mapDetectedLanguageToLocale(detection?.lang || null);
-
-          const normalizedTranscript = clean(transcript);
-          const tokenCount = normalizedTranscript.split(/\s+/).filter(Boolean).length;
-
-          const shouldSwitch =
-            detectedLocale !== null &&
-            detectedLocale !== currentLocale &&
-            typeof detection?.confidence === "number" &&
-            detection.confidence >= 0.85 &&
-            !localeLocked &&
-            tokenCount >= 3;
-
-          if (shouldSwitch) {
-            localeLocked = true;
-            currentLocale = detectedLocale;
-            realtimeState = {
-              ...realtimeState,
-              lang: currentLocale,
-            };
-
-            refreshRealtimeVoiceContext({
-              callSid,
-              didNumber,
-              currentLocale,
-              realtimeState,
-            })
-              .then((contextRefresh) => {
-                if (contextRefresh) {
-                  tenantId = contextRefresh.tenantId;
-                  realtimeTenant = contextRefresh.tenant;
-                  realtimeCfg = contextRefresh.cfg;
-                }
-
-                const refreshed = refreshRealtimeSession({
-                  openAiSocket,
-                  model,
-                  locale: currentLocale,
-                  businessName:
-                    clean(contextRefresh?.brand) ||
-                    clean(realtimeTenant?.name) ||
-                    clean(realtimeTenant?.business_name) ||
-                    "the business",
-                  businessInfo: clean(realtimeTenant?.info_clave),
-                  systemPrompt: clean(realtimeCfg?.system_prompt),
-                });
-
-                console.log("[VOICE_REALTIME][LANGUAGE_SWITCH]", {
-                  callSid,
-                  transcript,
-                  lang: detection?.lang || null,
-                  confidence: detection?.confidence ?? 0,
-                  locale: currentLocale,
-                  voice: refreshed?.voice || null,
-                });
-              })
-              .catch((error) => {
-                console.error("[VOICE_REALTIME][CONTEXT_REFRESH_ERROR]", {
-                  callSid,
-                  locale: currentLocale,
-                  error: error instanceof Error ? error.message : String(error),
-                });
-              });
+      handleRealtimeTranscriptEvent({
+        event,
+        callSid,
+        didNumber,
+        model,
+        currentLocale,
+        realtimeState,
+        realtimeTenant,
+        realtimeCfg,
+        localeLocked,
+        refreshRealtimeVoiceContext,
+        refreshRealtimeSession,
+        openAiSocket,
+      })
+        .then((transcriptResult) => {
+          if (!transcriptResult.consumed) {
+            return;
           }
 
-          console.log("[VOICE_REALTIME][TRANSCRIPT]", {
-            callSid,
-            transcript: event.transcript,
-            activeLocale: currentLocale,
-            detectedLanguage: detection?.lang || null,
-            detectedConfidence: detection?.confidence ?? 0,
-            detectedSource: detection?.source || "none",
-          });
+          lastUserTranscript = transcriptResult.transcript;
+          currentLocale = transcriptResult.currentLocale;
+          realtimeState = transcriptResult.realtimeState;
+          realtimeTenant = transcriptResult.realtimeTenant ?? realtimeTenant;
+          realtimeCfg = transcriptResult.realtimeCfg ?? realtimeCfg;
+          localeLocked = transcriptResult.localeLocked;
+
+          if (typeof transcriptResult.tenantId !== "undefined") {
+            tenantId = transcriptResult.tenantId ?? tenantId;
+          }
         })
         .catch((error) => {
-          console.error("[VOICE_REALTIME][LANGUAGE_DETECTION_ERROR]", {
+          console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {
             callSid,
-            transcript,
             error: error instanceof Error ? error.message : String(error),
           });
-
-          console.log("[VOICE_REALTIME][TRANSCRIPT]", {
-            callSid,
-            transcript: event.transcript,
-            activeLocale: currentLocale,
-            detectedLanguage: null,
-            detectedConfidence: 0,
-            detectedSource: "none",
-          });
         });
+
+      return;
     }
 
     if (event.type === "response.done") {
