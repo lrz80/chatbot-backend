@@ -370,7 +370,9 @@ export async function createOpenAiRealtimeBridge({
   let sessionConfigured = false;
   let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
   let bookingFlowLoaded = false;
-  
+
+  let realtimeToolQueue: Promise<void> = Promise.resolve();
+
   let hangupRequestedByTool = false;
   
   let callEnding = false;
@@ -385,6 +387,51 @@ export async function createOpenAiRealtimeBridge({
       Authorization: `Bearer ${apiKey}`,
     },
   });
+
+  function enqueueRealtimeToolCall(event: any): void {
+    realtimeToolQueue = realtimeToolQueue
+      .then(async () => {
+        const toolCallResult = await handleRealtimeToolCall({
+          event,
+          openAiSocket,
+          callSid,
+          tenantId,
+          callerPhone,
+          didNumber,
+          realtimeTenant,
+          realtimeCfg,
+          realtimeState,
+          currentLocale,
+          bookingFlowLoaded,
+          callEnding,
+          lastUserTranscript,
+          lastUserDigits,
+        });
+
+        if (!toolCallResult.consumed) {
+          return;
+        }
+
+        realtimeState = toolCallResult.realtimeState;
+        bookingFlowLoaded = toolCallResult.bookingFlowLoaded;
+
+        if (toolCallResult.hangupRequestedByTool) {
+          hangupRequestedByTool = true;
+        }
+
+        callEnding = toolCallResult.callEnding;
+
+        if (toolCallResult.resetLastUserDigits) {
+          lastUserDigits = "";
+        }
+      })
+      .catch((error) => {
+        console.error("[VOICE_REALTIME][TOOL_HANDLER_FATAL_ERROR]", {
+          callSid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
 
   async function configureRealtimeSessionIfReady(): Promise<void> {
     if (sessionConfigured) return;
@@ -489,48 +536,8 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
-    handleRealtimeToolCall({
-      event,
-      openAiSocket,
-      callSid,
-      tenantId,
-      callerPhone,
-      didNumber,
-      realtimeTenant,
-      realtimeCfg,
-      realtimeState,
-      currentLocale,
-      bookingFlowLoaded,
-      callEnding,
-      lastUserTranscript,
-      lastUserDigits,
-    })
-      .then((toolCallResult) => {
-        if (!toolCallResult.consumed) {
-          return;
-        }
-
-        realtimeState = toolCallResult.realtimeState;
-        bookingFlowLoaded = toolCallResult.bookingFlowLoaded;
-
-        if (toolCallResult.hangupRequestedByTool) {
-          hangupRequestedByTool = true;
-        }
-
-        callEnding = toolCallResult.callEnding;
-
-        if (toolCallResult.resetLastUserDigits) {
-          lastUserDigits = "";
-        }
-      })
-      .catch((error) => {
-        console.error("[VOICE_REALTIME][TOOL_HANDLER_FATAL_ERROR]", {
-          callSid,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-
     if (event.type === "response.function_call_arguments.done") {
+      enqueueRealtimeToolCall(event);
       return;
     }
 

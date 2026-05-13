@@ -104,15 +104,6 @@ export async function handleRealtimeTranscriptEvent(
   const transcript = clean(event.transcript || "");
 
   if (!transcript) {
-    console.log("[VOICE_REALTIME][TRANSCRIPT]", {
-      callSid,
-      transcript: event.transcript,
-      activeLocale: currentLocale,
-      detectedLanguage: null,
-      detectedConfidence: 0,
-      detectedSource: "none",
-    });
-
     return {
       consumed: true,
       transcript: "",
@@ -199,15 +190,6 @@ export async function handleRealtimeTranscriptEvent(
       }
     }
 
-    console.log("[VOICE_REALTIME][TRANSCRIPT]", {
-      callSid,
-      transcript: event.transcript,
-      activeLocale: nextLocale,
-      detectedLanguage: detection?.lang || null,
-      detectedConfidence: detection?.confidence ?? 0,
-      detectedSource: detection?.source || "none",
-    });
-
     return {
       consumed: true,
       transcript,
@@ -223,15 +205,6 @@ export async function handleRealtimeTranscriptEvent(
       callSid,
       transcript,
       error: error instanceof Error ? error.message : String(error),
-    });
-
-    console.log("[VOICE_REALTIME][TRANSCRIPT]", {
-      callSid,
-      transcript: event.transcript,
-      activeLocale: currentLocale,
-      detectedLanguage: null,
-      detectedConfidence: 0,
-      detectedSource: "none",
     });
 
     return {
