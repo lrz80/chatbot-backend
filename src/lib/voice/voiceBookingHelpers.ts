@@ -343,8 +343,17 @@ export function buildAnswersBySlot(params: {
 export function resolveBookingSuccessStep(params: {
   flow: Array<any>;
 }) {
+  const explicitSuccessStep = params.flow.find((step) => {
+    if (!step?.enabled) return false;
+    return String(step.step_key || "").trim() === "success";
+  });
+
+  if (explicitSuccessStep) {
+    return explicitSuccessStep;
+  }
+
   return params.flow.find((step) => {
-    if (!step.enabled) return false;
+    if (!step?.enabled) return false;
     if (step.expected_type !== "text") return false;
     if (step.required) return false;
 
