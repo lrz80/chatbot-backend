@@ -628,10 +628,6 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (event.type === "response.done") {
-      console.log("[VOICE_REALTIME][RESPONSE_DONE]", {
-        callSid,
-      });
-
       if (hangupRequestedByTool) {
         hangupRequestedByTool = false;
 

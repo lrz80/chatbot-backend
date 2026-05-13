@@ -88,6 +88,44 @@ export async function handleRealtimeCreateAppointment(
     clean(confirmationStep.step_key)
   );
 
+  const confirmationStepKey = clean(confirmationStep.step_key);
+  const confirmationSlot = clean(
+    typeof confirmationStep.validation_config?.slot === "string"
+      ? confirmationStep.validation_config.slot
+      : ""
+  );
+
+  const existingBookingData = bookingContext.state.bookingData || {};
+
+  const storedConfirmationValue =
+    clean(existingBookingData[confirmationStepKey]) ||
+    clean(
+      confirmationSlot && confirmationSlot !== "none"
+        ? existingBookingData[confirmationSlot]
+        : ""
+    );
+
+  if (!storedConfirmationValue) {
+    const bookingState = buildRealtimeBookingState({
+      steps,
+      state: bookingContext.state,
+      explicitCurrentIndex: currentIndex >= 0 ? currentIndex : null,
+    });
+
+    return {
+      ok: false,
+      error: "MISSING_FINAL_CONFIRMATION",
+      message:
+        "Final confirmation has not been submitted through the booking flow.",
+      booking_state: bookingState,
+      next_required_step: buildNextRequiredStep({
+        steps,
+        bookingState,
+        locale: bookingContext.currentLocale,
+      }),
+    };
+  }
+
   const answersBySlot = normalizeAnswersToCanonicalSlots({
     steps,
     answersBySlot: buildAnswersBySlot({
@@ -112,8 +150,8 @@ export async function handleRealtimeCreateAppointment(
     callSid: bookingContext.callSid,
     didNumber: bookingContext.didNumber,
     callerE164: callerPhone,
-    userInput: bookingContext.userInput,
-    digits: bookingContext.digits,
+    userInput: storedConfirmationValue,
+    digits: "",
     state: workingState,
     upsertVoiceCallState,
   });
@@ -269,7 +307,7 @@ export async function handleRealtimeCreateAppointment(
 
   if (confirmationResult.kind === "success") {
     Object.assign(bookingContext.state, confirmationResult.state);
-    
+
     const bookingState = buildRealtimeBookingState({
       steps,
       state: confirmationResult.state,
