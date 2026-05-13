@@ -37,6 +37,18 @@ export type HandleAwaitingSmsDestinationTurnResult =
       twiml: string;
     };
 
+function buildAnythingElsePrompt(locale: VoiceLocale): string {
+  if (locale.startsWith("es")) {
+    return "¿Te ayudo en algo más?";
+  }
+
+  if (locale.startsWith("pt")) {
+    return "Posso te ajudar com mais alguma coisa?";
+  }
+
+  return "Can I help you with anything else?";
+}
+
 export async function handleAwaitingSmsDestinationTurn(
   params: HandleAwaitingSmsDestinationTurnParams
 ): Promise<HandleAwaitingSmsDestinationTurnResult> {
@@ -144,25 +156,60 @@ export async function handleAwaitingSmsDestinationTurn(
       linkType: tipo,
     });
 
+    const followup =
+      tipo === "reservar" ? buildAnythingElsePrompt(currentLocale) : "";
+
+    const spokenReply = [ok, followup].filter(Boolean).join(" ").trim();
+
+    const updatedState: CallState = {
+      ...nextState,
+      awaiting: false,
+      pendingType: null,
+      awaitingNumber: false,
+      smsSent: true,
+      bookingStepIndex: undefined,
+      bookingData: {
+        ...(nextState.bookingData || {}),
+        __last_voice_domain: tipo === "reservar" ? "booking" : "sms",
+        __last_booking_outcome:
+          tipo === "reservar" ? "confirmed" : (nextState.bookingData?.__last_booking_outcome || ""),
+        __last_assistant_text: spokenReply,
+      },
+    };
+
+    await upsertVoiceCallState({
+      callSid,
+      tenantId: tenant.id,
+      lang: updatedState.lang ?? currentLocale,
+      turn: updatedState.turn ?? 0,
+      awaiting: false,
+      pendingType: null,
+      awaitingNumber: false,
+      altDest: candidate,
+      smsSent: true,
+      bookingStepIndex: null,
+      bookingData: updatedState.bookingData ?? {},
+    });
+
     const vrOk = new twiml.VoiceResponse();
 
-    vrOk.say({ language: currentLocale as any, voice: voiceName }, ok);
-
-    vrOk.gather(
+    const gather = vrOk.gather(
       buildVoiceGatherConfig({
         locale: currentLocale,
         action: "/webhook/voice-response",
-        numDigits: 1,
         timeout: 7,
+        bargeIn: true,
       })
+    );
+
+    gather.say(
+      { language: currentLocale as any, voice: voiceName },
+      spokenReply
     );
 
     return {
       handled: true,
-      updatedState: {
-        ...nextState,
-        smsSent: true,
-      },
+      updatedState,
       twiml: vrOk.toString(),
     };
   } catch {

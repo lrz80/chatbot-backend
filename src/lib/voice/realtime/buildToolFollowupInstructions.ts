@@ -75,15 +75,19 @@ export function buildToolFollowupInstructions(params: {
   }
 
   if (
+    actionRequired === "awaiting_offer_booking_sms_confirmation" ||
     bookingOutcome === "confirmed_offer_sms" ||
     nextStepKey === "offer_booking_sms"
   ) {
     return [
       "Use only the tool result as source of truth.",
-      `Say exactly this message: ${assistantPrompt || nextStepPrompt}`,
+      `Say exactly this SMS offer question: ${assistantPrompt || nextStepPrompt}`,
+      "Do not shorten it.",
+      "Do not paraphrase it.",
+      "Do not remove the final SMS offer question.",
       "This is not the end of the call.",
-      "Do not call end_call.",
       "Wait for the caller answer to the SMS offer.",
+      "Do not call end_call.",
     ].join(" ");
   }
 

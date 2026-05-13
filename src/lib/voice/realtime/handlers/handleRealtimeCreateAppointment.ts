@@ -238,18 +238,21 @@ export async function handleRealtimeCreateAppointment(
           : null,
     });
 
+    const nextRequiredStep = buildNextRequiredStep({
+      steps,
+      bookingState,
+      locale: bookingContext.currentLocale,
+      overridePrompt: confirmationResult.smsOfferPrompt,
+    });
+
     return {
       ok: true,
       message: `${confirmationResult.successPrompt} ${confirmationResult.smsOfferPrompt}`,
-      assistant_prompt: `${confirmationResult.successPrompt} ${confirmationResult.smsOfferPrompt}`,
+      assistant_prompt: clean(nextRequiredStep?.prompt || confirmationResult.smsOfferPrompt),
       booking_outcome: "confirmed_offer_sms",
       booking_state: bookingState,
-      next_required_step: buildNextRequiredStep({
-        steps,
-        bookingState,
-        locale: bookingContext.currentLocale,
-        overridePrompt: confirmationResult.smsOfferPrompt,
-      }),
+      next_required_step: nextRequiredStep,
+      action_required: "awaiting_offer_booking_sms_confirmation",
     };
   }
 
