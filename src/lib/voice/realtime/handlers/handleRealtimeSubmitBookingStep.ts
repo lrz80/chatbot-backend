@@ -510,14 +510,21 @@ export async function handleRealtimeSubmitBookingStep(
     explicitCurrentIndex: nextIndex,
   });
 
+  const nextRequiredStep = buildNextRequiredStep({
+    steps,
+    bookingState,
+    locale: bookingContext.currentLocale,
+  });
+
+  const nextStepKey = clean(nextRequiredStep?.step_key || "");
+
   return {
     ok: true,
     booking_state: bookingState,
-    next_required_step: buildNextRequiredStep({
-      steps,
-      bookingState,
-      locale: bookingContext.currentLocale,
-    }),
-    action_required: null,
+    next_required_step: nextRequiredStep,
+    assistant_prompt:
+      nextStepKey === "confirm" ? clean(nextRequiredStep?.prompt || "") : "",
+    action_required:
+      nextStepKey === "confirm" ? "awaiting_confirmation" : null,
   };
 }

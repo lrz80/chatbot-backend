@@ -19,6 +19,7 @@ export function buildToolFollowupInstructions(params: {
   const error = clean(toolResult?.error || "");
   const assistantPrompt = clean((toolResult as any)?.assistant_prompt || "");
   const bookingOutcome = clean((toolResult as any)?.booking_outcome || "");
+  const actionRequired = clean((toolResult as any)?.action_required || "");
   const requiresSmsDestination =
     (toolResult as any)?.requires_sms_destination === true;
   const hangup = (toolResult as any)?.hangup === true;
@@ -32,6 +33,22 @@ export function buildToolFollowupInstructions(params: {
 
   const nextStepKey = clean(nextRequiredStep?.step_key || "");
   const nextStepPrompt = clean(nextRequiredStep?.prompt || "");
+
+  if (
+    actionRequired === "awaiting_confirmation" ||
+    nextStepKey === "confirm"
+  ) {
+    return [
+      "Use only the tool result as source of truth.",
+      `Say exactly this confirmation question: ${assistantPrompt || nextStepPrompt}`,
+      "Do not shorten it.",
+      "Do not paraphrase it.",
+      "Do not remove the final confirmation question.",
+      "Wait for the caller answer.",
+      "Do not call create_appointment yet.",
+      "Do not call end_call.",
+    ].join(" ");
+  }
 
   if (toolName === "end_call") {
     if (ok && hangup) {
