@@ -590,7 +590,25 @@ export async function createOpenAiRealtimeBridge({
 
           lastUserTranscript = transcriptResult.transcript;
           currentLocale = transcriptResult.currentLocale;
-          realtimeState = transcriptResult.realtimeState;
+
+          realtimeState = {
+            ...transcriptResult.realtimeState,
+
+            /**
+             * Do not let transcript/language refresh overwrite booking progress.
+             * Tool calls are the source of truth for booking state advancement.
+             */
+            bookingStepIndex:
+              typeof realtimeState.bookingStepIndex === "number"
+                ? realtimeState.bookingStepIndex
+                : transcriptResult.realtimeState.bookingStepIndex,
+
+            bookingData:
+              Object.keys(realtimeState.bookingData || {}).length > 0
+                ? realtimeState.bookingData
+                : transcriptResult.realtimeState.bookingData,
+          };
+
           realtimeTenant = transcriptResult.realtimeTenant ?? realtimeTenant;
           realtimeCfg = transcriptResult.realtimeCfg ?? realtimeCfg;
           localeLocked = transcriptResult.localeLocked;
