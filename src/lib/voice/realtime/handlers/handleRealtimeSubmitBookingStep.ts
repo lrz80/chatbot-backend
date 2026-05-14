@@ -389,30 +389,7 @@ export async function handleRealtimeSubmitBookingStep(
         explicitCurrentIndex: currentIndex,
       });
 
-      const suggestedTimesText = formatSuggestedStartsForVoice({
-        suggestedStarts,
-        locale: bookingContext.currentLocale,
-        timeZone:
-          clean(
-            retryState.bookingData?.timezone ||
-              retryState.bookingData?.timeZone ||
-              bookingContext.cfg?.timezone ||
-              bookingContext.cfg?.appointment_timezone ||
-              bookingContext.tenant?.timezone
-          ) || "America/New_York",
-        maxItems: 4,
-      });
-
-      const finalRetryPrompt =
-        datetimeResult.context === "slot_unavailable"
-          ? renderConfiguredUnavailablePrompt({
-              step: currentStep,
-              bookingState,
-              locale: bookingContext.currentLocale,
-              fallbackPrompt: datetimeResult.prompt,
-              suggestedTimesText,
-            })
-          : datetimeResult.prompt;
+      const finalRetryPrompt = datetimeResult.prompt;
 
       return {
         ok: false,
@@ -423,14 +400,15 @@ export async function handleRealtimeSubmitBookingStep(
         message: finalRetryPrompt,
         assistant_prompt: finalRetryPrompt,
         suggested_times: suggestedStarts,
-        suggested_times_text: suggestedTimesText,
         booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: bookingContext.currentLocale,
-          overridePrompt: finalRetryPrompt,
-        }),
+        next_required_step: {
+          ...buildNextRequiredStep({
+            steps,
+            bookingState,
+            locale: bookingContext.currentLocale,
+          }),
+          prompt: finalRetryPrompt,
+        },
       };
     }
 
