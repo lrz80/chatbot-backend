@@ -12,6 +12,7 @@ type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 type HandleRealtimeToolCallParams = {
   event: any;
   openAiSocket: WebSocket;
+  requestRealtimeResponse: (response?: Record<string, unknown>) => void;
   callSid: string | null;
   tenantId: string | null;
   callerPhone: string | null;
@@ -60,6 +61,7 @@ export async function handleRealtimeToolCall(
   const {
     event,
     openAiSocket,
+    requestRealtimeResponse,
     callSid,
     tenantId,
     callerPhone,
@@ -136,16 +138,13 @@ export async function handleRealtimeToolCall(
       },
     });
 
-    sendJson(openAiSocket, {
-      type: "response.create",
-      response: {
-        instructions: [
-          "Do not end the call.",
-          "A booking step is still pending.",
-          "Ask exactly the pending booking question from the last tool result.",
-          "Wait for the caller answer."
-        ].join(" "),
-      },
+    requestRealtimeResponse({
+      instructions: [
+        "Do not end the call.",
+        "A booking step is still pending.",
+        "Ask the pending booking question from the last tool result.",
+        "Wait for the caller answer."
+      ].join(" "),
     });
 
     return {
@@ -178,12 +177,9 @@ export async function handleRealtimeToolCall(
       },
     });
 
-    sendJson(openAiSocket, {
-      type: "response.create",
-      response: {
-        instructions:
-          "Tell the caller briefly that the system is not ready to complete that action yet.",
-      },
+    requestRealtimeResponse({
+      instructions:
+        "Tell the caller briefly that the system is not ready to complete that action yet.",
     });
 
     return {
@@ -218,17 +214,14 @@ export async function handleRealtimeToolCall(
       },
     });
 
-    sendJson(openAiSocket, {
-      type: "response.create",
-      response: {
-        instructions: [
-          "Call get_booking_flow now.",
-          "Do not ask for any booking data yet.",
-          "Do not call submit_booking_step again until get_booking_flow returns.",
-          "After get_booking_flow returns, ask exactly next_required_step.prompt.",
-          "Do not invent the current booking step."
-        ].join(" "),
-      },
+    requestRealtimeResponse({
+      instructions: [
+        "Call get_booking_flow now.",
+        "Do not ask for any booking data yet.",
+        "Do not call submit_booking_step again until get_booking_flow returns.",
+        "After get_booking_flow returns, ask the next required booking question.",
+        "Do not invent the current booking step."
+      ].join(" "),
     });
 
     return {
@@ -335,14 +328,11 @@ export async function handleRealtimeToolCall(
       },
     });
 
-    sendJson(openAiSocket, {
-      type: "response.create",
-      response: {
-        instructions: buildToolFollowupInstructions({
-          toolName,
-          toolResult: (toolResult || {}) as RealtimeToolResult,
-        }),
-      },
+    requestRealtimeResponse({
+      instructions: buildToolFollowupInstructions({
+        toolName,
+        toolResult: (toolResult || {}) as RealtimeToolResult,
+      }),
     });
 
     return {
@@ -375,14 +365,11 @@ export async function handleRealtimeToolCall(
       },
     });
 
-    sendJson(openAiSocket, {
-      type: "response.create",
-      response: {
-        instructions: buildToolFollowupInstructions({
-          toolName,
-          toolResult: toolErrorResult,
-        }),
-      },
+    requestRealtimeResponse({
+      instructions: buildToolFollowupInstructions({
+        toolName,
+        toolResult: toolErrorResult,
+      }),
     });
 
     return {

@@ -22,6 +22,9 @@ import {
 } from "./realtimeBookingFlowUtils";
 import { handleRealtimeSubmitBookingStep } from "./handlers/handleRealtimeSubmitBookingStep";
 import { handleRealtimeCreateAppointment } from "./handlers/handleRealtimeCreateAppointment";
+import { twiml } from "twilio";
+import { parseBookingSmsPayload } from "../runtime/voiceBookingSmsHelpers";
+import { sendBookingConfirmationSms } from "../runtime/sendBookingConfirmationSms";
 
 type ExecuteRealtimeToolParams = {
   tenantId: string;
@@ -264,7 +267,8 @@ export async function executeRealtimeTool(
   const bookingContext =
     toolName === "get_booking_flow" ||
     toolName === "submit_booking_step" ||
-    toolName === "create_appointment"
+    toolName === "create_appointment" ||
+    toolName === "send_booking_sms"
       ? getRealtimeBookingContext(params)
       : null;
 
@@ -353,6 +357,79 @@ export async function executeRealtimeTool(
         buildRealtimeBookingState,
         buildNextRequiredStep,
       });
+    }
+
+    case "send_booking_sms": {
+      if (!bookingContext) {
+        return buildContextMissingResult();
+      }
+
+      const bookingSmsPayload = parseBookingSmsPayload(
+        bookingContext.state.bookingData || {}
+      );
+
+      if (!bookingSmsPayload) {
+        return {
+          ok: false,
+          error: "BOOKING_SMS_PAYLOAD_MISSING",
+          message:
+            "The booking SMS payload is missing. The appointment may not have been confirmed yet.",
+        };
+      }
+
+      const vr = new twiml.VoiceResponse();
+
+      const smsResult = await sendBookingConfirmationSms({
+        tenant: bookingContext.tenant,
+        callSid: bookingContext.callSid,
+        currentLocale: bookingContext.currentLocale,
+        voiceName: null as any,
+        state: bookingContext.state,
+        bookingSmsPayload,
+        callerE164: callerPhone,
+        didNumber: bookingContext.didNumber,
+        vr,
+        logBotSay: ({ callSid, to, text, lang, context }) => {
+          console.log("[VOICE_REALTIME][SAY]", {
+            callSid,
+            to,
+            text,
+            lang,
+            context,
+          });
+        },
+        successMode: "append_to_reply",
+      });
+
+      Object.assign(bookingContext.state, smsResult.updatedState);
+
+      await persistVoiceState({
+        tenantId,
+        callSid: bookingContext.callSid,
+        state: smsResult.updatedState,
+        locale: bookingContext.currentLocale,
+      });
+
+      return {
+        ok: smsResult.sent === true,
+        sent: smsResult.sent,
+        message:
+          smsResult.appendedText ||
+          "The booking SMS flow completed.",
+        assistant_prompt:
+          smsResult.appendedText ||
+          "Tell the caller whether the booking SMS was sent, then ask if they need anything else.",
+        booking_state: buildRealtimeBookingState({
+          steps: sortFlowSteps(
+            (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
+          ),
+          state: smsResult.updatedState,
+          explicitCurrentIndex: null,
+          finalConfirmationGranted: true,
+          readyToCreate: false,
+        }),
+        next_required_step: null,
+      };
     }
 
     case "end_call": {

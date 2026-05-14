@@ -15,6 +15,8 @@ import {
   parseJsonStringArray,
   extractStepOptionCandidates,
   isConfirmationLikeStep,
+  renderBookingStepTemplate,
+  buildBookingPromptTemplateValues,
   type BookingFlowStepLike,
   type BookingState,
 } from "../realtimeBookingFlowUtils";
@@ -69,6 +71,102 @@ type HandleRealtimeSubmitBookingStepParams = {
     locale: VoiceLocale;
   }) => Promise<void>;
 };
+
+function getRecordValue(
+  record: Record<string, unknown> | null | undefined,
+  key: string
+): string {
+  const value = record?.[key];
+  return typeof value === "string" ? clean(value) : "";
+}
+
+function resolveConfiguredUnavailablePrompt(params: {
+  step: BookingFlowStepLike;
+  locale: VoiceLocale;
+}): string {
+  const validationConfig =
+    params.step.validation_config &&
+    typeof params.step.validation_config === "object"
+      ? (params.step.validation_config as Record<string, unknown>)
+      : {};
+
+  const translations =
+    validationConfig.unavailable_prompt_translations &&
+    typeof validationConfig.unavailable_prompt_translations === "object"
+      ? (validationConfig.unavailable_prompt_translations as Record<string, unknown>)
+      : {};
+
+  const translatedPrompt = getRecordValue(translations, params.locale);
+
+  if (translatedPrompt) {
+    return translatedPrompt;
+  }
+
+  const baseUnavailablePrompt = getRecordValue(
+    validationConfig,
+    "unavailable_prompt"
+  );
+
+  return baseUnavailablePrompt;
+}
+
+function formatSuggestedStartsForVoice(params: {
+  suggestedStarts: string[];
+  locale: VoiceLocale;
+  timeZone?: string | null;
+  maxItems?: number;
+}): string {
+  const timeZone = clean(params.timeZone) || "America/New_York";
+  const maxItems = params.maxItems ?? 4;
+
+  const uniqueIsoStarts = Array.from(
+    new Set(params.suggestedStarts.map(clean).filter(Boolean))
+  ).slice(0, maxItems);
+
+  const formattedTimes = uniqueIsoStarts
+    .map((iso) => {
+      const date = new Date(iso);
+
+      if (Number.isNaN(date.getTime())) {
+        return "";
+      }
+
+      return new Intl.DateTimeFormat(params.locale, {
+        timeZone,
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(date);
+    })
+    .filter(Boolean);
+
+  if (formattedTimes.length === 0) {
+    return "";
+  }
+
+  return formattedTimes.join(", ");
+}
+
+function renderConfiguredUnavailablePrompt(params: {
+  step: BookingFlowStepLike;
+  bookingState: BookingState;
+  locale: VoiceLocale;
+  fallbackPrompt: string;
+  suggestedTimesText: string;
+}): string {
+  const configuredPrompt = resolveConfiguredUnavailablePrompt({
+    step: params.step,
+    locale: params.locale,
+  });
+
+  const template = configuredPrompt || params.fallbackPrompt;
+
+  const templateValues = {
+    ...buildBookingPromptTemplateValues(params.bookingState),
+    suggested_times: params.suggestedTimesText,
+  };
+
+  return renderBookingStepTemplate(template, templateValues);
+}
 
 export async function handleRealtimeSubmitBookingStep(
   params: HandleRealtimeSubmitBookingStepParams
@@ -280,11 +378,41 @@ export async function handleRealtimeSubmitBookingStep(
 
     if (datetimeResult.kind === "retry") {
       const retryState = datetimeResult.state;
+
+      const suggestedStarts = parseJsonStringArray(
+        retryState.bookingData?.__datetime_reference_suggested_starts
+      );
+
       const bookingState = buildRealtimeBookingState({
         steps,
         state: retryState,
         explicitCurrentIndex: currentIndex,
       });
+
+      const suggestedTimesText = formatSuggestedStartsForVoice({
+        suggestedStarts,
+        locale: bookingContext.currentLocale,
+        timeZone:
+          clean(
+            retryState.bookingData?.timezone ||
+              retryState.bookingData?.timeZone ||
+              bookingContext.cfg?.timezone ||
+              bookingContext.cfg?.appointment_timezone ||
+              bookingContext.tenant?.timezone
+          ) || "America/New_York",
+        maxItems: 4,
+      });
+
+      const finalRetryPrompt =
+        datetimeResult.context === "slot_unavailable"
+          ? renderConfiguredUnavailablePrompt({
+              step: currentStep,
+              bookingState,
+              locale: bookingContext.currentLocale,
+              fallbackPrompt: datetimeResult.prompt,
+              suggestedTimesText,
+            })
+          : datetimeResult.prompt;
 
       return {
         ok: false,
@@ -292,17 +420,16 @@ export async function handleRealtimeSubmitBookingStep(
           datetimeResult.context === "slot_unavailable"
             ? "SLOT_UNAVAILABLE"
             : "INVALID_DATETIME_STEP",
-        message: datetimeResult.prompt,
-        assistant_prompt: datetimeResult.prompt,
-        suggested_times: parseJsonStringArray(
-          retryState.bookingData?.__datetime_reference_suggested_starts
-        ),
+        message: finalRetryPrompt,
+        assistant_prompt: finalRetryPrompt,
+        suggested_times: suggestedStarts,
+        suggested_times_text: suggestedTimesText,
         booking_state: bookingState,
         next_required_step: buildNextRequiredStep({
           steps,
           bookingState,
           locale: bookingContext.currentLocale,
-          overridePrompt: datetimeResult.prompt,
+          overridePrompt: finalRetryPrompt,
         }),
       };
     }

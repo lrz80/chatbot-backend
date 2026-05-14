@@ -88,19 +88,6 @@ function normalizeLocale(locale?: string): "en-US" | "es-ES" | "pt-BR" {
   return "en-US";
 }
 
-function mapDetectedLanguageToLocale(
-  detectedLanguage?: string | null
-): "en-US" | "es-ES" | "pt-BR" | null {
-  const value = String(detectedLanguage || "").trim().toLowerCase();
-
-  if (!value) return null;
-  if (value === "es") return "es-ES";
-  if (value === "en") return "en-US";
-  if (value === "pt") return "pt-BR";
-
-  return null;
-}
-
 function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
@@ -146,6 +133,9 @@ function buildOpenAiSessionUpdate(params: {
         "- Ask only one booking question at a time.",
         "- If the caller already answered the current slot, submit it with the proper tool instead of asking again.",
         "- Preserve the caller's active language.",
+        "- Never call a tool named send_sms. That tool does not exist.",
+        "- If the caller accepts receiving booking details by SMS, call send_booking_sms with no arguments.",
+        "- Never invent SMS text or phone numbers. The server sends booking SMS from canonical booking state.",
       ].join("\n"),
       audio: {
         input: {
@@ -208,6 +198,18 @@ function buildOpenAiSessionUpdate(params: {
           name: "create_appointment",
           description:
             "Create a real appointment only after the tenant-configured booking flow is complete and the server-side booking state confirms the caller has accepted the final confirmation. Do not pass tenant-specific fields. The server must create the appointment from the validated canonical booking state, not from model-inferred arguments.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+            required: [],
+          },
+        },
+        {
+          type: "function",
+          name: "send_booking_sms",
+          description:
+            "Send the confirmed booking details by SMS using the server-side canonical booking state. Use this only after the caller accepts the SMS offer. Do not pass phone number, message, tenant fields, or booking fields. The server builds and sends the SMS from validated booking state.",
           parameters: {
             type: "object",
             additionalProperties: false,
@@ -328,9 +330,20 @@ async function endTwilioCall(params: {
   const callSid = params.callSid;
   if (!callSid) return;
 
-  const accountSid =
-    clean(params.accountSid) || process.env.TWILIO_ACCOUNT_SID?.trim() || "";
+  const envAccountSid = process.env.TWILIO_ACCOUNT_SID?.trim() || "";
+  const incomingAccountSid = clean(params.accountSid);
+  const accountSid = incomingAccountSid || envAccountSid;
   const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+
+  if (incomingAccountSid && envAccountSid && incomingAccountSid !== envAccountSid) {
+    console.warn("[VOICE_REALTIME][TWILIO_HANGUP_SKIPPED]", {
+      callSid,
+      reason: "ACCOUNT_SID_MISMATCH",
+      incomingAccountSid,
+      envAccountSid,
+    });
+    return;
+  }
 
   if (!accountSid || !authToken) {
     console.warn("[VOICE_REALTIME][TWILIO_HANGUP_SKIPPED]", {
@@ -456,6 +469,7 @@ export async function createOpenAiRealtimeBridge({
         const toolCallResult = await handleRealtimeToolCall({
           event,
           openAiSocket,
+          requestRealtimeResponse,
           callSid,
           tenantId,
           callerPhone,
