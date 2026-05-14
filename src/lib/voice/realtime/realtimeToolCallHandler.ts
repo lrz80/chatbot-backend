@@ -28,6 +28,7 @@ type HandleRealtimeToolCallParams = {
 
 type HandleRealtimeToolCallResult = {
   consumed: boolean;
+  result?: any;
   realtimeState: CallState;
   bookingFlowLoaded: boolean;
   hangupRequestedByTool: boolean;
@@ -346,6 +347,7 @@ export async function handleRealtimeToolCall(
 
     return {
       consumed: true,
+      result: toolResult as RealtimeToolResult,
       realtimeState: nextRealtimeState,
       bookingFlowLoaded: nextBookingFlowLoaded,
       hangupRequestedByTool,

@@ -371,6 +371,9 @@ export async function createOpenAiRealtimeBridge({
   let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
   let bookingFlowLoaded = false;
 
+  let awaitingPostBookingClosureTurn = false;
+  let postBookingClosureTranscript = "";
+
   let realtimeToolQueue: Promise<void> = Promise.resolve();
 
   let hangupRequestedByTool = false;
@@ -416,7 +419,22 @@ export async function createOpenAiRealtimeBridge({
         bookingFlowLoaded = toolCallResult.bookingFlowLoaded;
 
         if (toolCallResult.hangupRequestedByTool) {
-          hangupRequestedByTool = true;
+          if (awaitingPostBookingClosureTurn) {
+            hangupRequestedByTool = false;
+            callEnding = false;
+
+            if (openAiSocket.readyState === WebSocket.OPEN) {
+              sendJson(openAiSocket, {
+                type: "response.create",
+                response: {
+                  instructions:
+                    "Do not end the call yet. The caller has not had a chance to ask for anything else after the booking flow completed. Ask if they need help with anything else.",
+                },
+              });
+            }
+          } else {
+            hangupRequestedByTool = true;
+          }
         }
 
         callEnding = toolCallResult.callEnding;
@@ -424,6 +442,34 @@ export async function createOpenAiRealtimeBridge({
         if (toolCallResult.resetLastUserDigits) {
           lastUserDigits = "";
         }
+
+        const toolResult = toolCallResult.result;
+
+        const bookingFlowJustEnded =
+          toolResult &&
+          toolResult.ok === true &&
+          toolResult.next_required_step === null &&
+          (
+            toolResult.booking_outcome ||
+            toolResult.booking_state ||
+            toolResult.action_required === "post_booking_step_completed"
+          );
+
+        if (bookingFlowJustEnded) {
+          awaitingPostBookingClosureTurn = true;
+          postBookingClosureTranscript = lastUserTranscript;
+
+          if (openAiSocket.readyState === WebSocket.OPEN && !callEnding) {
+            sendJson(openAiSocket, {
+              type: "response.create",
+              response: {
+                instructions:
+                  "The booking flow is complete. Do not end the call yet. Ask the caller if they need help with anything else, using the caller's active language.",
+              },
+            });
+          }
+        }
+
       })
       .catch((error) => {
         console.error("[VOICE_REALTIME][TOOL_HANDLER_FATAL_ERROR]", {
@@ -589,6 +635,15 @@ export async function createOpenAiRealtimeBridge({
           }
 
           lastUserTranscript = transcriptResult.transcript;
+
+          if (
+            awaitingPostBookingClosureTurn &&
+            clean(lastUserTranscript) &&
+            clean(lastUserTranscript) !== clean(postBookingClosureTranscript)
+          ) {
+            awaitingPostBookingClosureTurn = false;
+          }
+
           currentLocale = transcriptResult.currentLocale;
 
           realtimeState = {
