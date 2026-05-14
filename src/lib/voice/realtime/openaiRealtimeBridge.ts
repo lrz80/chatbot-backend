@@ -369,12 +369,15 @@ export async function createOpenAiRealtimeBridge({
   let openAiReady = false;
   let sessionConfigured = false;
   let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
-  let bookingFlowLoaded = false;
+    let bookingFlowLoaded = false;
 
   let awaitingPostBookingClosureTurn = false;
   let postBookingClosureTranscript = "";
 
   let realtimeToolQueue: Promise<void> = Promise.resolve();
+
+  let activeResponseId: string | null = null;
+  let pendingResponseCreate: Record<string, unknown> | null = null;
 
   let hangupRequestedByTool = false;
   
@@ -390,6 +393,48 @@ export async function createOpenAiRealtimeBridge({
       Authorization: `Bearer ${apiKey}`,
     },
   });
+
+    function requestRealtimeResponse(response?: Record<string, unknown>): void {
+    const event: Record<string, unknown> = {
+      type: "response.create",
+      ...(response ? { response } : {}),
+    };
+
+    if (activeResponseId) {
+      pendingResponseCreate = event;
+
+      console.warn("[VOICE_REALTIME][RESPONSE_CREATE_QUEUED]", {
+        callSid,
+        activeResponseId,
+      });
+
+      return;
+    }
+
+    sendJson(openAiSocket, event);
+  }
+
+  function flushPendingRealtimeResponse(): void {
+    if (!pendingResponseCreate) return;
+    if (activeResponseId) return;
+    if (openAiSocket.readyState !== WebSocket.OPEN) return;
+
+    const event = pendingResponseCreate;
+    pendingResponseCreate = null;
+
+    console.log("[VOICE_REALTIME][RESPONSE_CREATE_FLUSHED]", {
+      callSid,
+    });
+
+    sendJson(openAiSocket, event);
+  }
+
+  function isConversationAlreadyHasActiveResponseError(event: any): boolean {
+    return (
+      event?.type === "error" &&
+      event?.error?.code === "conversation_already_has_active_response"
+    );
+  }
 
   function enqueueRealtimeToolCall(event: any): void {
     realtimeToolQueue = realtimeToolQueue
@@ -423,15 +468,10 @@ export async function createOpenAiRealtimeBridge({
             hangupRequestedByTool = false;
             callEnding = false;
 
-            if (openAiSocket.readyState === WebSocket.OPEN) {
-              sendJson(openAiSocket, {
-                type: "response.create",
-                response: {
-                  instructions:
-                    "Do not end the call yet. The caller has not had a chance to ask for anything else after the booking flow completed. Ask if they need help with anything else.",
-                },
-              });
-            }
+            requestRealtimeResponse({
+              instructions:
+                "Do not end the call yet. The caller has not had a chance to ask for anything else after the booking flow completed. Ask if they need help with anything else.",
+            });
           } else {
             hangupRequestedByTool = true;
           }
@@ -459,13 +499,10 @@ export async function createOpenAiRealtimeBridge({
           awaitingPostBookingClosureTurn = true;
           postBookingClosureTranscript = lastUserTranscript;
 
-          if (openAiSocket.readyState === WebSocket.OPEN && !callEnding) {
-            sendJson(openAiSocket, {
-              type: "response.create",
-              response: {
-                instructions:
-                  "The booking flow is complete. Do not end the call yet. Ask the caller if they need help with anything else, using the caller's active language.",
-              },
+          if (!callEnding) {
+            requestRealtimeResponse({
+              instructions:
+                "The booking flow is complete. Do not end the call yet. Ask the caller if they need help with anything else, using the caller's active language.",
             });
           }
         }
@@ -530,14 +567,11 @@ export async function createOpenAiRealtimeBridge({
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
     if (twilioSocket.readyState !== WebSocket.OPEN) return;
 
-    sendJson(openAiSocket, {
-      type: "response.create",
-      response: {
-        instructions: buildInitialGreetingInstruction({
-          brand: context.brand || context.tenant.name || "the business",
-          locale: currentLocale,
-        }),
-      },
+    requestRealtimeResponse({
+      instructions: buildInitialGreetingInstruction({
+        brand: context.brand || context.tenant.name || "the business",
+        locale: currentLocale,
+      }),
     });
 
     tenantId = context.tenant.id;
@@ -572,12 +606,26 @@ export async function createOpenAiRealtimeBridge({
     });
   });
 
-  openAiSocket.on("message", (raw) => {
+    openAiSocket.on("message", (raw) => {
     const event = safeJsonParse(raw);
 
     if (!event) return;
 
+    if (event.type === "response.created") {
+      activeResponseId = event.response?.id || null;
+      return;
+    }
+
     if (event.type === "error") {
+      if (isConversationAlreadyHasActiveResponseError(event)) {
+        console.warn("[VOICE_REALTIME][RESPONSE_ALREADY_ACTIVE_IGNORED]", {
+          callSid,
+          activeResponseId,
+        });
+
+        return;
+      }
+
       console.error("[VOICE_REALTIME][OPENAI_ERROR]", JSON.stringify(event));
       return;
     }
@@ -683,7 +731,11 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (event.type === "response.done") {
-      if (hangupRequestedByTool) {
+      activeResponseId = null;
+
+      flushPendingRealtimeResponse();
+
+      if (hangupRequestedByTool && !pendingResponseCreate && !activeResponseId) {
         hangupRequestedByTool = false;
 
         endTwilioCall({
