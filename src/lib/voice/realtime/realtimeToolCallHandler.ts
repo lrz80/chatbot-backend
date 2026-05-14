@@ -12,7 +12,10 @@ type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 type HandleRealtimeToolCallParams = {
   event: any;
   openAiSocket: WebSocket;
-  requestRealtimeResponse: (response?: Record<string, unknown>) => void;
+  requestRealtimeResponse: (
+    response?: Record<string, unknown>,
+    source?: string
+  ) => void;
   callSid: string | null;
   tenantId: string | null;
   callerPhone: string | null;
@@ -243,11 +246,21 @@ export async function handleRealtimeToolCall(
       ? {
           ...toolArgs,
           step_key: clean(toolArgs.step_key || ""),
-          value: clean(toolArgs.value || lastUserTranscript || ""),
+          value: clean(lastUserTranscript || toolArgs.value || ""),
         }
       : {
           ...toolArgs,
         };
+
+  if (toolName === "submit_booking_step") {
+    console.log("[VOICE_REALTIME][SUBMIT_STEP_VALUE_SOURCE]", {
+      callSid,
+      step_key: effectiveToolArgs.step_key,
+      model_value: clean(toolArgs.value || ""),
+      transcript_value: clean(lastUserTranscript || ""),
+      final_value: clean(effectiveToolArgs.value || ""),
+    });
+  }
 
   try {
     const toolResult = await executeRealtimeTool({
@@ -328,12 +341,15 @@ export async function handleRealtimeToolCall(
       },
     });
 
-    requestRealtimeResponse({
-      instructions: buildToolFollowupInstructions({
-        toolName,
-        toolResult: (toolResult || {}) as RealtimeToolResult,
-      }),
-    });
+    requestRealtimeResponse(
+      {
+        instructions: buildToolFollowupInstructions({
+          toolName,
+          toolResult: (toolResult || {}) as RealtimeToolResult,
+        }),
+      },
+      `tool_followup:${toolName}`
+    );
 
     return {
       consumed: true,
@@ -365,12 +381,15 @@ export async function handleRealtimeToolCall(
       },
     });
 
-    requestRealtimeResponse({
-      instructions: buildToolFollowupInstructions({
-        toolName,
-        toolResult: toolErrorResult,
-      }),
-    });
+    requestRealtimeResponse(
+      {
+        instructions: buildToolFollowupInstructions({
+          toolName,
+          toolResult: toolErrorResult,
+        }),
+      },
+      `tool_error:${toolName}`
+    );
 
     return {
       consumed: true,

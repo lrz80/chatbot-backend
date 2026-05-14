@@ -740,10 +740,16 @@ export async function createOpenAiRealtimeBridge({
     if (event.type === "response.done") {
       activeResponseId = null;
 
-      flushPendingRealtimeResponse();
+      const hadPendingResponse = Boolean(pendingResponseCreate);
+
+      if (hadPendingResponse) {
+        flushPendingRealtimeResponse();
+        return;
+      }
 
       if (hangupRequestedByTool && !pendingResponseCreate && !activeResponseId) {
         hangupRequestedByTool = false;
+        callEnding = true;
 
         endTwilioCall({
           callSid,
