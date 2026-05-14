@@ -298,9 +298,18 @@ export async function resolveVoiceScheduleValidation(
   });
 
   if (!requestedAvailability.ok) {
-    const rawSuggestedStarts = normalizeSuggestedStarts(
+    const rawProviderSuggestedStarts = normalizeSuggestedStarts(
+      (requestedAvailability as { suggestedStarts?: unknown }).suggestedStarts
+    );
+
+    const rawScheduleSuggestedStarts = normalizeSuggestedStarts(
       (scheduleValidation as { suggestedStarts?: unknown }).suggestedStarts
     );
+
+    const rawSuggestedStarts = dedupeStringArray([
+      ...rawProviderSuggestedStarts,
+      ...rawScheduleSuggestedStarts,
+    ]);
 
     const suggestedStarts = (
       await filterBookableSuggestedStarts({
