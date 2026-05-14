@@ -60,6 +60,26 @@ function normalizeText(value: unknown): string {
     .trim();
 }
 
+function hasExplicitDateAnchor(value: unknown): boolean {
+  const text = normalizeText(value);
+
+  if (!text) {
+    return false;
+  }
+
+  return Boolean(
+    parseVoiceRequestedDate({
+      raw: `${text} 12:00`,
+      baseDate: new Date(),
+      timeZone: "America/New_York",
+    }).ok
+  );
+}
+
+function isValidDate(value: unknown): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime());
+}
+
 function toPositiveInt(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -242,6 +262,22 @@ function resolveDatePartsForWindow(params: {
   timeZone: string;
   referenceRequestedAt?: string | null;
 }): TimeZoneDateParts {
+  const referenceDate = params.referenceRequestedAt
+    ? new Date(params.referenceRequestedAt)
+    : null;
+
+  /**
+   * Important:
+   * In Realtime, the model can rewrite a vague follow-up like
+   * "in the morning" into "Friday morning" based on previous suggestions.
+   *
+   * If we already have a reference datetime from the last rejected attempt,
+   * that reference date must win for window-only follow-ups.
+   */
+  if (referenceDate && isValidDate(referenceDate)) {
+    return getDatePartsInTimeZone(referenceDate, params.timeZone);
+  }
+
   const parsedFromRaw = parseVoiceRequestedDate({
     raw: `${params.raw} ${params.windowStart}`,
     baseDate: params.baseDate,
@@ -250,14 +286,6 @@ function resolveDatePartsForWindow(params: {
 
   if (parsedFromRaw.ok) {
     return getDatePartsInTimeZone(parsedFromRaw.requestedAt, params.timeZone);
-  }
-
-  const referenceDate = params.referenceRequestedAt
-    ? new Date(params.referenceRequestedAt)
-    : null;
-
-  if (referenceDate && !Number.isNaN(referenceDate.getTime())) {
-    return getDatePartsInTimeZone(referenceDate, params.timeZone);
   }
 
   return getDatePartsInTimeZone(params.baseDate, params.timeZone);
