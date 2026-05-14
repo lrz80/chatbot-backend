@@ -157,6 +157,28 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function parseJsonStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.map((item) => String(item || "").trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 export async function executeCanonicalBookingDatetimeStep(
   params: CanonicalBookingDatetimeStepParams
 ): Promise<CanonicalBookingDatetimeStepResult> {
@@ -272,6 +294,9 @@ export async function executeCanonicalBookingDatetimeStep(
     channel: "voice",
     referenceRequestedAt: clean(
       currentBookingData.__datetime_reference_requested_at
+    ),
+    referenceSuggestedStarts: parseJsonStringArray(
+      currentBookingData.__datetime_reference_suggested_starts
     ),
   });
 

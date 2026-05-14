@@ -24,6 +24,7 @@ type ResolveVoiceAvailabilityWindowParams = {
   baseDate?: Date;
   timeZone?: string | null;
   referenceRequestedAt?: string | null;
+  referenceSuggestedStarts?: string[];
 };
 
 type ResolveVoiceAvailabilityWindowResult =
@@ -60,20 +61,26 @@ function normalizeText(value: unknown): string {
     .trim();
 }
 
-function hasExplicitDateAnchor(value: unknown): boolean {
-  const text = normalizeText(value);
+function stripMatchedWindowLabels(params: {
+  raw: string;
+  labels: string[];
+}): string {
+  let normalizedRaw = ` ${normalizeText(params.raw)} `;
 
-  if (!text) {
-    return false;
+  for (const label of params.labels) {
+    const normalizedLabel = normalizeText(label);
+
+    if (!normalizedLabel) {
+      continue;
+    }
+
+    normalizedRaw = normalizedRaw.replace(
+      ` ${normalizedLabel} `,
+      " "
+    );
   }
 
-  return Boolean(
-    parseVoiceRequestedDate({
-      raw: `${text} 12:00`,
-      baseDate: new Date(),
-      timeZone: "America/New_York",
-    }).ok
-  );
+  return normalizedRaw.replace(/\s+/g, " ").trim();
 }
 
 function isValidDate(value: unknown): value is Date {
@@ -200,6 +207,76 @@ function getDatePartsInTimeZone(
   };
 }
 
+function getLocalDateKey(date: Date, timeZone: string): string {
+  const parts = getDatePartsInTimeZone(date, timeZone);
+
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(
+    parts.day
+  ).padStart(2, "0")}`;
+}
+
+function getDominantDatePartsFromSuggestedStarts(params: {
+  suggestedStarts: string[];
+  timeZone: string;
+}): TimeZoneDateParts | null {
+  const counts = new Map<string, { count: number; date: Date }>();
+
+  for (const value of params.suggestedStarts) {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      continue;
+    }
+
+    const key = getLocalDateKey(date, params.timeZone);
+    const current = counts.get(key);
+
+    counts.set(key, {
+      count: (current?.count || 0) + 1,
+      date: current?.date || date,
+    });
+  }
+
+  const dominant = Array.from(counts.values()).sort(
+    (a, b) => b.count - a.count
+  )[0];
+
+  if (!dominant) {
+    return null;
+  }
+
+  return getDatePartsInTimeZone(dominant.date, params.timeZone);
+}
+
+function parseDatePartsFromRawIfExplicit(params: {
+  raw: string;
+  windowStart: string;
+  baseDate: Date;
+  timeZone: string;
+  matchedWindowLabels: string[];
+}): TimeZoneDateParts | null {
+  const rawWithoutWindowLabel = stripMatchedWindowLabels({
+    raw: params.raw,
+    labels: params.matchedWindowLabels,
+  });
+
+  if (!rawWithoutWindowLabel) {
+    return null;
+  }
+
+  const parsed = parseVoiceRequestedDate({
+    raw: `${rawWithoutWindowLabel} ${params.windowStart}`,
+    baseDate: params.baseDate,
+    timeZone: params.timeZone,
+  });
+
+  if (!parsed.ok) {
+    return null;
+  }
+
+  return getDatePartsInTimeZone(parsed.requestedAt, params.timeZone);
+}
+
 function buildDateInTimeZone(params: {
   year: number;
   month: number;
@@ -261,31 +338,38 @@ function resolveDatePartsForWindow(params: {
   baseDate: Date;
   timeZone: string;
   referenceRequestedAt?: string | null;
+  referenceSuggestedStarts?: string[];
+  matchedWindowLabels: string[];
 }): TimeZoneDateParts {
+  const explicitRawDateParts = parseDatePartsFromRawIfExplicit({
+    raw: params.raw,
+    windowStart: params.windowStart,
+    baseDate: params.baseDate,
+    timeZone: params.timeZone,
+    matchedWindowLabels: params.matchedWindowLabels,
+  });
+
+  if (explicitRawDateParts) {
+    return explicitRawDateParts;
+  }
+
+  const dominantSuggestedDateParts = getDominantDatePartsFromSuggestedStarts({
+    suggestedStarts: Array.isArray(params.referenceSuggestedStarts)
+      ? params.referenceSuggestedStarts
+      : [],
+    timeZone: params.timeZone,
+  });
+
+  if (dominantSuggestedDateParts) {
+    return dominantSuggestedDateParts;
+  }
+
   const referenceDate = params.referenceRequestedAt
     ? new Date(params.referenceRequestedAt)
     : null;
 
-  /**
-   * Important:
-   * In Realtime, the model can rewrite a vague follow-up like
-   * "in the morning" into "Friday morning" based on previous suggestions.
-   *
-   * If we already have a reference datetime from the last rejected attempt,
-   * that reference date must win for window-only follow-ups.
-   */
   if (referenceDate && isValidDate(referenceDate)) {
     return getDatePartsInTimeZone(referenceDate, params.timeZone);
-  }
-
-  const parsedFromRaw = parseVoiceRequestedDate({
-    raw: `${params.raw} ${params.windowStart}`,
-    baseDate: params.baseDate,
-    timeZone: params.timeZone,
-  });
-
-  if (parsedFromRaw.ok) {
-    return getDatePartsInTimeZone(parsedFromRaw.requestedAt, params.timeZone);
   }
 
   return getDatePartsInTimeZone(params.baseDate, params.timeZone);
@@ -492,14 +576,22 @@ export async function resolveVoiceAvailabilityWindow(
 
   const timeWindows = parseJsonObject(settings.time_windows);
 
+  let matchedWindowLabels: string[] = [];
+
   const matchedEntry = Object.entries(timeWindows).find(([, rawWindow]) => {
     const window = parseJsonObject(rawWindow) as TimeWindowConfig;
     const labels = getLocalizedLabels(window.labels, params.locale);
 
-    return labelMatchesRaw({
+    const matches = labelMatchesRaw({
       raw: params.raw,
       labels,
     });
+
+    if (matches) {
+      matchedWindowLabels = labels;
+    }
+
+    return matches;
   });
 
   if (!matchedEntry) {
@@ -532,6 +624,8 @@ export async function resolveVoiceAvailabilityWindow(
     baseDate,
     timeZone,
     referenceRequestedAt: params.referenceRequestedAt,
+    referenceSuggestedStarts: params.referenceSuggestedStarts,
+    matchedWindowLabels,
   });
 
   const referenceRequestedAt = buildDateInTimeZone({
@@ -579,6 +673,10 @@ export async function resolveVoiceAvailabilityWindow(
     raw: params.raw,
     locale: params.locale,
     windowKey,
+    matchedWindowLabels,
+    referenceRequestedAt: params.referenceRequestedAt,
+    referenceSuggestedStarts: params.referenceSuggestedStarts,
+    selectedDateParts: dateParts,
     timeZone,
     suggestedStarts,
   });
