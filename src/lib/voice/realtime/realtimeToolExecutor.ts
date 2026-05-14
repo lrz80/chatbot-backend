@@ -136,13 +136,6 @@ function mapStepForRealtime(
   };
 }
 
-function mapFlowStepsForRealtime(
-  steps: BookingFlowStepLike[],
-  locale?: VoiceLocale
-): RealtimeMappedStep[] {
-  return sortFlowSteps(steps).map((step) => mapStepForRealtime(step, locale));
-}
-
 function buildRealtimeBookingState(params: {
   steps: BookingFlowStepLike[];
   state: CallState;
@@ -219,9 +212,16 @@ function buildNextRequiredStep(params: {
   );
 
   return {
-    ...mapped,
+    step_key: mapped.step_key,
+    step_order: mapped.step_order,
+    slot: mapped.slot,
     prompt: renderedPrompt,
+    expected_type: mapped.expected_type,
+    required: mapped.required,
     retry_prompt: renderedRetryPrompt,
+    validation_config: null,
+    prompt_translations: null,
+    retry_prompt_translations: null,
   };
 }
 
@@ -307,7 +307,6 @@ export async function executeRealtimeTool(
 
       return {
         ok: true,
-        steps: mapFlowStepsForRealtime(steps, bookingContext.currentLocale),
         booking_state: bookingState,
         next_required_step: buildNextRequiredStep({
           steps,
