@@ -132,7 +132,21 @@ function buildOpenAiSessionUpdate(params: {
     session: {
       type: "realtime",
       model: params.model,
-      instructions: params.instructions,
+      instructions: [
+        params.instructions,
+        "",
+        "Realtime voice behavior:",
+        "- Speak naturally, warmly, and conversationally.",
+        "- Never sound like an IVR, script reader, form reader, or answering machine.",
+        "- When a booking step provides a prompt, use it only as the meaning of the question, not as a phrase to read literally.",
+        "- Rephrase booking questions in a human way while preserving the exact slot being requested.",
+        "- Do not skip required booking steps.",
+        "- Do not invent completed slots.",
+        "- Keep each spoken response short because this is a phone call.",
+        "- Ask only one booking question at a time.",
+        "- If the caller already answered the current slot, submit it with the proper tool instead of asking again.",
+        "- Preserve the caller's active language.",
+      ].join("\n"),
       audio: {
         input: {
           format: {
