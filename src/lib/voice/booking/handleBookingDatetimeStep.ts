@@ -274,12 +274,31 @@ export async function executeCanonicalBookingDatetimeStep(
   const isIncompleteDatetimeReason = !isUnavailableReason;
 
   if (!scheduleValidation.ok) {
+        const rawTopLevelSuggestedStarts = Array.isArray(
+      (scheduleValidation as any).suggestedStarts
+    )
+      ? (scheduleValidation as any).suggestedStarts
+      : [];
+
+    const rawProviderSuggestedStarts = Array.isArray(
+      (scheduleValidation as any).requestedAvailability?.suggestedStarts
+    )
+      ? (scheduleValidation as any).requestedAvailability.suggestedStarts
+      : [];
+
+    const referenceSuggestedStartsForState = [
+      ...rawTopLevelSuggestedStarts,
+      ...rawProviderSuggestedStarts,
+    ]
+      .map((value: unknown) => String(value || "").trim())
+      .filter(Boolean);
+
     const bookingDataWithSuggestedStarts = {
       ...currentBookingData,
+      requested_service: serviceName,
+      requested_datetime: rawDatetime,
       __datetime_reference_suggested_starts: JSON.stringify(
-        Array.isArray(scheduleValidation.suggestedStarts)
-          ? scheduleValidation.suggestedStarts
-          : []
+        referenceSuggestedStartsForState
       ),
     };
 
@@ -322,33 +341,40 @@ export async function executeCanonicalBookingDatetimeStep(
         : localizedRetryBase;
 
     const rawAvailableTimes = isUnavailableReason
-      ? Array.isArray(scheduleValidation.availableTimes)
-        ? scheduleValidation.availableTimes
-        : []
+      ? Array.isArray((scheduleValidation as any).availableTimes)
+        ? (scheduleValidation as any).availableTimes
+        : Array.isArray((scheduleValidation as any).requestedAvailability?.availableTimes)
+          ? (scheduleValidation as any).requestedAvailability.availableTimes
+          : []
       : [];
 
     const availableTimes = rawAvailableTimes
-      .map((value) => String(value || "").trim())
+      .map((value: unknown) => String(value || "").trim())
       .filter(Boolean);
 
     const availableTimesText = availableTimes.join(", ");
 
-    const suggestedStarts =
-      isUnavailableReason && Array.isArray(scheduleValidation.suggestedStarts)
-        ? scheduleValidation.suggestedStarts
-            .map((value) => String(value || "").trim())
-            .filter(Boolean)
-        : [];
+    const rawSuggestedStarts: unknown[] = isUnavailableReason
+      ? Array.isArray((scheduleValidation as any).suggestedStarts)
+        ? (scheduleValidation as any).suggestedStarts
+        : Array.isArray((scheduleValidation as any).requestedAvailability?.suggestedStarts)
+          ? (scheduleValidation as any).requestedAvailability.suggestedStarts
+          : []
+      : [];
 
-    const formattedSuggestedTimes = suggestedStarts
-      .map((iso) =>
+    const suggestedStarts: string[] = rawSuggestedStarts
+      .map((value: unknown) => String(value || "").trim())
+      .filter((value): value is string => Boolean(value));
+
+    const formattedSuggestedTimes: string[] = suggestedStarts
+      .map((iso: string) =>
         formatSuggestedStartForVoice(
           iso,
           currentLocale,
-          String(scheduleValidation.timeZone || "").trim() || "America/New_York"
+          String((scheduleValidation as any).timeZone || "").trim() || "America/New_York"
         )
       )
-      .filter(Boolean)
+      .filter((value): value is string => Boolean(value))
       .slice(0, 3);
 
     const suggestedTimesText = formattedSuggestedTimes.join(", ");
