@@ -32,6 +32,7 @@ export type ResolveVoiceScheduleValidationResult =
   | {
       ok: false;
       reason: "lead_time_not_met";
+      requestedAt: Date;
       availableTimes: [];
       suggestedStarts: string[];
       timeZone: string;
@@ -39,6 +40,7 @@ export type ResolveVoiceScheduleValidationResult =
   | {
       ok: false;
       reason: "schedule_not_available";
+      requestedAt: Date;
       availableTimes: string[];
       suggestedStarts: string[];
       timeZone: string;
@@ -216,6 +218,7 @@ export async function resolveVoiceScheduleValidation(
       return {
         ok: false,
         reason: "lead_time_not_met",
+        requestedAt: parsed.requestedAt,
         availableTimes: [],
         suggestedStarts,
         timeZone,
@@ -268,6 +271,7 @@ export async function resolveVoiceScheduleValidation(
     return {
       ok: false,
       reason: "schedule_not_available",
+      requestedAt: parsed.requestedAt,
       availableTimes,
       suggestedStarts,
       timeZone,
@@ -325,6 +329,7 @@ export async function resolveVoiceScheduleValidation(
     return {
       ok: false,
       reason: "schedule_not_available",
+      requestedAt: parsed.requestedAt,
       availableTimes: [],
       suggestedStarts,
       timeZone,

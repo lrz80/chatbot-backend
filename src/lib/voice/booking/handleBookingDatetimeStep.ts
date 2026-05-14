@@ -8,6 +8,7 @@ import {
 } from "../voiceBookingHelpers";
 import { twoSentencesMax } from "../speechFormatting";
 import { upsertVoiceCallState } from "../upsertVoiceCallState";
+import { resolveVoiceAvailabilityWindow } from "../../appointments/resolveVoiceAvailabilityWindow";
 
 type BookingStepLike = {
   step_key: string;
@@ -76,7 +77,11 @@ export type CanonicalBookingDatetimeStepResult =
       kind: "retry";
       state: CallState;
       prompt: string;
-      context: "empty_datetime" | "incomplete_datetime" | "slot_unavailable";
+      context:
+        | "empty_datetime"
+        | "incomplete_datetime"
+        | "slot_unavailable"
+        | "availability_window";
     }
   | {
       kind: "resolved";
@@ -146,6 +151,10 @@ function formatSuggestedStartForVoice(
     hour12: true,
     timeZone,
   }).format(date);
+}
+
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
 }
 
 export async function executeCanonicalBookingDatetimeStep(
@@ -255,6 +264,58 @@ export async function executeCanonicalBookingDatetimeStep(
     };
   }
 
+  const availabilityWindowResult = await resolveVoiceAvailabilityWindow({
+    tenantId,
+    serviceName,
+    raw: rawDatetime,
+    locale: currentLocale,
+    channel: "voice",
+    referenceRequestedAt: clean(
+      currentBookingData.__datetime_reference_requested_at
+    ),
+  });
+
+  if (availabilityWindowResult.kind === "window_result") {
+    const bookingDataWithWindowSuggestions = {
+      ...currentBookingData,
+      __datetime_reference_requested_at:
+        availabilityWindowResult.referenceRequestedAtIso,
+      __datetime_reference_suggested_starts: JSON.stringify(
+        availabilityWindowResult.suggestedStarts
+      ),
+      __datetime_reference_window_key: availabilityWindowResult.windowKey,
+    };
+
+    const nextState = {
+      ...state,
+      bookingStepIndex: currentIndex,
+      bookingData: bookingDataWithWindowSuggestions,
+    };
+
+    await upsertVoiceCallState({
+      callSid,
+      tenantId,
+      lang: nextState.lang ?? currentLocale,
+      turn: nextState.turn ?? 0,
+      awaiting: false,
+      pendingType: null,
+      awaitingNumber: false,
+      altDest: nextState.altDest ?? null,
+      smsSent: nextState.smsSent ?? false,
+      bookingStepIndex: currentIndex,
+      bookingData: bookingDataWithWindowSuggestions,
+    });
+
+    return {
+      kind: "retry",
+      state: nextState,
+      prompt: availabilityWindowResult.prompt,
+      context: availabilityWindowResult.ok
+        ? "availability_window"
+        : "slot_unavailable",
+    };
+  }
+
   const scheduleValidation = await resolveVoiceScheduleValidation({
     tenantId,
     serviceName,
@@ -293,12 +354,18 @@ export async function executeCanonicalBookingDatetimeStep(
       .map((value: unknown) => String(value || "").trim())
       .filter(Boolean);
 
+    const requestedAtForReference =
+      (scheduleValidation as any).requestedAt instanceof Date
+        ? (scheduleValidation as any).requestedAt.toISOString()
+        : clean(currentBookingData.__datetime_reference_requested_at);
+
     const bookingDataWithSuggestedStarts = {
       ...currentBookingData,
-      requested_service: serviceName,
-      requested_datetime: rawDatetime,
+      __datetime_reference_requested_at: requestedAtForReference,
       __datetime_reference_suggested_starts: JSON.stringify(
-        referenceSuggestedStartsForState
+        Array.isArray(scheduleValidation.suggestedStarts)
+          ? scheduleValidation.suggestedStarts
+          : []
       ),
     };
 
