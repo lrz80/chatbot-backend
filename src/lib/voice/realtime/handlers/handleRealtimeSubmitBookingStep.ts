@@ -414,12 +414,19 @@ export async function handleRealtimeSubmitBookingStep(
 
       const finalRetryPrompt = datetimeResult.prompt;
 
+      const isAvailabilityWindow =
+        datetimeResult.context === "availability_window";
+
       return {
-        ok: false,
-        error:
-          datetimeResult.context === "slot_unavailable"
+        ok: isAvailabilityWindow,
+        error: isAvailabilityWindow
+          ? undefined
+          : datetimeResult.context === "slot_unavailable"
             ? "SLOT_UNAVAILABLE"
             : "INVALID_DATETIME_STEP",
+        action_required: isAvailabilityWindow
+          ? "choose_from_availability_window"
+          : undefined,
         message: finalRetryPrompt,
         assistant_prompt: finalRetryPrompt,
         suggested_times: suggestedStarts,

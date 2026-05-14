@@ -52,10 +52,11 @@ function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
 function shouldBlockEndCallForPendingStep(state: CallState): boolean {
   const pendingStepKey = clean((state as any)?.pendingBookingStepKey || "");
 
-  return (
-    pendingStepKey === "confirm" ||
-    pendingStepKey === "offer_booking_sms"
-  );
+  if (!pendingStepKey) {
+    return false;
+  }
+
+  return pendingStepKey === "confirm" || pendingStepKey === "offer_booking_sms";
 }
 
 export async function handleRealtimeToolCall(
@@ -317,6 +318,9 @@ export async function handleRealtimeToolCall(
         ? (toolResult.next_required_step as Record<string, unknown>)
         : null;
 
+    const resolvedPendingBookingStepKey =
+      clean(nextRequiredStep?.step_key || "") || undefined;
+
     const nextRealtimeState: CallState = {
       ...realtimeState,
       lang: currentLocale,
@@ -324,7 +328,10 @@ export async function handleRealtimeToolCall(
         ...(realtimeState.bookingData || {}),
         ...collectedSlots,
       },
-      pendingBookingStepKey: clean(nextRequiredStep?.step_key || "") || undefined,
+      pendingBookingStepKey:
+        toolName === "send_booking_sms" || toolName === "end_call"
+          ? undefined
+          : resolvedPendingBookingStepKey,
     } as CallState;
 
     const hangupRequestedByTool =

@@ -311,9 +311,12 @@ async function getBookableStarts(params: {
   maxSuggestions: number;
   baseDate: Date;
 }): Promise<string[]> {
+  const startedAt = Date.now();
+
   const orchestrator = new BookingProviderOrchestrator();
   const earliestAllowedAt = addMinutes(params.baseDate, params.minLeadMinutes);
-  const starts: string[] = [];
+
+  const candidateStarts: Date[] = [];
 
   for (
     let minuteOfDay = params.windowStartMin;
@@ -330,43 +333,100 @@ async function getBookableStarts(params: {
       continue;
     }
 
-    const scheduleValidation = await validateServiceScheduleForDate({
-      tenantId: params.tenantId,
-      serviceName: params.serviceName,
-      requestedAt: start,
-      channel: params.channel,
-      timeZone: params.timeZone,
-      durationMin: params.durationMin,
-      bufferMin: params.bufferMin,
-      includeBufferInClosingBoundary: true,
-    });
+    candidateStarts.push(start);
+  }
 
-    if (!scheduleValidation.ok) {
-      continue;
-    }
+  const bookable: string[] = [];
 
-    const end = addMinutes(start, params.durationMin);
+  /**
+   * Keep this conservative.
+   * We want faster response than sequential checks, but we do not want to
+   * overload Google Calendar/provider APIs or create noisy rate-limit issues.
+   */
+  const concurrency = 4;
 
-    const providerAvailability = await orchestrator.checkAvailability({
-      tenantId: params.tenantId,
-      summary: params.serviceName,
-      startISO: start.toISOString(),
-      endISO: end.toISOString(),
-      timeZone: params.timeZone,
-      bufferMin: params.bufferMin,
-      calendarId: null,
-    });
+  for (
+    let batchStartIndex = 0;
+    batchStartIndex < candidateStarts.length;
+    batchStartIndex += concurrency
+  ) {
+    const batch = candidateStarts.slice(
+      batchStartIndex,
+      batchStartIndex + concurrency
+    );
 
-    if (providerAvailability.ok) {
-      starts.push(start.toISOString());
-    }
+    const batchResults = await Promise.all(
+      batch.map(async (start) => {
+        const scheduleValidation = await validateServiceScheduleForDate({
+          tenantId: params.tenantId,
+          serviceName: params.serviceName,
+          requestedAt: start,
+          channel: params.channel,
+          timeZone: params.timeZone,
+          durationMin: params.durationMin,
+          bufferMin: params.bufferMin,
+          includeBufferInClosingBoundary: true,
+        });
 
-    if (starts.length >= params.maxSuggestions) {
-      break;
+        if (!scheduleValidation.ok) {
+          return null;
+        }
+
+        const end = addMinutes(start, params.durationMin);
+
+        const providerAvailability = await orchestrator.checkAvailability({
+          tenantId: params.tenantId,
+          summary: params.serviceName,
+          startISO: start.toISOString(),
+          endISO: end.toISOString(),
+          timeZone: params.timeZone,
+          bufferMin: params.bufferMin,
+          calendarId: null,
+        });
+
+        if (!providerAvailability.ok) {
+          return null;
+        }
+
+        return start.toISOString();
+      })
+    );
+
+    for (const startISO of batchResults) {
+      if (!startISO) {
+        continue;
+      }
+
+      bookable.push(startISO);
+
+      if (bookable.length >= params.maxSuggestions) {
+        console.log("[VOICE][AVAILABILITY_WINDOW_FAST_RESULT]", {
+          tenantId: params.tenantId,
+          serviceName: params.serviceName,
+          checkedCandidates: Math.min(
+            batchStartIndex + concurrency,
+            candidateStarts.length
+          ),
+          totalCandidates: candidateStarts.length,
+          found: bookable.length,
+          durationMs: Date.now() - startedAt,
+        });
+
+        return bookable;
+      }
     }
   }
 
-  return starts;
+  console.log("[VOICE][AVAILABILITY_WINDOW_RESULT]", {
+    tenantId: params.tenantId,
+    serviceName: params.serviceName,
+    checkedCandidates: candidateStarts.length,
+    totalCandidates: candidateStarts.length,
+    found: bookable.length,
+    durationMs: Date.now() - startedAt,
+  });
+
+  return bookable;
 }
 
 export async function resolveVoiceAvailabilityWindow(
