@@ -209,10 +209,9 @@ function buildNextRequiredStep(params: {
   const mapped = mapStepForRealtime(step, locale);
   const templateValues = buildBookingPromptTemplateValues(bookingState);
 
-  const renderedPrompt = renderBookingStepTemplate(
-    overridePrompt || mapped.prompt,
-    templateValues
-  );
+  const renderedPrompt = overridePrompt
+    ? overridePrompt
+    : renderBookingStepTemplate(mapped.prompt, templateValues);
 
   const renderedRetryPrompt = renderBookingStepTemplate(
     mapped.retry_prompt,
