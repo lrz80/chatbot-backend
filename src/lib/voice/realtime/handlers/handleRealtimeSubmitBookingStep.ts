@@ -14,6 +14,7 @@ import {
   buildCanonicalCallState,
   parseJsonStringArray,
   extractStepOptionCandidates,
+  isConfirmationLikeStep,
   type BookingFlowStepLike,
   type BookingState,
 } from "../realtimeBookingFlowUtils";
@@ -214,6 +215,9 @@ export async function handleRealtimeSubmitBookingStep(
     appointmentAlreadyCreated &&
     clean(currentStep.expected_type) === "confirmation";
 
+  const isFinalConfirmationBeforeCreate =
+    !appointmentAlreadyCreated && isConfirmationLikeStep(currentStep);
+
   if (isServiceStep) {
     const serviceResult = await executeCanonicalBookingServiceStep({
       currentStep: currentStep as any,
@@ -342,6 +346,48 @@ export async function handleRealtimeSubmitBookingStep(
       answersBySlot: nextAnswers,
       bookingStepIndex: currentIndex,
     });
+  } else if (isFinalConfirmationBeforeCreate) {
+    const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
+
+    const storageSlot =
+      targetSlot && targetSlot !== "none" ? targetSlot : stepKey;
+
+    const nextAnswers = {
+      ...rawAnswers,
+      [storageSlot]: normalizedStepValue,
+      [stepKey]: normalizedStepValue,
+    };
+
+    const confirmationState = buildCanonicalCallState({
+      state: workingState,
+      answersBySlot: nextAnswers,
+      bookingStepIndex: currentIndex,
+    });
+
+    Object.assign(bookingContext.state, confirmationState);
+
+    await persistVoiceState({
+      tenantId,
+      callSid: bookingContext.callSid,
+      state: confirmationState,
+      locale: bookingContext.currentLocale,
+    });
+
+    const bookingState = buildRealtimeBookingState({
+      steps,
+      state: confirmationState,
+      explicitCurrentIndex: null,
+      finalConfirmationGranted: true,
+      readyToCreate: true,
+    });
+
+    return {
+      ok: true,
+      booking_state: bookingState,
+      next_required_step: null,
+      assistant_prompt: "",
+      action_required: "create_appointment",
+    };
   } else {
     const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
     const optionCandidates = extractStepOptionCandidates(currentStep);
