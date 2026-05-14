@@ -62,6 +62,47 @@ type HandleRealtimeCreateAppointmentParams = {
   }) => RealtimeMappedStep | null;
 };
 
+function buildRealtimeBookingSmsPayload(params: {
+  tenant: any;
+  answersBySlot: Record<string, unknown>;
+  appointment: any;
+  fallbackPhone: string | null;
+}): string {
+  const businessName = clean(params.tenant?.name);
+
+  const businessPhone =
+    clean(params.tenant?.telefono_negocio) ||
+    clean(params.tenant?.twilio_voice_number) ||
+    clean(params.tenant?.twilio_sms_number) ||
+    clean(params.fallbackPhone);
+
+  const service =
+    clean(params.answersBySlot.service) ||
+    clean(params.answersBySlot.requested_service);
+
+  const datetime =
+    clean(params.answersBySlot.datetime_display) ||
+    clean(params.answersBySlot.datetime) ||
+    clean(params.answersBySlot.datetime_iso);
+
+  const customerName =
+    clean(params.answersBySlot.customer_name) ||
+    clean(params.answersBySlot.name);
+
+  const googleCalendarLink =
+    clean(params.appointment?.google_event_link) ||
+    clean(params.appointment?.google_calendar_link);
+
+  return JSON.stringify({
+    business_name: businessName,
+    business_phone: businessPhone,
+    service,
+    datetime,
+    customer_name: customerName,
+    google_calendar_link: googleCalendarLink,
+  });
+}
+
 export async function handleRealtimeCreateAppointment(
   params: HandleRealtimeCreateAppointmentParams
 ): Promise<any> {
@@ -204,6 +245,13 @@ export async function handleRealtimeCreateAppointment(
         },
     });
 
+    const bookingSmsPayload = buildRealtimeBookingSmsPayload({
+      tenant: bookingContext.tenant,
+      answersBySlot,
+      appointment,
+      fallbackPhone: bookingContext.didNumber,
+    });
+
     const baseCreatedState: CallState = {
       ...bookingContext.state,
       bookingData: {
@@ -213,6 +261,7 @@ export async function handleRealtimeCreateAppointment(
         external_calendar_event_id: clean(appointment.external_calendar_event_id),
         google_event_id: clean(appointment.google_event_id),
         google_event_link: clean(appointment.google_event_link),
+        booking_sms_payload: bookingSmsPayload,
       },
     };
 
