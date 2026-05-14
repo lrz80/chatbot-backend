@@ -246,11 +246,22 @@ export async function handleRealtimeToolCall(
       ? {
           ...toolArgs,
           step_key: clean(toolArgs.step_key || ""),
-          value: clean(lastUserTranscript || toolArgs.value || ""),
+          value: clean(toolArgs.value || lastUserTranscript || ""),
+          raw_transcript_value: clean(lastUserTranscript || ""),
         }
       : {
           ...toolArgs,
         };
+
+  if (toolName === "submit_booking_step") {
+    console.log("[VOICE_REALTIME][SUBMIT_STEP_VALUE_SOURCE]", {
+      callSid,
+      step_key: effectiveToolArgs.step_key,
+      model_value: clean(toolArgs.value || ""),
+      transcript_value: clean(lastUserTranscript || ""),
+      final_value: clean(effectiveToolArgs.value || ""),
+    });
+  }
 
   if (toolName === "submit_booking_step") {
     console.log("[VOICE_REALTIME][SUBMIT_STEP_VALUE_SOURCE]", {

@@ -20,6 +20,7 @@ import {
   type BookingFlowStepLike,
   type BookingState,
 } from "../realtimeBookingFlowUtils";
+import { hasExplicitVoiceDateAnchor } from "../../../appointments/parseVoiceRequestedDate";
 
 type RealtimeBookingContext = {
   tenant: any;
@@ -184,6 +185,7 @@ export async function handleRealtimeSubmitBookingStep(
 
   const stepKey = clean(args.step_key);
   const value = clean(args.value);
+  const rawTranscriptValue = clean(args.raw_transcript_value);
 
   if (!stepKey) {
     return {
@@ -365,6 +367,27 @@ export async function handleRealtimeSubmitBookingStep(
       bookingStepIndex: currentIndex,
     });
   } else if (isDatetimeStep) {
+    const datetimeInput =
+      rawTranscriptValue &&
+      hasExplicitVoiceDateAnchor({
+        raw: rawTranscriptValue,
+        timeZone:
+          clean(
+            bookingContext.cfg?.timezone ||
+              bookingContext.cfg?.appointment_timezone ||
+              bookingContext.tenant?.timezone
+          ) || "America/New_York",
+      })
+        ? rawTranscriptValue
+        : value;
+
+    console.log("[VOICE_REALTIME][DATETIME_INPUT_SELECTED]", {
+      callSid: bookingContext.callSid,
+      modelValue: value,
+      transcriptValue: rawTranscriptValue,
+      selectedValue: datetimeInput,
+    });
+
     const datetimeResult = await executeCanonicalBookingDatetimeStep({
       tenantId,
       callSid: bookingContext.callSid,
@@ -373,7 +396,7 @@ export async function handleRealtimeSubmitBookingStep(
       currentLocale: bookingContext.currentLocale,
       callerE164: callerPhone,
       state: workingState,
-      resolvedStepValue: value,
+      resolvedStepValue: datetimeInput,
     });
 
     if (datetimeResult.kind === "retry") {

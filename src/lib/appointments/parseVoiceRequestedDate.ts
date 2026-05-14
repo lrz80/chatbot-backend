@@ -320,6 +320,23 @@ function resolveSuggestedStartByTime(params: {
   return candidates[0];
 }
 
+export function hasExplicitVoiceDateAnchor(params: {
+  raw: string;
+  baseDate?: Date;
+  timeZone?: string;
+}): boolean {
+  const raw = String(params.raw || "").trim();
+
+  if (!raw) {
+    return false;
+  }
+
+  const baseDate = params.baseDate ? new Date(params.baseDate) : new Date();
+  const timeZone = params.timeZone || "America/New_York";
+
+  return Boolean(resolveTargetDateParts(raw, baseDate, timeZone));
+}
+
 export function parseVoiceRequestedDate(
   params: ParseVoiceRequestedDateParams
 ): ParseVoiceRequestedDateResult {
