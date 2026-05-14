@@ -331,31 +331,35 @@ async function endTwilioCall(params: {
   if (!callSid) return;
 
   const envAccountSid = process.env.TWILIO_ACCOUNT_SID?.trim() || "";
+  const envAuthToken = process.env.TWILIO_AUTH_TOKEN?.trim() || "";
+
   const incomingAccountSid = clean(params.accountSid);
-  const accountSid = incomingAccountSid || envAccountSid;
-  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
 
-  if (incomingAccountSid && envAccountSid && incomingAccountSid !== envAccountSid) {
-    console.warn("[VOICE_REALTIME][TWILIO_HANGUP_SKIPPED]", {
-      callSid,
-      reason: "ACCOUNT_SID_MISMATCH",
-      incomingAccountSid,
-      envAccountSid,
-    });
-    return;
-  }
+  /**
+   * TWILIO_ACCOUNT_SID can be the master account.
+   * The call itself can belong to a subaccount.
+   *
+   * authAccountSid/authToken = credentials used to authenticate.
+   * targetAccountSid = account that owns the call resource.
+   */
+  const authAccountSid = envAccountSid;
+  const authToken = envAuthToken;
+  const targetAccountSid = incomingAccountSid || envAccountSid;
 
-  if (!accountSid || !authToken) {
+  if (!authAccountSid || !authToken || !targetAccountSid) {
     console.warn("[VOICE_REALTIME][TWILIO_HANGUP_SKIPPED]", {
       callSid,
       reason: "MISSING_TWILIO_CREDENTIALS",
-      accountSid,
+      authAccountSid,
+      targetAccountSid,
     });
     return;
   }
 
   try {
-    const client = twilio(accountSid, authToken);
+    const client = twilio(authAccountSid, authToken, {
+      accountSid: targetAccountSid,
+    });
 
     await client.calls(callSid).update({
       status: "completed",
@@ -363,12 +367,15 @@ async function endTwilioCall(params: {
 
     console.log("[VOICE_REALTIME][TWILIO_CALL_COMPLETED]", {
       callSid,
-      accountSid,
+      authAccountSid,
+      targetAccountSid,
     });
   } catch (error) {
     console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
       callSid,
-      accountSid,
+      authAccountSid,
+      targetAccountSid,
+      incomingAccountSid,
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -396,10 +403,7 @@ export async function createOpenAiRealtimeBridge({
   let openAiReady = false;
   let sessionConfigured = false;
   let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
-    let bookingFlowLoaded = false;
-
-  let awaitingPostBookingClosureTurn = false;
-  let postBookingClosureTranscript = "";
+  let bookingFlowLoaded = false;
 
   let realtimeToolQueue: Promise<void> = Promise.resolve();
 
@@ -421,17 +425,31 @@ export async function createOpenAiRealtimeBridge({
     },
   });
 
-    function requestRealtimeResponse(response?: Record<string, unknown>): void {
+  function requestRealtimeResponse(
+    response?: Record<string, unknown>,
+    source = "unknown"
+  ): void {
     const event: Record<string, unknown> = {
       type: "response.create",
       ...(response ? { response } : {}),
     };
+
+    console.log("[VOICE_REALTIME][RESPONSE_CREATE_REQUESTED]", {
+      callSid,
+      source,
+      activeResponseId,
+      instructions:
+        typeof response?.instructions === "string"
+          ? response.instructions.slice(0, 500)
+          : null,
+    });
 
     if (activeResponseId) {
       pendingResponseCreate = event;
 
       console.warn("[VOICE_REALTIME][RESPONSE_CREATE_QUEUED]", {
         callSid,
+        source,
         activeResponseId,
       });
 
@@ -492,47 +510,13 @@ export async function createOpenAiRealtimeBridge({
         bookingFlowLoaded = toolCallResult.bookingFlowLoaded;
 
         if (toolCallResult.hangupRequestedByTool) {
-          if (awaitingPostBookingClosureTurn) {
-            hangupRequestedByTool = false;
-            callEnding = false;
-
-            requestRealtimeResponse({
-              instructions:
-                "Do not end the call yet. The caller has not had a chance to ask for anything else after the booking flow completed. Ask if they need help with anything else.",
-            });
-          } else {
-            hangupRequestedByTool = true;
-          }
+          hangupRequestedByTool = true;
         }
 
         callEnding = toolCallResult.callEnding;
 
         if (toolCallResult.resetLastUserDigits) {
           lastUserDigits = "";
-        }
-
-        const toolResult = toolCallResult.result;
-
-        const bookingFlowJustEnded =
-          toolResult &&
-          toolResult.ok === true &&
-          toolResult.next_required_step === null &&
-          (
-            toolResult.booking_outcome ||
-            toolResult.booking_state ||
-            toolResult.action_required === "post_booking_step_completed"
-          );
-
-        if (bookingFlowJustEnded) {
-          awaitingPostBookingClosureTurn = true;
-          postBookingClosureTranscript = lastUserTranscript;
-
-          if (!callEnding) {
-            requestRealtimeResponse({
-              instructions:
-                "The booking flow is complete. Do not end the call yet. Ask the caller if they need help with anything else, using the caller's active language.",
-            });
-          }
         }
 
       })
@@ -595,12 +579,15 @@ export async function createOpenAiRealtimeBridge({
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
     if (twilioSocket.readyState !== WebSocket.OPEN) return;
 
-    requestRealtimeResponse({
-      instructions: buildInitialGreetingInstruction({
-        brand: context.brand || context.tenant.name || "the business",
-        locale: currentLocale,
-      }),
-    });
+    requestRealtimeResponse(
+      {
+        instructions: buildInitialGreetingInstruction({
+          brand: context.brand || context.tenant.name || "the business",
+          locale: currentLocale,
+        }),
+      },
+      "bridge:initial_greeting"
+    );
 
     tenantId = context.tenant.id;
     realtimeTenant = context.tenant;
@@ -711,14 +698,6 @@ export async function createOpenAiRealtimeBridge({
           }
 
           lastUserTranscript = transcriptResult.transcript;
-
-          if (
-            awaitingPostBookingClosureTurn &&
-            clean(lastUserTranscript) &&
-            clean(lastUserTranscript) !== clean(postBookingClosureTranscript)
-          ) {
-            awaitingPostBookingClosureTurn = false;
-          }
 
           currentLocale = transcriptResult.currentLocale;
 
