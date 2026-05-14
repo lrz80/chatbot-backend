@@ -188,70 +188,76 @@ export async function handleRealtimeCreateAppointment(
         },
     });
 
-    const createdState: CallState = {
-        ...bookingContext.state,
-        bookingStepIndex: undefined,
-        bookingData: {
+    const baseCreatedState: CallState = {
+      ...bookingContext.state,
+      bookingData: {
         ...(bookingContext.state.bookingData || {}),
         ...answersBySlot,
         appointment_id: clean(appointment.id),
         external_calendar_event_id: clean(appointment.external_calendar_event_id),
         google_event_id: clean(appointment.google_event_id),
         google_event_link: clean(appointment.google_event_link),
-        },
+      },
     };
 
-    Object.assign(bookingContext.state, createdState);
-
-    await upsertVoiceCallState({
-        callSid: bookingContext.callSid,
-        tenantId,
-        lang: createdState.lang ?? bookingContext.currentLocale,
-        turn: createdState.turn ?? 0,
-        awaiting: false,
-        pendingType: null,
-        awaitingNumber: false,
-        altDest: createdState.altDest ?? null,
-        smsSent: createdState.smsSent ?? false,
-        bookingStepIndex: null,
-        bookingData: createdState.bookingData || {},
-    });
-
     const successIndex =
-        currentIndex + 1 < steps.length ? currentIndex + 1 : null;
+      currentIndex + 1 < steps.length ? currentIndex + 1 : null;
 
-    const successBookingState =
-        successIndex === null
+        const successBookingState =
+      successIndex === null
         ? null
         : buildRealtimeBookingState({
             steps,
-            state: createdState,
+            state: baseCreatedState,
             explicitCurrentIndex: successIndex,
-            });
+          });
 
     const successStep =
-        successBookingState === null
+      successBookingState === null
         ? null
         : buildNextRequiredStep({
             steps,
             bookingState: successBookingState,
             locale: bookingContext.currentLocale,
-            });
+          });
 
     const successIsInformational =
-        successStep &&
-        successStep.required !== true &&
-        clean(successStep.slot) === "none" &&
-        clean(successStep.expected_type) !== "confirmation";
+      successStep &&
+      successStep.required !== true &&
+      clean(successStep.slot) === "none" &&
+      clean(successStep.expected_type) !== "confirmation";
 
     const nextIndex = successIsInformational
-        ? successIndex !== null && successIndex + 1 < steps.length
+      ? successIndex !== null && successIndex + 1 < steps.length
         ? successIndex + 1
         : null
-        : successIndex;
+      : successIndex;
+
+    const createdState: CallState = {
+      ...baseCreatedState,
+      bookingStepIndex:
+        typeof nextIndex === "number" ? nextIndex : undefined,
+    };
+
+    Object.assign(bookingContext.state, createdState);
+
+    await upsertVoiceCallState({
+      callSid: bookingContext.callSid,
+      tenantId,
+      lang: createdState.lang ?? bookingContext.currentLocale,
+      turn: createdState.turn ?? 0,
+      awaiting: false,
+      pendingType: null,
+      awaitingNumber: false,
+      altDest: createdState.altDest ?? null,
+      smsSent: createdState.smsSent ?? false,
+      bookingStepIndex:
+        typeof nextIndex === "number" ? nextIndex : null,
+      bookingData: createdState.bookingData || {},
+    });
 
     const nextBookingState =
-        nextIndex === null
+      nextIndex === null
         ? {
             current_step_key: null,
             current_step_slot: null,
@@ -259,23 +265,23 @@ export async function handleRealtimeCreateAppointment(
             final_confirmation_granted: true,
             ready_to_create: false,
             collected_slots: answersBySlot,
-            }
+          }
         : buildRealtimeBookingState({
             steps,
             state: createdState,
             explicitCurrentIndex: nextIndex,
             finalConfirmationGranted: true,
             readyToCreate: false,
-            });
+          });
 
     const nextRequiredStep =
-        nextIndex === null
+      nextIndex === null
         ? null
         : buildNextRequiredStep({
             steps,
             bookingState: nextBookingState,
             locale: bookingContext.currentLocale,
-            });
+          });
 
     return {
         ok: true,
