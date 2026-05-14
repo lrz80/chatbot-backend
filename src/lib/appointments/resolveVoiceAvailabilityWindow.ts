@@ -207,6 +207,35 @@ function getDatePartsInTimeZone(
   };
 }
 
+function parseDatePartsFromRawIfExplicit(params: {
+  raw: string;
+  windowStart: string;
+  baseDate: Date;
+  timeZone: string;
+  matchedWindowLabels: string[];
+}): TimeZoneDateParts | null {
+  const rawWithoutWindowLabel = stripMatchedWindowLabels({
+    raw: params.raw,
+    labels: params.matchedWindowLabels,
+  });
+
+  if (!rawWithoutWindowLabel) {
+    return null;
+  }
+
+  const parsed = parseVoiceRequestedDate({
+    raw: `${rawWithoutWindowLabel} ${params.windowStart}`,
+    baseDate: params.baseDate,
+    timeZone: params.timeZone,
+  });
+
+  if (!parsed.ok) {
+    return null;
+  }
+
+  return getDatePartsInTimeZone(parsed.requestedAt, params.timeZone);
+}
+
 function getLocalDateKey(date: Date, timeZone: string): string {
   const parts = getDatePartsInTimeZone(date, timeZone);
 
@@ -246,35 +275,6 @@ function getDominantDatePartsFromSuggestedStarts(params: {
   }
 
   return getDatePartsInTimeZone(dominant.date, params.timeZone);
-}
-
-function parseDatePartsFromRawIfExplicit(params: {
-  raw: string;
-  windowStart: string;
-  baseDate: Date;
-  timeZone: string;
-  matchedWindowLabels: string[];
-}): TimeZoneDateParts | null {
-  const rawWithoutWindowLabel = stripMatchedWindowLabels({
-    raw: params.raw,
-    labels: params.matchedWindowLabels,
-  });
-
-  if (!rawWithoutWindowLabel) {
-    return null;
-  }
-
-  const parsed = parseVoiceRequestedDate({
-    raw: `${rawWithoutWindowLabel} ${params.windowStart}`,
-    baseDate: params.baseDate,
-    timeZone: params.timeZone,
-  });
-
-  if (!parsed.ok) {
-    return null;
-  }
-
-  return getDatePartsInTimeZone(parsed.requestedAt, params.timeZone);
 }
 
 function buildDateInTimeZone(params: {

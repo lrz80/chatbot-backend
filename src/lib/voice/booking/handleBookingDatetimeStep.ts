@@ -388,11 +388,18 @@ export async function executeCanonicalBookingDatetimeStep(
       ...currentBookingData,
       __datetime_reference_requested_at: requestedAtForReference,
       __datetime_reference_suggested_starts: JSON.stringify(
-        Array.isArray(scheduleValidation.suggestedStarts)
-          ? scheduleValidation.suggestedStarts
-          : []
+        referenceSuggestedStartsForState
       ),
     };
+
+    console.log("[VOICE][DATETIME_REFERENCE_STATE_SAVED]", {
+      tenantId,
+      callSid,
+      serviceName,
+      rawDatetime,
+      requestedAtForReference,
+      referenceSuggestedStartsForState,
+    });
 
     const nextState = {
       ...state,
