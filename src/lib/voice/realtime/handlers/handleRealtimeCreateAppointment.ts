@@ -175,10 +175,26 @@ export async function handleRealtimeCreateAppointment(
     };
     }
 
+    const stepKeyToSlot = Object.fromEntries(
+      steps
+        .map((step) => {
+          const stepKey = clean(step.step_key);
+          const slot = clean(
+            typeof step.validation_config?.slot === "string"
+            ? step.validation_config.slot
+            : ""
+          );
+
+          return stepKey && slot && slot !== "none" ? [stepKey, slot] : null;
+        })
+        .filter((entry): entry is [string, string] => Array.isArray(entry))
+    );
+
     try {
     const appointment = await createAppointmentFromVoice({
         tenantId,
         answersBySlot,
+        stepKeyToSlot,
         settings: {
         default_duration_min: Number(settingsRow.default_duration_min || 0),
         buffer_min: Number(settingsRow.buffer_min || 0),

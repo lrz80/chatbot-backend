@@ -15,6 +15,7 @@ type AppointmentSettings = {
 type Args = {
   tenantId: string;
   answersBySlot: Record<string, string | null | undefined>;
+  stepKeyToSlot?: Record<string, string>;
   idempotencyKey?: string;
   settings: AppointmentSettings;
 };
@@ -28,7 +29,8 @@ function humanizeBookingFieldName(key: string): string {
 }
 
 function buildExtraBookingDescriptionLines(
-  answersBySlot: Record<string, string | null | undefined>
+  answersBySlot: Record<string, string | null | undefined>,
+  stepKeyToSlot: Record<string, string> = {}
 ): string[] {
   const excludedKeys = new Set([
     "service",
@@ -39,6 +41,18 @@ function buildExtraBookingDescriptionLines(
     "customer_phone",
     "customer_email",
     "confirmation",
+
+    // Platform/internal aliases and metadata. These are not tenant/business rules.
+    "step_key",
+    "value",
+    "name",
+    "phone",
+    "confirm",
+    "customer_confirmed",
+    "service_display",
+    "datetime_reference_suggested_starts",
+    "__datetime_reference_suggested_starts",
+    "__booking_busy_suggested_starts",
   ]);
 
   return Object.entries(answersBySlot || {})
@@ -46,7 +60,19 @@ function buildExtraBookingDescriptionLines(
       const cleanKey = String(key || "").trim();
       const cleanValue = String(value || "").trim();
 
-      return Boolean(cleanKey) && Boolean(cleanValue) && !excludedKeys.has(cleanKey);
+      if (!cleanKey || !cleanValue) return false;
+      if (excludedKeys.has(cleanKey)) return false;
+
+      const canonicalSlot = String(stepKeyToSlot[cleanKey] || "").trim();
+      const canonicalValue = canonicalSlot
+        ? String(answersBySlot[canonicalSlot] || "").trim()
+        : "";
+
+      if (canonicalSlot && canonicalSlot !== cleanKey && canonicalValue === cleanValue) {
+        return false;
+      }
+
+      return true;
     })
     .map(([key, value]) => {
       return `${humanizeBookingFieldName(key)}: ${String(value).trim()}`;
@@ -115,7 +141,10 @@ export async function createAppointmentFromVoice(args: Args) {
     args.idempotencyKey ||
     `voice:${args.tenantId}:${customerPhone || "unknown"}:${start.toISOString()}`;
 
-  const extraDescriptionLines = buildExtraBookingDescriptionLines(args.answersBySlot);
+  const extraDescriptionLines = buildExtraBookingDescriptionLines(
+    args.answersBySlot,
+    args.stepKeyToSlot || {}
+  );
 
   const orchestrator = new BookingProviderOrchestrator();
 
