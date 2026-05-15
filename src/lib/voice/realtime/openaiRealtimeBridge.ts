@@ -411,7 +411,9 @@ export async function createOpenAiRealtimeBridge({
   let pendingResponseCreate: Record<string, unknown> | null = null;
 
   let hangupRequestedByTool = false;
-  
+  let endCallGoodbyeRequested = false;
+  let endCallGoodbyeResponseId: string | null = null;
+
   let callEnding = false;
   
   let localeLocked = false;
@@ -433,6 +435,11 @@ export async function createOpenAiRealtimeBridge({
       type: "response.create",
       ...(response ? { response } : {}),
     };
+
+    if (source === "tool_followup:end_call") {
+      endCallGoodbyeRequested = true;
+      endCallGoodbyeResponseId = null;
+    }
 
     console.log("[VOICE_REALTIME][RESPONSE_CREATE_REQUESTED]", {
       callSid,
@@ -628,6 +635,16 @@ export async function createOpenAiRealtimeBridge({
 
     if (event.type === "response.created") {
       activeResponseId = event.response?.id || null;
+
+      if (endCallGoodbyeRequested && !endCallGoodbyeResponseId) {
+        endCallGoodbyeResponseId = activeResponseId;
+
+        console.log("[VOICE_REALTIME][END_CALL_GOODBYE_RESPONSE_CREATED]", {
+          callSid,
+          responseId: endCallGoodbyeResponseId,
+        });
+      }
+
       return;
     }
 
@@ -785,6 +802,8 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (event.type === "response.done") {
+      const completedResponseId = event.response?.id || activeResponseId;
+
       activeResponseId = null;
 
       const hadPendingResponse = Boolean(pendingResponseCreate);
@@ -794,20 +813,30 @@ export async function createOpenAiRealtimeBridge({
         return;
       }
 
-      if (hangupRequestedByTool && !pendingResponseCreate && !activeResponseId) {
+      const completedEndCallGoodbye =
+        hangupRequestedByTool &&
+        endCallGoodbyeRequested &&
+        endCallGoodbyeResponseId &&
+        completedResponseId === endCallGoodbyeResponseId;
+
+      if (completedEndCallGoodbye && !pendingResponseCreate && !activeResponseId) {
         hangupRequestedByTool = false;
+        endCallGoodbyeRequested = false;
+        endCallGoodbyeResponseId = null;
         callEnding = true;
 
-        endTwilioCall({
-          callSid,
-          accountSid: twilioAccountSid,
-        }).catch((error) => {
-          console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
+        setTimeout(() => {
+          endTwilioCall({
             callSid,
             accountSid: twilioAccountSid,
-            error: error instanceof Error ? error.message : String(error),
+          }).catch((error) => {
+            console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
+              callSid,
+              accountSid: twilioAccountSid,
+              error: error instanceof Error ? error.message : String(error),
+            });
           });
-        });
+        }, 1200);
       }
     }
   });
