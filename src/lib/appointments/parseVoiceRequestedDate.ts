@@ -85,17 +85,50 @@ function normalizeText(value: string): string {
     .trim();
 }
 
-function replaceHourWordsWithDigits(value: string): string {
-  let normalized = normalizeText(value);
+function tokenizeNormalizedText(value: string): string[] {
+  const normalized = normalizeText(value);
 
-  for (const [word, numberValue] of Object.entries(NUMBER_WORD_MAP)) {
-    normalized = normalized.replace(
-      new RegExp(`\\b${word}\\b`, "gu"),
-      String(numberValue)
-    );
+  if (!normalized) {
+    return [];
   }
 
-  return normalized;
+  return normalized
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function hasToken(tokens: string[], expected: string): boolean {
+  return tokens.includes(expected);
+}
+
+function hasSpanishRelativeTomorrow(tokens: string[]): boolean {
+  return tokens.some((token, index) => {
+    if (token !== "manana") {
+      return false;
+    }
+
+    const previousOne = tokens[index - 1] || "";
+    const previousTwo = tokens[index - 2] || "";
+
+    const isMorningPeriod =
+      previousOne === "la" &&
+      (previousTwo === "de" || previousTwo === "por" || previousTwo === "en");
+
+    return !isMorningPeriod;
+  });
+}
+
+function replaceHourWordsWithDigits(value: string): string {
+  const tokens = tokenizeNormalizedText(value);
+
+  return tokens
+    .map((token) => {
+      const mappedNumber = NUMBER_WORD_MAP[token];
+
+      return typeof mappedNumber === "number" ? String(mappedNumber) : token;
+    })
+    .join(" ");
 }
 
 function getDatePartsInTimeZone(date: Date, timeZone: string): TimeZoneDateParts {
@@ -146,23 +179,22 @@ function resolveTargetDateParts(
   timeZone: string
 ): TimeZoneDateParts | null {
   const normalized = normalizeText(text);
+  const tokens = tokenizeNormalizedText(text);
   const baseParts = getDatePartsInTimeZone(baseDate, timeZone);
 
-  if (/\b(hoy|today)\b/u.test(normalized)) {
+  if (hasToken(tokens, "hoy") || hasToken(tokens, "today")) {
     return baseParts;
   }
 
   const hasRelativeTomorrow =
-    /\b(tomorrow)\b/u.test(normalized) ||
-    /^(manana)\b/u.test(normalized) ||
-    /\bmanana\b(?!\s*$|(\s+de\s+la\s+manana\b))/u.test(normalized);
+    hasToken(tokens, "tomorrow") || hasSpanishRelativeTomorrow(tokens);
 
   if (hasRelativeTomorrow) {
     return addDaysToParts(baseParts, 1, timeZone);
   }
 
   for (const [label, weekday] of Object.entries(WEEKDAY_MAP)) {
-    const matchesWeekday = new RegExp(`\\b${label}\\b`, "u").test(normalized);
+    const matchesWeekday = hasToken(tokens, normalizeText(label));
 
     if (!matchesWeekday) {
       continue;
