@@ -136,6 +136,11 @@ function buildOpenAiSessionUpdate(params: {
         "- Never call a tool named send_sms. That tool does not exist.",
         "- If the caller accepts receiving booking details by SMS, call send_booking_sms with no arguments.",
         "- Never invent SMS text or phone numbers. The server sends booking SMS from canonical booking state.",
+        "- Never submit a booking step using inferred information that the caller did not clearly say in the latest user turn.",
+        "- For submit_booking_step, the value must come from the caller's latest answer to the current question, not from assumptions or earlier context.",
+        "- If the latest transcript does not directly answer the current booking question, ask the current question again naturally instead of submitting the step.",
+        "- Do not pre-fill future booking steps.",
+        "- Never call submit_booking_step twice from the same caller transcript.",
       ].join("\n"),
       audio: {
         input: {
@@ -147,9 +152,9 @@ function buildOpenAiSessionUpdate(params: {
           },
           turn_detection: {
             type: "server_vad",
-            threshold: 0.85,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 1600,
+            threshold: 0.92,
+            prefix_padding_ms: 500,
+            silence_duration_ms: 2200,
           },
         },
         output: {
