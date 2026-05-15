@@ -49,14 +49,8 @@ function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
   socket.send(JSON.stringify(payload));
 }
 
-function shouldBlockEndCallForPendingStep(state: CallState): boolean {
-  const pendingStepKey = clean((state as any)?.pendingBookingStepKey || "");
-
-  if (!pendingStepKey) {
-    return false;
-  }
-
-  return pendingStepKey === "confirm" || pendingStepKey === "offer_booking_sms";
+function shouldBlockEndCallForPendingStep(_state: CallState): boolean {
+  return false;
 }
 
 export async function handleRealtimeToolCall(
@@ -127,38 +121,14 @@ export async function handleRealtimeToolCall(
     toolArgs = {};
   }
 
-    if (toolName === "end_call" && shouldBlockEndCallForPendingStep(realtimeState)) {
-    const blockedResult: RealtimeToolResult = {
-      ok: false,
-      error: "BOOKING_STEP_STILL_PENDING",
-    };
-
-    sendJson(openAiSocket, {
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: callId,
-        output: JSON.stringify(blockedResult),
-      },
+  if (toolName === "end_call" && shouldBlockEndCallForPendingStep(realtimeState)) {
+    console.warn("[VOICE_REALTIME][END_CALL_PENDING_STEP_BYPASSED]", {
+      callSid,
+      pendingBookingStepKey: clean(
+        (realtimeState as any)?.pendingBookingStepKey || ""
+      ),
+      lastUserTranscript: clean(lastUserTranscript || ""),
     });
-
-    requestRealtimeResponse({
-      instructions: [
-        "Do not end the call.",
-        "A booking step is still pending.",
-        "Ask the pending booking question from the last tool result.",
-        "Wait for the caller answer."
-      ].join(" "),
-    });
-
-    return {
-      consumed: true,
-      realtimeState,
-      bookingFlowLoaded,
-      hangupRequestedByTool: false,
-      callEnding,
-      resetLastUserDigits: false,
-    };
   }
 
   console.log("[VOICE_REALTIME][TOOL_CALL]", {
@@ -264,16 +234,6 @@ export async function handleRealtimeToolCall(
     });
   }
 
-  if (toolName === "submit_booking_step") {
-    console.log("[VOICE_REALTIME][SUBMIT_STEP_VALUE_SOURCE]", {
-      callSid,
-      step_key: effectiveToolArgs.step_key,
-      model_value: clean(toolArgs.value || ""),
-      transcript_value: clean(lastUserTranscript || ""),
-      final_value: clean(effectiveToolArgs.value || ""),
-    });
-  }
-
   try {
     const toolResult = await executeRealtimeTool({
       tenantId,
@@ -321,6 +281,9 @@ export async function handleRealtimeToolCall(
     const resolvedPendingBookingStepKey =
       clean(nextRequiredStep?.step_key || "") || undefined;
 
+    const shouldClearPendingBookingStep =
+      toolName === "send_booking_sms" || toolName === "end_call";
+
     const nextRealtimeState: CallState = {
       ...realtimeState,
       lang: currentLocale,
@@ -328,16 +291,19 @@ export async function handleRealtimeToolCall(
         ...(realtimeState.bookingData || {}),
         ...collectedSlots,
       },
-      pendingBookingStepKey:
-        toolName === "send_booking_sms" || toolName === "end_call"
-          ? undefined
-          : resolvedPendingBookingStepKey,
+      pendingBookingStepKey: shouldClearPendingBookingStep
+        ? undefined
+        : resolvedPendingBookingStepKey,
+      pendingBookingStepRequired: shouldClearPendingBookingStep
+        ? undefined
+        : (nextRequiredStep?.required === true ? true : undefined),
+      pendingBookingStepPrompt: shouldClearPendingBookingStep
+        ? undefined
+        : clean(nextRequiredStep?.prompt || "") || undefined,
     } as CallState;
 
     const hangupRequestedByTool =
-      toolName === "end_call" &&
-      toolResult?.ok === true &&
-      toolResult?.hangup === true;
+      toolName === "end_call" && toolResult?.ok === true;
 
     const nextCallEnding = callEnding || hangupRequestedByTool;
 
