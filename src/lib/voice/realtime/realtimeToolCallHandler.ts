@@ -392,17 +392,28 @@ export async function handleRealtimeToolCall(
       realtimeState.lastSubmittedBookingTranscript || ""
     );
 
+    const hasPendingStepState = Boolean(pendingStepKey);
+    const hasPromptAnchorTranscript = Boolean(promptAnchorTranscript);
+
     const isSubmittingExpectedPendingStep =
-      Boolean(pendingStepKey) && submittedStepKey === pendingStepKey;
+      hasPendingStepState && submittedStepKey === pendingStepKey;
 
     const hasNewHumanTranscript =
-      Boolean(currentTranscript) && currentTranscript !== promptAnchorTranscript;
+      Boolean(currentTranscript) &&
+      (!hasPromptAnchorTranscript || currentTranscript !== promptAnchorTranscript);
 
     const isDuplicateSubmit =
+      Boolean(submittedStepKey) &&
+      Boolean(currentTranscript) &&
       submittedStepKey === lastSubmittedStepKey &&
       currentTranscript === lastSubmittedTranscript;
 
-    if (!isSubmittingExpectedPendingStep || !hasNewHumanTranscript || isDuplicateSubmit) {
+    const shouldBlockStaleSubmit =
+      (hasPendingStepState && !isSubmittingExpectedPendingStep) ||
+      !hasNewHumanTranscript ||
+      isDuplicateSubmit;
+
+    if (shouldBlockStaleSubmit) {
       const blockedResult = buildBlockedBookingStepResult(
         "BOOKING_STEP_WAITING_FOR_NEW_USER_INPUT"
       );
@@ -415,9 +426,12 @@ export async function handleRealtimeToolCall(
         promptAnchorTranscript,
         lastSubmittedStepKey,
         lastSubmittedTranscript,
+        hasPendingStepState,
+        hasPromptAnchorTranscript,
         isSubmittingExpectedPendingStep,
         hasNewHumanTranscript,
         isDuplicateSubmit,
+        shouldBlockStaleSubmit,
       });
 
       sendJson(openAiSocket, {
