@@ -121,6 +121,69 @@ export async function handleRealtimeToolCall(
     toolArgs = {};
   }
 
+  if (toolName === "end_call") {
+    const awaitingPostBookingClosure =
+      (realtimeState as any)?.awaitingPostBookingClosure === true;
+
+    const postBookingClosureTranscript = clean(
+      (realtimeState as any)?.postBookingClosureTranscript || ""
+    );
+
+    const currentTranscript = clean(lastUserTranscript || "");
+
+    const isImmediatePostSmsHangup =
+      awaitingPostBookingClosure &&
+      postBookingClosureTranscript &&
+      postBookingClosureTranscript === currentTranscript;
+
+    if (isImmediatePostSmsHangup) {
+      const blockedResult: RealtimeToolResult = {
+        ok: false,
+        error: "POST_BOOKING_CLOSURE_ANSWER_REQUIRED",
+        message:
+          "The caller has not answered whether they need anything else after the booking SMS.",
+      };
+
+      console.warn("[VOICE_REALTIME][END_CALL_BLOCKED_WAITING_POST_SMS_REPLY]", {
+        callSid,
+        postBookingClosureTranscript,
+        currentTranscript,
+      });
+
+      sendJson(openAiSocket, {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify(blockedResult),
+        },
+      });
+
+      requestRealtimeResponse(
+        {
+          instructions: [
+            "Use only the tool result as source of truth.",
+            "Do not end the call yet.",
+            "The booking SMS was sent, but the caller has not answered whether they need anything else.",
+            "Ask briefly if the caller needs anything else.",
+            "Ask only one question and wait for the caller answer.",
+          ].join(" "),
+        },
+        "tool_guard:end_call_waiting_post_sms_reply"
+      );
+
+      return {
+        consumed: true,
+        result: blockedResult,
+        realtimeState,
+        bookingFlowLoaded,
+        hangupRequestedByTool: false,
+        callEnding,
+        resetLastUserDigits: true,
+      };
+    }
+  }
+
   if (toolName === "end_call" && shouldBlockEndCallForPendingStep(realtimeState)) {
     console.warn("[VOICE_REALTIME][END_CALL_PENDING_STEP_BYPASSED]", {
       callSid,
@@ -164,6 +227,91 @@ export async function handleRealtimeToolCall(
       callEnding,
       resetLastUserDigits: false,
     };
+  }
+
+  if (toolName === "send_booking_sms") {
+    const pendingStepKey = clean(
+      (realtimeState as any)?.pendingBookingStepKey || ""
+    );
+
+    const pendingPrompt = clean(
+      (realtimeState as any)?.pendingBookingStepPrompt || ""
+    );
+
+    const bookingSmsConsentGranted =
+      (realtimeState as any)?.bookingSmsConsentGranted === true;
+
+    if (pendingStepKey === "offer_booking_sms" || !bookingSmsConsentGranted) {
+      const blockedResult: RealtimeToolResult = {
+        ok: false,
+        error: "BOOKING_SMS_CONSENT_REQUIRED",
+        message:
+          "BOOKING_SMS_CONSENT_REQUIRED",
+        next_required_step: pendingPrompt
+          ? {
+              step_key: pendingStepKey || "offer_booking_sms",
+              step_order: 0,
+              slot: "none",
+              prompt: pendingPrompt,
+              expected_type: "confirmation",
+              required: false,
+              retry_prompt: "",
+              validation_config: null,
+              prompt_translations: null,
+              retry_prompt_translations: null,
+            }
+          : null,
+      };
+
+      console.warn("[VOICE_REALTIME][BOOKING_SMS_BLOCKED_PENDING_CONSENT]", {
+        callSid,
+        pendingStepKey,
+        hasPendingPrompt: Boolean(pendingPrompt),
+        bookingSmsConsentGranted,
+        lastUserTranscript: clean(lastUserTranscript || ""),
+      });
+
+      sendJson(openAiSocket, {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify(blockedResult),
+        },
+      });
+
+      requestRealtimeResponse(
+        {
+          instructions: pendingPrompt
+            ? [
+                "Use only the tool result as source of truth.",
+                "Do not call send_booking_sms.",
+                "The caller must answer the pending consent step first.",
+                "Ask the next_required_step.prompt naturally.",
+                "Call submit_booking_step using the same next_required_step.step_key and the caller answer.",
+                "Ask only one question and wait for the caller answer.",
+              ].join(" ")
+            : [
+                "Use only the tool result as source of truth.",
+                "Do not call send_booking_sms.",
+                "The consent prompt is missing from server booking state.",
+                "Call get_booking_flow to recover the current configured booking step.",
+                "Do not invent a consent question.",
+              ].join(" "),
+        },
+        "tool_guard:send_booking_sms_pending_consent"
+      );
+
+      return {
+        consumed: true,
+        result: blockedResult,
+        realtimeState,
+        bookingFlowLoaded,
+        hangupRequestedByTool: false,
+        callEnding,
+        resetLastUserDigits: true,
+      };
+    }
   }
 
   if (toolName === "submit_booking_step" && !bookingFlowLoaded) {
@@ -284,6 +432,15 @@ export async function handleRealtimeToolCall(
     const shouldClearPendingBookingStep =
       toolName === "send_booking_sms" || toolName === "end_call";
 
+    const isBookingSmsConsentStep =
+      toolName === "submit_booking_step" &&
+      clean((effectiveToolArgs as any)?.step_key || "") === "offer_booking_sms";
+
+    const bookingSmsConsentGranted =
+      isBookingSmsConsentStep &&
+      toolResult?.ok === true &&
+      clean((toolResult as any)?.action_required || "") === "send_booking_sms";
+
     const nextRealtimeState: CallState = {
       ...realtimeState,
       lang: currentLocale,
@@ -291,15 +448,42 @@ export async function handleRealtimeToolCall(
         ...(realtimeState.bookingData || {}),
         ...collectedSlots,
       },
+
       pendingBookingStepKey: shouldClearPendingBookingStep
         ? undefined
         : resolvedPendingBookingStepKey,
-      pendingBookingStepRequired: shouldClearPendingBookingStep
-        ? undefined
-        : (nextRequiredStep?.required === true ? true : undefined),
-      pendingBookingStepPrompt: shouldClearPendingBookingStep
-        ? undefined
-        : clean(nextRequiredStep?.prompt || "") || undefined,
+
+      pendingBookingStepRequired:
+        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
+          ? undefined
+          : nextRequiredStep?.required === true,
+
+      pendingBookingStepPrompt:
+        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
+          ? undefined
+          : clean(nextRequiredStep?.prompt || "") || undefined,
+
+      bookingSmsConsentGranted:
+        toolName === "send_booking_sms" || toolName === "end_call"
+          ? undefined
+          : bookingSmsConsentGranted
+            ? true
+            : (realtimeState as any)?.bookingSmsConsentGranted,
+
+      bookingSmsConsentAnswered:
+        isBookingSmsConsentStep && toolResult?.ok === true
+          ? true
+          : (realtimeState as any)?.bookingSmsConsentAnswered,
+
+      awaitingPostBookingClosure:
+        toolName === "send_booking_sms" && toolResult?.ok === true
+          ? true
+          : (realtimeState as any)?.awaitingPostBookingClosure,
+
+      postBookingClosureTranscript:
+        toolName === "send_booking_sms" && toolResult?.ok === true
+          ? clean(lastUserTranscript || "")
+          : (realtimeState as any)?.postBookingClosureTranscript,
     } as CallState;
 
     const hangupRequestedByTool =

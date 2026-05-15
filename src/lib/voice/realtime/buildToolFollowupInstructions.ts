@@ -94,6 +94,42 @@ export function buildToolFollowupInstructions(params: {
     ].join(" ");
   }
 
+  if (actionRequired === "send_booking_sms") {
+    return [
+      "Use only the tool result as source of truth.",
+      "Do not speak to the caller yet.",
+      "Call send_booking_sms now with no arguments.",
+      "Do not call end_call.",
+    ].join(" ");
+  }
+
+  if (actionRequired === "skip_booking_sms") {
+    return [
+      "Use only the tool result as source of truth.",
+      primaryPrompt
+        ? `Respond using this server-generated message as the factual source: ${primaryPrompt}`
+        : "Tell the caller the SMS will not be sent.",
+      "Speak naturally and warmly.",
+      "Ask briefly if the caller needs anything else.",
+      "Do not call end_call in this same turn.",
+      "Only call end_call after the caller says they do not need anything else or clearly ends the conversation.",
+    ].join(" ");
+  }
+
+  if (
+    actionRequired === "awaiting_offer_booking_sms_confirmation" ||
+    bookingOutcome === "confirmed_offer_sms" ||
+    nextStepKey === "offer_booking_sms"
+  ) {
+    return buildNaturalPromptInstruction({
+      sourceText: primaryPrompt,
+      purpose: "Ask the SMS offer question using this configured meaning",
+      mustAskSmsOffer: true,
+      mustWaitForAnswer: true,
+      blockEndCall: true,
+    });
+  }
+
   if (
     actionRequired === "awaiting_confirmation" ||
     nextStepKey === "confirm" ||
@@ -130,20 +166,6 @@ export function buildToolFollowupInstructions(params: {
         primaryPrompt ||
         "Ask which phone number should receive the booking details by SMS.",
       purpose: "Ask for the SMS destination phone number",
-      mustWaitForAnswer: true,
-      blockEndCall: true,
-    });
-  }
-
-  if (
-    actionRequired === "awaiting_offer_booking_sms_confirmation" ||
-    bookingOutcome === "confirmed_offer_sms" ||
-    nextStepKey === "offer_booking_sms"
-  ) {
-    return buildNaturalPromptInstruction({
-      sourceText: primaryPrompt,
-      purpose: "Ask the SMS offer question using this configured meaning",
-      mustAskSmsOffer: true,
       mustWaitForAnswer: true,
       blockEndCall: true,
     });
