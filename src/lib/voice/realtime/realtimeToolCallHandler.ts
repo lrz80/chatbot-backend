@@ -492,7 +492,15 @@ export async function handleRealtimeToolCall(
       ? {
           ...toolArgs,
           step_key: clean(toolArgs.step_key || ""),
-          value: clean(lastUserTranscript || toolArgs.value || ""),
+
+          /**
+           * IMPORTANT:
+           * The model value is already the interpreted answer for the current step.
+           * Do not replace it with lastUserTranscript because lastUserTranscript can
+           * still contain the previous step audio/transcript.
+           */
+          value: clean(toolArgs.value || lastUserTranscript || ""),
+
           raw_transcript_value: clean(lastUserTranscript || ""),
           model_value: clean(toolArgs.value || ""),
         }
@@ -618,7 +626,7 @@ export async function handleRealtimeToolCall(
 
       lastSubmittedBookingTranscript:
         toolName === "submit_booking_step"
-          ? clean(lastUserTranscript || "")
+          ? clean((effectiveToolArgs as any)?.value || "")
           : realtimeState.lastSubmittedBookingTranscript,
 
       lastSubmittedBookingTranscriptSeq:
