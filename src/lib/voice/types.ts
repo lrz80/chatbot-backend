@@ -19,6 +19,10 @@ export type CallState = {
   pendingBookingStepRequired?: boolean;
   pendingBookingStepPrompt?: string;
 
+  pendingBookingStepPromptAnchorTranscript?: string;
+  lastSubmittedBookingStepKey?: string;
+  lastSubmittedBookingTranscript?: string;
+
   pendingActionGranted?: boolean;
   pendingActionAnswered?: boolean;
   pendingActionToolName?: string;

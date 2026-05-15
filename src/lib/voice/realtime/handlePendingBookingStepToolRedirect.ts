@@ -87,10 +87,6 @@ export async function handlePendingBookingStepToolRedirect(
     realtimeState.pendingBookingStepKey || ""
   );
 
-  const pendingPrompt = clean(
-    (realtimeState as any)?.pendingBookingStepPrompt || ""
-  );
-
   const hasPendingBookingStep = Boolean(pendingStepKey);
 
   if (!hasPendingBookingStep) {
@@ -151,28 +147,40 @@ export async function handlePendingBookingStepToolRedirect(
     lang: currentLocale,
 
     pendingBookingStepKey: shouldExecuteOriginalToolAfterRedirect
-      ? undefined
-      : resolvedPendingBookingStepKey,
+        ? undefined
+        : resolvedPendingBookingStepKey,
 
     pendingBookingStepRequired:
-      shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
+        shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
         ? undefined
         : nextRequiredStep?.required === true,
 
     pendingBookingStepPrompt:
-      shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
+        shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
         ? undefined
         : clean(nextRequiredStep?.prompt || "") || undefined,
 
-    bookingSmsConsentGranted: shouldExecuteOriginalToolAfterRedirect
-      ? true
-      : realtimeState.pendingActionGranted,
+    pendingBookingStepPromptAnchorTranscript:
+        shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
+        ? undefined
+        : clean(lastUserTranscript || ""),
 
-    bookingSmsConsentAnswered:
-      redirectedToolResult?.ok === true
+    lastSubmittedBookingStepKey: pendingStepKey,
+    lastSubmittedBookingTranscript: clean(lastUserTranscript || ""),
+
+    pendingActionGranted: shouldExecuteOriginalToolAfterRedirect
         ? true
-        : (realtimeState as any)?.bookingSmsConsentAnswered,
-  } as CallState;
+        : realtimeState.pendingActionGranted,
+
+    pendingActionAnswered:
+        redirectedToolResult?.ok === true
+        ? true
+        : realtimeState.pendingActionAnswered,
+
+    pendingActionToolName: shouldExecuteOriginalToolAfterRedirect
+        ? originalToolName
+        : realtimeState.pendingActionToolName,
+    } as CallState;
 
   console.log("[VOICE_REALTIME][TOOL_RESULT]", {
     callSid,
@@ -213,20 +221,22 @@ export async function handlePendingBookingStepToolRedirect(
       pendingBookingStepKey: undefined,
       pendingBookingStepRequired: undefined,
       pendingBookingStepPrompt: undefined,
+      pendingBookingStepPromptAnchorTranscript: undefined,
 
-      bookingSmsConsentGranted: undefined,
-      bookingSmsConsentAnswered: true,
+      pendingActionGranted: undefined,
+      pendingActionAnswered: true,
+      pendingActionToolName: undefined,
 
       awaitingPostBookingClosure:
         actionToolResult?.ok === true
-          ? true
-          : (nextRealtimeState as any)?.awaitingPostBookingClosure,
+        ? true
+        : nextRealtimeState.awaitingPostBookingClosure,
 
       postBookingClosureTranscript:
         actionToolResult?.ok === true
-          ? clean(lastUserTranscript || "")
-          : (nextRealtimeState as any)?.postBookingClosureTranscript,
-    } as CallState;
+        ? clean(lastUserTranscript || "")
+        : nextRealtimeState.postBookingClosureTranscript,
+      } as CallState;
 
     console.log("[VOICE_REALTIME][TOOL_RESULT]", {
       callSid,

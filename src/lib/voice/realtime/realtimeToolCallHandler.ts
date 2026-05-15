@@ -50,6 +50,14 @@ function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
   socket.send(JSON.stringify(payload));
 }
 
+function buildBlockedBookingStepResult(error: string): RealtimeToolResult {
+  return {
+    ok: false,
+    error,
+    message: error,
+  };
+}
+
 function shouldBlockEndCallForPendingStep(_state: CallState): boolean {
   return false;
 }
@@ -231,10 +239,17 @@ export async function handleRealtimeToolCall(
   }
 
   if (toolName === "send_booking_sms") {
-    const bookingSmsConsentGranted =
+    const pendingActionGranted =
       realtimeState.pendingActionGranted === true;
 
-    if (!bookingSmsConsentGranted) {
+    const pendingActionToolName = clean(
+      realtimeState.pendingActionToolName || ""
+    );
+
+    const canExecutePendingAction =
+      pendingActionGranted && pendingActionToolName === toolName;
+
+    if (!canExecutePendingAction) {
       const redirectResult = await handlePendingBookingStepToolRedirect({
         originalToolName: toolName,
         originalToolArgs: toolArgs,
@@ -276,7 +291,8 @@ export async function handleRealtimeToolCall(
 
       console.warn("[VOICE_REALTIME][BOOKING_SMS_BLOCKED_WITHOUT_PENDING_STEP]", {
         callSid,
-        bookingSmsConsentGranted,
+        pendingActionGranted,
+        pendingActionToolName,
         lastUserTranscript: clean(lastUserTranscript || ""),
       });
 
@@ -358,6 +374,84 @@ export async function handleRealtimeToolCall(
       callEnding,
       resetLastUserDigits: true,
     };
+  }
+
+  if (toolName === "submit_booking_step") {
+    const submittedStepKey = clean(toolArgs.step_key || "");
+    const pendingStepKey = clean(realtimeState.pendingBookingStepKey || "");
+    const currentTranscript = clean(lastUserTranscript || "");
+    const promptAnchorTranscript = clean(
+      realtimeState.pendingBookingStepPromptAnchorTranscript || ""
+    );
+
+    const lastSubmittedStepKey = clean(
+      realtimeState.lastSubmittedBookingStepKey || ""
+    );
+
+    const lastSubmittedTranscript = clean(
+      realtimeState.lastSubmittedBookingTranscript || ""
+    );
+
+    const isSubmittingExpectedPendingStep =
+      Boolean(pendingStepKey) && submittedStepKey === pendingStepKey;
+
+    const hasNewHumanTranscript =
+      Boolean(currentTranscript) && currentTranscript !== promptAnchorTranscript;
+
+    const isDuplicateSubmit =
+      submittedStepKey === lastSubmittedStepKey &&
+      currentTranscript === lastSubmittedTranscript;
+
+    if (!isSubmittingExpectedPendingStep || !hasNewHumanTranscript || isDuplicateSubmit) {
+      const blockedResult = buildBlockedBookingStepResult(
+        "BOOKING_STEP_WAITING_FOR_NEW_USER_INPUT"
+      );
+
+      console.warn("[VOICE_REALTIME][BOOKING_STEP_SUBMIT_BLOCKED_STALE_TURN]", {
+        callSid,
+        submittedStepKey,
+        pendingStepKey,
+        currentTranscript,
+        promptAnchorTranscript,
+        lastSubmittedStepKey,
+        lastSubmittedTranscript,
+        isSubmittingExpectedPendingStep,
+        hasNewHumanTranscript,
+        isDuplicateSubmit,
+      });
+
+      sendJson(openAiSocket, {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify(blockedResult),
+        },
+      });
+
+      requestRealtimeResponse(
+        {
+          instructions: [
+            "Use only the tool result as source of truth.",
+            "Do not call submit_booking_step again yet.",
+            "The caller has not provided a new answer for the current booking step.",
+            "Ask or wait for the current pending booking question only.",
+            "Do not advance to another booking step.",
+          ].join(" "),
+        },
+        "tool_guard:booking_step_waiting_for_new_user_input"
+      );
+
+      return {
+        consumed: true,
+        result: blockedResult,
+        realtimeState,
+        bookingFlowLoaded,
+        hangupRequestedByTool: false,
+        callEnding,
+        resetLastUserDigits: false,
+      };
+    }
   }
 
   const effectiveToolArgs =
@@ -446,7 +540,7 @@ export async function handleRealtimeToolCall(
       (toolResult as any)?.action_required || ""
     );
 
-    const bookingSmsConsentGranted =
+    const pendingActionGranted =
       hasSubmittedPendingBookingStep &&
       toolResult?.ok === true &&
       Boolean(actionRequiredToolName);
@@ -473,19 +567,41 @@ export async function handleRealtimeToolCall(
           ? undefined
           : clean(nextRequiredStep?.prompt || "") || undefined,
 
-      bookingSmsConsentGranted:
+      pendingBookingStepPromptAnchorTranscript:
+        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
+          ? undefined
+          : clean(lastUserTranscript || ""),
+
+      lastSubmittedBookingStepKey:
+        toolName === "submit_booking_step"
+          ? clean((effectiveToolArgs as any)?.step_key || "")
+          : realtimeState.lastSubmittedBookingStepKey,
+
+      lastSubmittedBookingTranscript:
+        toolName === "submit_booking_step"
+          ? clean(lastUserTranscript || "")
+          : realtimeState.lastSubmittedBookingTranscript,
+
+      pendingActionGranted:
         toolName === "send_booking_sms" || toolName === "end_call"
           ? undefined
-          : bookingSmsConsentGranted
+          : pendingActionGranted
             ? true
             : realtimeState.pendingActionGranted,
 
-      bookingSmsConsentAnswered:
+      pendingActionAnswered:
         hasSubmittedPendingBookingStep &&
         toolResult?.ok === true &&
         Boolean(actionRequiredToolName)
           ? true
-          : (realtimeState as any)?.bookingSmsConsentAnswered,
+          : realtimeState.pendingActionAnswered,
+
+      pendingActionToolName:
+        toolName === "send_booking_sms" || toolName === "end_call"
+          ? undefined
+          : pendingActionGranted
+            ? actionRequiredToolName
+            : realtimeState.pendingActionToolName,
 
       awaitingPostBookingClosure:
         toolName === "send_booking_sms" && toolResult?.ok === true
