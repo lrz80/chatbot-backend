@@ -140,7 +140,11 @@ export async function handlePendingBookingStepToolRedirect(
 
   const shouldExecuteOriginalToolAfterRedirect =
     redirectedToolResult?.ok === true &&
-    redirectedActionRequired === originalToolName;
+    !nextRequiredStep &&
+    (
+        !redirectedActionRequired ||
+        redirectedActionRequired === originalToolName
+    );
 
   const nextRealtimeState: CallState = {
     ...realtimeState,
