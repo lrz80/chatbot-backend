@@ -629,7 +629,13 @@ export async function handleRealtimeToolCall(
     const hangupRequestedByTool =
       toolName === "end_call" && toolResult?.ok === true;
 
-    const nextCallEnding = callEnding || hangupRequestedByTool;
+    /**
+     * Do not mark callEnding here.
+     * The bridge still needs to send the goodbye audio generated after end_call.
+     * callEnding must become true only after the goodbye response is done
+     * and Twilio hangup is actually triggered.
+     */
+    const nextCallEnding = callEnding;
 
     console.log("[VOICE_REALTIME][TOOL_RESULT]", {
       callSid,
