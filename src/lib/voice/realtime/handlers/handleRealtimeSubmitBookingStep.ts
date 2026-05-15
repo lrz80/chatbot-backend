@@ -21,6 +21,7 @@ import {
   type BookingState,
 } from "../realtimeBookingFlowUtils";
 import { hasExplicitVoiceDateAnchor } from "../../../appointments/parseVoiceRequestedDate";
+import { resolveExpectedTypeStepValue } from "../bookingStepValueValidators";
 
 type RealtimeBookingContext = {
   tenant: any;
@@ -167,6 +168,36 @@ function renderConfiguredUnavailablePrompt(params: {
   };
 
   return renderBookingStepTemplate(template, templateValues);
+}
+
+function buildInvalidExpectedTypeResult(params: {
+  steps: BookingFlowStepLike[];
+  workingState: CallState;
+  currentIndex: number;
+  bookingContext: RealtimeBookingContext;
+  buildRealtimeBookingState: HandleRealtimeSubmitBookingStepParams["buildRealtimeBookingState"];
+  buildNextRequiredStep: HandleRealtimeSubmitBookingStepParams["buildNextRequiredStep"];
+  error: string;
+  message?: string;
+}) {
+  const bookingState = params.buildRealtimeBookingState({
+    steps: params.steps,
+    state: params.workingState,
+    explicitCurrentIndex: params.currentIndex,
+  });
+
+  return {
+    ok: false,
+    error: params.error,
+    message: params.message || params.error,
+    assistant_prompt: params.message || params.error,
+    booking_state: bookingState,
+    next_required_step: params.buildNextRequiredStep({
+      steps: params.steps,
+      bookingState,
+      locale: params.bookingContext.currentLocale,
+    }),
+  };
 }
 
 export async function handleRealtimeSubmitBookingStep(
@@ -464,6 +495,82 @@ export async function handleRealtimeSubmitBookingStep(
       answersBySlot: nextAnswers,
       bookingStepIndex: currentIndex,
     });
+  } else if (isPostBookingStep && stepKey === "offer_booking_sms") {
+    const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
+
+    const normalizedComparableValue = normalizeComparable(normalizedStepValue);
+
+    if (!normalizedComparableValue) {
+      const bookingState = buildRealtimeBookingState({
+        steps,
+        state: workingState,
+        explicitCurrentIndex: currentIndex,
+      });
+
+      return {
+        ok: false,
+        error: "UNRESOLVED_BOOKING_SMS_CONSENT",
+        message:
+          "The caller's SMS consent answer could not be resolved from the configured booking step.",
+        booking_state: bookingState,
+        next_required_step: buildNextRequiredStep({
+          steps,
+          bookingState,
+          locale: bookingContext.currentLocale,
+        }),
+      };
+    }
+
+    const storageSlot =
+      targetSlot && targetSlot !== "none" ? targetSlot : stepKey;
+
+    const nextAnswers = {
+      ...rawAnswers,
+      [storageSlot]: normalizedStepValue,
+      [stepKey]: normalizedStepValue,
+      booking_sms_consent: normalizedStepValue,
+    };
+
+    const consentState = buildCanonicalCallState({
+      state: workingState,
+      answersBySlot: nextAnswers,
+      bookingStepIndex: undefined,
+    });
+
+    Object.assign(bookingContext.state, consentState);
+
+    await persistVoiceState({
+      tenantId,
+      callSid: bookingContext.callSid,
+      state: consentState,
+      locale: bookingContext.currentLocale,
+    });
+
+    const bookingState = buildRealtimeBookingState({
+      steps,
+      state: consentState,
+      explicitCurrentIndex: null,
+    });
+
+    const smsConsentGranted =
+      normalizedComparableValue === "yes" ||
+      normalizedComparableValue === "true";
+
+    return {
+      ok: true,
+      booking_state: bookingState,
+      next_required_step: null,
+      booking_sms_consent: normalizedStepValue,
+      action_required: smsConsentGranted
+        ? "send_booking_sms"
+        : "skip_booking_sms",
+      message: smsConsentGranted
+        ? "El cliente aceptó recibir los detalles por SMS."
+        : "El cliente no quiere recibir los detalles por SMS.",
+      assistant_prompt: smsConsentGranted
+        ? ""
+        : "Perfecto, no envío el SMS. ¿Puedo ayudarte con algo más?",
+    };
   } else if (isPostBookingStep) {
     const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
 
@@ -481,6 +588,7 @@ export async function handleRealtimeSubmitBookingStep(
       answersBySlot: nextAnswers,
       bookingStepIndex: currentIndex,
     });
+
   } else if (isFinalConfirmationBeforeCreate) {
     const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
 
@@ -524,7 +632,27 @@ export async function handleRealtimeSubmitBookingStep(
       action_required: "create_appointment",
     };
   } else {
-    const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
+    const expectedTypeResult = resolveExpectedTypeStepValue({
+      step: currentStep,
+      value,
+      modelValue: clean(args.model_value || ""),
+    });
+
+    if (!expectedTypeResult.ok) {
+      return buildInvalidExpectedTypeResult({
+        steps,
+        workingState,
+        currentIndex,
+        bookingContext,
+        buildRealtimeBookingState,
+        buildNextRequiredStep,
+        error: expectedTypeResult.error,
+        message: clean(currentStep.retry_prompt || currentStep.prompt),
+      });
+    }
+
+    let resolvedStepValue = expectedTypeResult.value;
+
     const optionCandidates = extractStepOptionCandidates(currentStep);
     const hasConfiguredOptions = optionCandidates.length > 0;
 
@@ -532,7 +660,7 @@ export async function handleRealtimeSubmitBookingStep(
       const resolvedToConfiguredOption = optionCandidates.some(
         (option) =>
           normalizeComparable(option.canonical) ===
-          normalizeComparable(normalizedStepValue)
+          normalizeComparable(resolvedStepValue)
       );
 
       if (!resolvedToConfiguredOption) {
@@ -560,8 +688,6 @@ export async function handleRealtimeSubmitBookingStep(
     const validationMode = clean(currentStep.validation_config?.mode);
     const useInboundCaller =
       currentStep.validation_config?.use_inbound_caller === true;
-
-    let resolvedStepValue = normalizedStepValue;
 
     if (
       targetSlot === "customer_phone" &&
