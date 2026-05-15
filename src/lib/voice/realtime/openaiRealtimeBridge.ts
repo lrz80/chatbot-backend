@@ -836,7 +836,7 @@ export async function createOpenAiRealtimeBridge({
               error: error instanceof Error ? error.message : String(error),
             });
           });
-        }, 1200);
+        }, 2500);
       }
     }
   });

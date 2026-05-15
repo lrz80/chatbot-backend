@@ -471,8 +471,9 @@ export async function handleRealtimeToolCall(
       ? {
           ...toolArgs,
           step_key: clean(toolArgs.step_key || ""),
-          value: clean(toolArgs.value || lastUserTranscript || ""),
+          value: clean(lastUserTranscript || toolArgs.value || ""),
           raw_transcript_value: clean(lastUserTranscript || ""),
+          model_value: clean(toolArgs.value || ""),
         }
       : {
           ...toolArgs,
