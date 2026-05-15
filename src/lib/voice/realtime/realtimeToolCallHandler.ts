@@ -398,15 +398,28 @@ export async function handleRealtimeToolCall(
     const isSubmittingExpectedPendingStep =
       hasPendingStepState && submittedStepKey === pendingStepKey;
 
+    const currentTranscriptSeq =
+      typeof realtimeState.lastUserTranscriptSeq === "number"
+        ? realtimeState.lastUserTranscriptSeq
+        : 0;
+
+    const promptAnchorSeq =
+      typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
+        ? realtimeState.pendingBookingStepPromptAnchorSeq
+        : -1;
+
+    const lastSubmittedTranscriptSeq =
+      typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
+        ? realtimeState.lastSubmittedBookingTranscriptSeq
+        : -1;
+
     const hasNewHumanTranscript =
-      Boolean(currentTranscript) &&
-      (!hasPromptAnchorTranscript || currentTranscript !== promptAnchorTranscript);
+      Boolean(currentTranscript) && currentTranscriptSeq > promptAnchorSeq;
 
     const isDuplicateSubmit =
       Boolean(submittedStepKey) &&
-      Boolean(currentTranscript) &&
       submittedStepKey === lastSubmittedStepKey &&
-      currentTranscript === lastSubmittedTranscript;
+      currentTranscriptSeq === lastSubmittedTranscriptSeq;
 
     const shouldBlockStaleSubmit =
       !hasNewHumanTranscript || isDuplicateSubmit;
@@ -427,6 +440,9 @@ export async function handleRealtimeToolCall(
         hasPendingStepState,
         hasPromptAnchorTranscript,
         isSubmittingExpectedPendingStep,
+        currentTranscriptSeq,
+        promptAnchorSeq,
+        lastSubmittedTranscriptSeq,
         hasNewHumanTranscript,
         isDuplicateSubmit,
         shouldBlockStaleSubmit,
@@ -441,18 +457,23 @@ export async function handleRealtimeToolCall(
         },
       });
 
-      requestRealtimeResponse(
-        {
-          instructions: [
-            "Use only the tool result as source of truth.",
-            "Do not call submit_booking_step again yet.",
-            "The caller has not provided a new answer for the current booking step.",
-            "Ask or wait for the current pending booking question only.",
-            "Do not advance to another booking step.",
-          ].join(" "),
-        },
-        "tool_guard:booking_step_waiting_for_new_user_input"
-      );
+      const staleBecauseNoNewTranscript =
+        !hasNewHumanTranscript && !isDuplicateSubmit;
+
+      if (!staleBecauseNoNewTranscript) {
+        requestRealtimeResponse(
+          {
+            instructions: [
+              "Use only the tool result as source of truth.",
+              "Do not call submit_booking_step again yet.",
+              "The caller has not provided a valid new answer for the current booking step.",
+              "Ask the current pending booking question again briefly.",
+              "Do not advance to another booking step.",
+            ].join(" "),
+          },
+          "tool_guard:booking_step_invalid_or_duplicate_input"
+        );
+      }
 
       return {
         consumed: true,
@@ -585,6 +606,11 @@ export async function handleRealtimeToolCall(
           ? undefined
           : clean(lastUserTranscript || ""),
 
+      pendingBookingStepPromptAnchorSeq:
+        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
+          ? undefined
+          : realtimeState.lastUserTranscriptSeq,
+
       lastSubmittedBookingStepKey:
         toolName === "submit_booking_step"
           ? clean((effectiveToolArgs as any)?.step_key || "")
@@ -594,6 +620,11 @@ export async function handleRealtimeToolCall(
         toolName === "submit_booking_step"
           ? clean(lastUserTranscript || "")
           : realtimeState.lastSubmittedBookingTranscript,
+
+      lastSubmittedBookingTranscriptSeq:
+        toolName === "submit_booking_step"
+          ? realtimeState.lastUserTranscriptSeq
+          : realtimeState.lastSubmittedBookingTranscriptSeq,
 
       pendingActionGranted:
         toolName === "send_booking_sms" || toolName === "end_call"

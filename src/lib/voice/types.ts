@@ -23,6 +23,10 @@ export type CallState = {
   lastSubmittedBookingStepKey?: string;
   lastSubmittedBookingTranscript?: string;
 
+  lastUserTranscriptSeq?: number;
+  pendingBookingStepPromptAnchorSeq?: number;
+  lastSubmittedBookingTranscriptSeq?: number;
+
   pendingActionGranted?: boolean;
   pendingActionAnswered?: boolean;
   pendingActionToolName?: string;

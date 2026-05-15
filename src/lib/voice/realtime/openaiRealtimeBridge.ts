@@ -405,6 +405,7 @@ export async function createOpenAiRealtimeBridge({
   let realtimeState: CallState = {};
   let lastUserTranscript = "";
   let lastUserDigits = "";
+  let lastUserTranscriptSeq = 0;
   let openAiReady = false;
   let sessionConfigured = false;
   let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
@@ -720,6 +721,7 @@ export async function createOpenAiRealtimeBridge({
           }
 
           lastUserTranscript = transcriptResult.transcript;
+          lastUserTranscriptSeq += 1;
 
           currentLocale = transcriptResult.currentLocale;
 
@@ -728,6 +730,8 @@ export async function createOpenAiRealtimeBridge({
 
           realtimeState = {
             ...transcriptState,
+
+            lastUserTranscriptSeq,
 
             /**
              * Transcript/language refresh must not overwrite booking runtime state.
@@ -889,6 +893,7 @@ export async function createOpenAiRealtimeBridge({
       realtimeCfg = null;
       lastUserTranscript = "";
       lastUserDigits = "";
+      lastUserTranscriptSeq = 0;
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {
         callSid,
