@@ -6,6 +6,7 @@ import {
   buildToolFollowupInstructions,
   type RealtimeToolResult,
 } from "./buildToolFollowupInstructions";
+import { handlePendingBookingStepToolRedirect } from "./handlePendingBookingStepToolRedirect";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -188,7 +189,7 @@ export async function handleRealtimeToolCall(
     console.warn("[VOICE_REALTIME][END_CALL_PENDING_STEP_BYPASSED]", {
       callSid,
       pendingBookingStepKey: clean(
-        (realtimeState as any)?.pendingBookingStepKey || ""
+        realtimeState.pendingBookingStepKey || ""
       ),
       lastUserTranscript: clean(lastUserTranscript || ""),
     });
@@ -230,157 +231,51 @@ export async function handleRealtimeToolCall(
   }
 
   if (toolName === "send_booking_sms") {
-    const pendingStepKey = clean(
-      (realtimeState as any)?.pendingBookingStepKey || ""
-    );
-
-    const pendingPrompt = clean(
-      (realtimeState as any)?.pendingBookingStepPrompt || ""
-    );
-
     const bookingSmsConsentGranted =
-      (realtimeState as any)?.bookingSmsConsentGranted === true;
-
-    const hasPendingBookingStep = Boolean(pendingStepKey);
+      realtimeState.pendingActionGranted === true;
 
     if (!bookingSmsConsentGranted) {
-      if (hasPendingBookingStep) {
-        const redirectedToolArgs = {
-          step_key: pendingStepKey,
-          value: clean(lastUserTranscript || ""),
-          raw_transcript_value: clean(lastUserTranscript || ""),
-        };
+      const redirectResult = await handlePendingBookingStepToolRedirect({
+        originalToolName: toolName,
+        originalToolArgs: toolArgs,
+        callId,
+        openAiSocket,
+        requestRealtimeResponse,
+        callSid,
+        tenantId,
+        callerPhone,
+        didNumber,
+        realtimeTenant,
+        realtimeCfg,
+        realtimeState,
+        currentLocale,
+        bookingFlowLoaded,
+        callEnding,
+        lastUserTranscript,
+        lastUserDigits,
+      });
 
-        console.warn("[VOICE_REALTIME][BOOKING_SMS_TOOL_REDIRECTED_TO_PENDING_STEP]", {
-          callSid,
-          originalToolName: toolName,
-          redirectedToolName: "submit_booking_step",
-          pendingStepKey,
-          lastUserTranscript: clean(lastUserTranscript || ""),
-        });
-
-        const redirectedToolResult = await executeRealtimeTool({
-          tenantId,
-          callerPhone,
-          toolName: "submit_booking_step",
-          args: redirectedToolArgs,
-          tenant: realtimeTenant,
-          cfg: realtimeCfg,
-          callSid: callSid || undefined,
-          didNumber: didNumber || undefined,
-          currentLocale,
-          state: realtimeState,
-          userInput: lastUserTranscript,
-          digits: lastUserDigits,
-        });
-
-        const nextRequiredStep =
-          redirectedToolResult &&
-          typeof redirectedToolResult.next_required_step === "object" &&
-          redirectedToolResult.next_required_step !== null
-            ? (redirectedToolResult.next_required_step as Record<string, unknown>)
-            : null;
-
-        const resolvedPendingBookingStepKey =
-          clean(nextRequiredStep?.step_key || "") || undefined;
-
-        const bookingSmsConsentGrantedAfterRedirect =
-          redirectedToolResult?.ok === true &&
-          clean((redirectedToolResult as any)?.action_required || "") ===
-            "send_booking_sms";
-
-        const nextRealtimeState: CallState = {
-          ...realtimeState,
-          lang: currentLocale,
-
-          pendingBookingStepKey: bookingSmsConsentGrantedAfterRedirect
-            ? undefined
-            : resolvedPendingBookingStepKey,
-
-          pendingBookingStepRequired:
-            bookingSmsConsentGrantedAfterRedirect || !resolvedPendingBookingStepKey
-              ? undefined
-              : nextRequiredStep?.required === true,
-
-          pendingBookingStepPrompt:
-            bookingSmsConsentGrantedAfterRedirect || !resolvedPendingBookingStepKey
-              ? undefined
-              : clean(nextRequiredStep?.prompt || "") || undefined,
-
-          bookingSmsConsentGranted: bookingSmsConsentGrantedAfterRedirect
-            ? true
-            : (realtimeState as any)?.bookingSmsConsentGranted,
-
-          bookingSmsConsentAnswered:
-            redirectedToolResult?.ok === true
-              ? true
-              : (realtimeState as any)?.bookingSmsConsentAnswered,
-        } as CallState;
-
-        console.log("[VOICE_REALTIME][TOOL_RESULT]", {
-          callSid,
-          toolName: "submit_booking_step",
-          ok: redirectedToolResult?.ok,
-          error: redirectedToolResult?.error,
-          missing_required_slots: redirectedToolResult?.missing_required_slots,
-          next_required_step: redirectedToolResult?.next_required_step,
-        });
-
-        sendJson(openAiSocket, {
-          type: "conversation.item.create",
-          item: {
-            type: "function_call_output",
-            call_id: callId,
-            output: JSON.stringify(redirectedToolResult),
-          },
-        });
-
-        requestRealtimeResponse(
-          {
-            instructions: buildToolFollowupInstructions({
-              toolName: "submit_booking_step",
-              toolResult: (redirectedToolResult || {}) as RealtimeToolResult,
-            }),
-          },
-          "tool_followup:submit_booking_step"
-        );
-
+      if (redirectResult.handled) {
         return {
           consumed: true,
-          result: redirectedToolResult,
-          realtimeState: nextRealtimeState,
-          bookingFlowLoaded,
-          hangupRequestedByTool: false,
-          callEnding,
-          resetLastUserDigits: true,
+          result: redirectResult.result,
+          realtimeState: redirectResult.realtimeState,
+          bookingFlowLoaded: redirectResult.bookingFlowLoaded,
+          hangupRequestedByTool: redirectResult.hangupRequestedByTool,
+          callEnding: redirectResult.callEnding,
+          resetLastUserDigits: redirectResult.resetLastUserDigits,
         };
       }
 
       const blockedResult: RealtimeToolResult = {
         ok: false,
         error: "BOOKING_SMS_CONSENT_REQUIRED",
-        message:
-          "BOOKING_SMS_CONSENT_REQUIRED",
-        next_required_step: pendingPrompt
-          ? {
-              step_key: pendingStepKey || "offer_booking_sms",
-              step_order: 0,
-              slot: "none",
-              prompt: pendingPrompt,
-              expected_type: "confirmation",
-              required: false,
-              retry_prompt: "",
-              validation_config: null,
-              prompt_translations: null,
-              retry_prompt_translations: null,
-            }
-          : null,
+        message: "BOOKING_SMS_CONSENT_REQUIRED",
+        next_required_step: null,
       };
 
-      console.warn("[VOICE_REALTIME][BOOKING_SMS_BLOCKED_PENDING_CONSENT]", {
+      console.warn("[VOICE_REALTIME][BOOKING_SMS_BLOCKED_WITHOUT_PENDING_STEP]", {
         callSid,
-        pendingStepKey,
-        hasPendingPrompt: Boolean(pendingPrompt),
         bookingSmsConsentGranted,
         lastUserTranscript: clean(lastUserTranscript || ""),
       });
@@ -396,24 +291,15 @@ export async function handleRealtimeToolCall(
 
       requestRealtimeResponse(
         {
-          instructions: pendingPrompt
-            ? [
-                "Use only the tool result as source of truth.",
-                "Do not call send_booking_sms.",
-                "The caller must answer the pending consent step first.",
-                "Ask the next_required_step.prompt naturally.",
-                "Call submit_booking_step using the same next_required_step.step_key and the caller answer.",
-                "Ask only one question and wait for the caller answer.",
-              ].join(" ")
-            : [
-                "Use only the tool result as source of truth.",
-                "Do not call send_booking_sms.",
-                "The consent prompt is missing from server booking state.",
-                "Call get_booking_flow to recover the current configured booking step.",
-                "Do not invent a consent question.",
-              ].join(" "),
+          instructions: [
+            "Use only the tool result as source of truth.",
+            "Do not call the blocked tool again.",
+            "The required booking confirmation state is missing.",
+            "Call get_booking_flow to recover the current configured booking step.",
+            "Do not invent a consent question.",
+          ].join(" "),
         },
-        "tool_guard:send_booking_sms_pending_consent"
+        "tool_guard:missing_pending_booking_step"
       );
 
       return {
@@ -554,12 +440,16 @@ export async function handleRealtimeToolCall(
     const hasSubmittedPendingBookingStep =
       Boolean(submittedBookingStepKey) &&
       submittedBookingStepKey ===
-        clean((realtimeState as any)?.pendingBookingStepKey || "");
+        clean(realtimeState.pendingBookingStepKey || "");
+
+    const actionRequiredToolName = clean(
+      (toolResult as any)?.action_required || ""
+    );
 
     const bookingSmsConsentGranted =
       hasSubmittedPendingBookingStep &&
       toolResult?.ok === true &&
-      clean((toolResult as any)?.action_required || "") === "send_booking_sms";
+      Boolean(actionRequiredToolName);
 
     const nextRealtimeState: CallState = {
       ...realtimeState,
@@ -588,12 +478,12 @@ export async function handleRealtimeToolCall(
           ? undefined
           : bookingSmsConsentGranted
             ? true
-            : (realtimeState as any)?.bookingSmsConsentGranted,
+            : realtimeState.pendingActionGranted,
 
       bookingSmsConsentAnswered:
         hasSubmittedPendingBookingStep &&
         toolResult?.ok === true &&
-        clean((toolResult as any)?.action_required || "") === "send_booking_sms"
+        Boolean(actionRequiredToolName)
           ? true
           : (realtimeState as any)?.bookingSmsConsentAnswered,
 

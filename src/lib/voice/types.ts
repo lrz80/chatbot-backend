@@ -11,8 +11,20 @@ export type CallState = {
   smsSent?: boolean;
   lang?: VoiceLocale;
   turn?: number;
+
   bookingStepIndex?: number;
   bookingData?: Record<string, string>;
+
+  pendingBookingStepKey?: string;
+  pendingBookingStepRequired?: boolean;
+  pendingBookingStepPrompt?: string;
+
+  pendingActionGranted?: boolean;
+  pendingActionAnswered?: boolean;
+  pendingActionToolName?: string;
+
+  awaitingPostBookingClosure?: boolean;
+  postBookingClosureTranscript?: string;
 };
 
 export type PhoneResolutionResult =
