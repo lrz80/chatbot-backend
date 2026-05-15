@@ -409,16 +409,14 @@ export async function handleRealtimeToolCall(
       currentTranscript === lastSubmittedTranscript;
 
     const shouldBlockStaleSubmit =
-      (hasPendingStepState && !isSubmittingExpectedPendingStep) ||
-      !hasNewHumanTranscript ||
-      isDuplicateSubmit;
+      !hasNewHumanTranscript || isDuplicateSubmit;
 
     if (shouldBlockStaleSubmit) {
       const blockedResult = buildBlockedBookingStepResult(
         "BOOKING_STEP_WAITING_FOR_NEW_USER_INPUT"
       );
 
-      console.warn("[VOICE_REALTIME][BOOKING_STEP_SUBMIT_BLOCKED_STALE_TURN]", {
+      console.warn("[VOICE_REALTIME][BOOKING_STEP_SUBMIT_BLOCKED_STALE_OR_DUPLICATE_INPUT]", {
         callSid,
         submittedStepKey,
         pendingStepKey,
