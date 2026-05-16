@@ -495,12 +495,15 @@ export async function handleRealtimeSubmitBookingStep(
       answersBySlot: nextAnswers,
       bookingStepIndex: currentIndex,
     });
+    
   } else if (isPostBookingStep && stepKey === "offer_booking_sms") {
-    const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
+    const expectedTypeResult = resolveExpectedTypeStepValue({
+      step: currentStep,
+      value,
+      modelValue: clean(args.model_value || ""),
+    });
 
-    const normalizedComparableValue = normalizeComparable(normalizedStepValue);
-
-    if (!normalizedComparableValue) {
+    if (!expectedTypeResult.ok) {
       const bookingState = buildRealtimeBookingState({
         steps,
         state: workingState,
@@ -512,6 +515,7 @@ export async function handleRealtimeSubmitBookingStep(
         error: "UNRESOLVED_BOOKING_SMS_CONSENT",
         message:
           "The caller's SMS consent answer could not be resolved from the configured booking step.",
+        assistant_prompt: clean(currentStep.retry_prompt || currentStep.prompt),
         booking_state: bookingState,
         next_required_step: buildNextRequiredStep({
           steps,
@@ -520,6 +524,9 @@ export async function handleRealtimeSubmitBookingStep(
         }),
       };
     }
+
+    const normalizedStepValue = clean(expectedTypeResult.value);
+    const normalizedComparableValue = normalizeComparable(normalizedStepValue);
 
     const storageSlot =
       targetSlot && targetSlot !== "none" ? targetSlot : stepKey;
@@ -552,9 +559,23 @@ export async function handleRealtimeSubmitBookingStep(
       explicitCurrentIndex: null,
     });
 
-    const smsConsentGranted =
-      normalizedComparableValue === "yes" ||
-      normalizedComparableValue === "true";
+    if (normalizedComparableValue !== "yes" && normalizedComparableValue !== "no") {
+      return {
+        ok: false,
+        error: "UNRESOLVED_BOOKING_SMS_CONSENT",
+        message:
+          "The caller's SMS consent answer was resolved, but not to a canonical yes/no value.",
+        assistant_prompt: clean(currentStep.retry_prompt || currentStep.prompt),
+        booking_state: bookingState,
+        next_required_step: buildNextRequiredStep({
+          steps,
+          bookingState,
+          locale: bookingContext.currentLocale,
+        }),
+      };
+    }
+
+    const smsConsentGranted = normalizedComparableValue === "yes";
 
     return {
       ok: true,
@@ -571,6 +592,7 @@ export async function handleRealtimeSubmitBookingStep(
         ? ""
         : "Perfecto, no envío el SMS. ¿Puedo ayudarte con algo más?",
     };
+
   } else if (isPostBookingStep) {
     const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
 

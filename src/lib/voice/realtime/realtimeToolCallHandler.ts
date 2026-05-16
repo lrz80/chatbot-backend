@@ -421,8 +421,22 @@ export async function handleRealtimeToolCall(
       submittedStepKey === lastSubmittedStepKey &&
       currentTranscriptSeq === lastSubmittedTranscriptSeq;
 
+    const modelSubmittedValue = clean(toolArgs.value || "");
+    const hasModelSubmittedValue = modelSubmittedValue.length > 0;
+
+    /**
+     * Realtime can call submit_booking_step with the correct interpreted value
+     * before lastUserTranscriptSeq is updated.
+     *
+     * If the model submitted a value for the expected pending step, do not block
+     * only because lastUserTranscript still looks stale.
+     */
+    const shouldAllowModelValueForPendingStep =
+      isSubmittingExpectedPendingStep && hasModelSubmittedValue && !isDuplicateSubmit;
+
     const shouldBlockStaleSubmit =
-      !hasNewHumanTranscript || isDuplicateSubmit;
+      !shouldAllowModelValueForPendingStep &&
+      (!hasNewHumanTranscript || isDuplicateSubmit);
 
     if (shouldBlockStaleSubmit) {
       const blockedResult = buildBlockedBookingStepResult(
@@ -457,23 +471,18 @@ export async function handleRealtimeToolCall(
         },
       });
 
-      const staleBecauseNoNewTranscript =
-        !hasNewHumanTranscript && !isDuplicateSubmit;
-
-      if (!staleBecauseNoNewTranscript) {
-        requestRealtimeResponse(
-          {
-            instructions: [
-              "Use only the tool result as source of truth.",
-              "Do not call submit_booking_step again yet.",
-              "The caller has not provided a valid new answer for the current booking step.",
-              "Ask the current pending booking question again briefly.",
-              "Do not advance to another booking step.",
-            ].join(" "),
-          },
-          "tool_guard:booking_step_invalid_or_duplicate_input"
-        );
-      }
+      requestRealtimeResponse(
+        {
+          instructions: [
+            "Use only the tool result as source of truth.",
+            "Do not call submit_booking_step again yet.",
+            "The caller has not provided a valid new answer for the current booking step.",
+            "Ask the current pending booking question again briefly.",
+            "Do not advance to another booking step.",
+          ].join(" "),
+        },
+        "tool_guard:booking_step_invalid_or_duplicate_input"
+      );
 
       return {
         consumed: true,
