@@ -58,8 +58,35 @@ function buildBlockedBookingStepResult(error: string): RealtimeToolResult {
   };
 }
 
-function shouldBlockEndCallForPendingStep(_state: CallState): boolean {
-  return false;
+function shouldBlockEndCallForPendingStep(state: CallState): boolean {
+  const pendingBookingStepKey = clean(state.pendingBookingStepKey || "");
+
+  if (pendingBookingStepKey) {
+    return true;
+  }
+
+  const awaitingPostBookingClosure =
+    (state as any)?.awaitingPostBookingClosure === true;
+
+  if (!awaitingPostBookingClosure) {
+    return false;
+  }
+
+  const postBookingClosureTranscriptSeq =
+    typeof (state as any)?.postBookingClosureTranscriptSeq === "number"
+      ? (state as any).postBookingClosureTranscriptSeq
+      : null;
+
+  const currentTranscriptSeq =
+    typeof state.lastUserTranscriptSeq === "number"
+      ? state.lastUserTranscriptSeq
+      : null;
+
+  if (postBookingClosureTranscriptSeq === null || currentTranscriptSeq === null) {
+    return true;
+  }
+
+  return currentTranscriptSeq <= postBookingClosureTranscriptSeq;
 }
 
 export async function handleRealtimeToolCall(
@@ -194,13 +221,55 @@ export async function handleRealtimeToolCall(
   }
 
   if (toolName === "end_call" && shouldBlockEndCallForPendingStep(realtimeState)) {
-    console.warn("[VOICE_REALTIME][END_CALL_PENDING_STEP_BYPASSED]", {
+    const blockedResult: RealtimeToolResult = {
+      ok: false,
+      error: "END_CALL_BLOCKED_PENDING_BOOKING_STEP",
+      message:
+        "The call cannot end yet because the booking flow is still waiting for the caller.",
+    };
+
+    console.warn("[VOICE_REALTIME][END_CALL_BLOCKED_PENDING_BOOKING_STEP]", {
       callSid,
-      pendingBookingStepKey: clean(
-        realtimeState.pendingBookingStepKey || ""
-      ),
+      pendingBookingStepKey: clean(realtimeState.pendingBookingStepKey || ""),
+      awaitingPostBookingClosure:
+        (realtimeState as any)?.awaitingPostBookingClosure === true,
       lastUserTranscript: clean(lastUserTranscript || ""),
+      lastUserTranscriptSeq: realtimeState.lastUserTranscriptSeq,
+      postBookingClosureTranscriptSeq:
+        (realtimeState as any)?.postBookingClosureTranscriptSeq,
     });
+
+    sendJson(openAiSocket, {
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify(blockedResult),
+      },
+    });
+
+    requestRealtimeResponse(
+      {
+        instructions: [
+          "Use only the tool result as source of truth.",
+          "Do not end the call yet.",
+          "The booking flow is still waiting for the caller.",
+          "Ask the current pending question briefly.",
+          "Ask only one question and wait.",
+        ].join(" "),
+      },
+      "tool_guard:end_call_blocked_pending_booking_step"
+    );
+
+    return {
+      consumed: true,
+      result: blockedResult,
+      realtimeState,
+      bookingFlowLoaded,
+      hangupRequestedByTool: false,
+      callEnding,
+      resetLastUserDigits: false,
+    };
   }
 
   console.log("[VOICE_REALTIME][TOOL_CALL]", {
@@ -673,6 +742,12 @@ export async function handleRealtimeToolCall(
         toolName === "send_booking_sms" && toolResult?.ok === true
           ? clean(lastUserTranscript || "")
           : (realtimeState as any)?.postBookingClosureTranscript,
+
+      postBookingClosureTranscriptSeq:
+        toolName === "send_booking_sms" && toolResult?.ok === true
+          ? realtimeState.lastUserTranscriptSeq
+          : (realtimeState as any)?.postBookingClosureTranscriptSeq,
+
     } as CallState;
 
     const hangupRequestedByTool =

@@ -245,10 +245,25 @@ export async function handleRealtimeSubmitBookingStep(
     }),
   });
 
-  const expectedIndex =
-    typeof bookingContext.state.bookingStepIndex === "number" &&
-    bookingContext.state.bookingStepIndex >= 0 &&
-    bookingContext.state.bookingStepIndex < steps.length
+  const pendingStepKey = clean(bookingContext.state.pendingBookingStepKey || "");
+  const pendingStepIndex = pendingStepKey
+    ? getStepIndexByKey(steps, pendingStepKey)
+    : -1;
+
+  const submittedMatchesPendingStep =
+    pendingStepIndex >= 0 && stepKey === pendingStepKey;
+
+  /**
+   * Realtime can have bookingStepIndex stale while pendingBookingStepKey
+   * already points to the real step waiting for the caller.
+   *
+   * The submitted step must be validated against the pending step first.
+   */
+  const expectedIndex = submittedMatchesPendingStep
+    ? pendingStepIndex
+    : typeof bookingContext.state.bookingStepIndex === "number" &&
+        bookingContext.state.bookingStepIndex >= 0 &&
+        bookingContext.state.bookingStepIndex < steps.length
       ? bookingContext.state.bookingStepIndex
       : resolveCurrentStepIndex({
           steps,
@@ -495,7 +510,7 @@ export async function handleRealtimeSubmitBookingStep(
       answersBySlot: nextAnswers,
       bookingStepIndex: currentIndex,
     });
-    
+
   } else if (isPostBookingStep && stepKey === "offer_booking_sms") {
     const expectedTypeResult = resolveExpectedTypeStepValue({
       step: currentStep,
