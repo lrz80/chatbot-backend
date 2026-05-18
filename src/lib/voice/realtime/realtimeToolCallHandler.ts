@@ -288,6 +288,12 @@ export async function handleRealtimeToolCall(
   });
 
   if (toolName === "submit_booking_step") {
+    effectiveToolArgs.model_value = clean(toolArgs.value || "");
+    effectiveToolArgs.transcript_value = clean(lastUserTranscript || "");
+    effectiveToolArgs.value_source = "model_with_transcript_context";
+  }
+
+  if (toolName === "submit_booking_step") {
     console.log("[VOICE_REALTIME][SUBMIT_STEP_VALUE_SOURCE]", {
       callSid,
       step_key: effectiveToolArgs.step_key,

@@ -125,8 +125,16 @@ export async function handleRealtimeSubmitBookingStep(
   } = params;
 
   const stepKey = clean(args.step_key);
+
   const value = clean(args.value);
-  const rawTranscriptValue = clean(args.raw_transcript_value);
+
+  const modelValue = clean(args.model_value || args.value);
+
+  const rawTranscriptValue = clean(
+    args.raw_transcript_value ||
+      args.transcript_value ||
+      bookingContext.userInput
+  );
 
   if (!stepKey) {
     return {
@@ -190,7 +198,7 @@ export async function handleRealtimeSubmitBookingStep(
     step: currentStep,
     value,
     rawTranscriptValue,
-    modelValue: clean(args.model_value || ""),
+    modelValue,
     timeZone: stepTimeZone,
   });
 
@@ -250,7 +258,7 @@ export async function handleRealtimeSubmitBookingStep(
       rawAnswers,
       workingState,
       resolvedInputValue,
-      modelValue: clean(args.model_value || ""),
+      modelValue,
       rawTranscriptValue,
       steps,
       buildRealtimeBookingState,
@@ -315,7 +323,7 @@ export async function handleRealtimeSubmitBookingStep(
       targetSlot,
       stepKey,
       resolvedInputValue,
-      modelValue: clean(args.model_value || ""),
+      modelValue,
       callerPhone,
       rawAnswers,
       workingState,
