@@ -60,6 +60,26 @@ function getObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function stepExpectsUserInput(step: Record<string, unknown> | null): boolean {
+  if (!step) return false;
+
+  const stepKey = clean(step.step_key || "");
+  const slot = clean(step.slot || "");
+  const expectedType = clean(step.expected_type || "");
+  const required = step.required === true;
+
+  if (!stepKey) return false;
+
+  return (
+    required ||
+    expectedType === "confirmation" ||
+    expectedType === "phone" ||
+    expectedType === "datetime" ||
+    expectedType === "number" ||
+    (expectedType === "text" && slot !== "none")
+  );
+}
+
 export async function handlePendingBookingStepToolRedirect(
   params: HandlePendingBookingStepToolRedirectParams
 ): Promise<HandlePendingBookingStepToolRedirectResult> {
@@ -100,10 +120,13 @@ export async function handlePendingBookingStepToolRedirect(
     };
   }
 
+  const redirectedValue = clean(lastUserTranscript || "");
+
   const redirectedToolArgs = {
     step_key: pendingStepKey,
-    value: clean(lastUserTranscript || ""),
-    raw_transcript_value: clean(lastUserTranscript || ""),
+    value: redirectedValue,
+    raw_transcript_value: redirectedValue,
+    model_value: redirectedValue,
   };
 
   console.warn("[VOICE_REALTIME][TOOL_REDIRECTED_TO_PENDING_BOOKING_STEP]", {
@@ -131,59 +154,98 @@ export async function handlePendingBookingStepToolRedirect(
 
   const nextRequiredStep = getObject(redirectedToolResult?.next_required_step);
 
+  const redirectedOk = redirectedToolResult?.ok === true;
+  const nextRequiredStepExpectsUserInput = stepExpectsUserInput(nextRequiredStep);
+
   const resolvedPendingBookingStepKey =
-    clean(nextRequiredStep?.step_key || "") || undefined;
+    redirectedOk && nextRequiredStepExpectsUserInput
+      ? clean(nextRequiredStep?.step_key || "") || undefined
+      : redirectedOk
+        ? undefined
+        : pendingStepKey;
 
   const redirectedActionRequired = clean(
     (redirectedToolResult as any)?.action_required || ""
   );
 
   const shouldExecuteOriginalToolAfterRedirect =
-    redirectedToolResult?.ok === true &&
-    !nextRequiredStep &&
-    (
-        !redirectedActionRequired ||
-        redirectedActionRequired === originalToolName
-    );
+    redirectedOk &&
+    !nextRequiredStepExpectsUserInput &&
+    redirectedActionRequired === originalToolName;
 
   const nextRealtimeState: CallState = {
     ...realtimeState,
     lang: currentLocale,
 
     pendingBookingStepKey: shouldExecuteOriginalToolAfterRedirect
-        ? undefined
-        : resolvedPendingBookingStepKey,
+      ? undefined
+      : resolvedPendingBookingStepKey,
 
     pendingBookingStepRequired:
-        shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
+      shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
         ? undefined
-        : nextRequiredStep?.required === true,
+        : redirectedOk && nextRequiredStepExpectsUserInput
+          ? nextRequiredStep?.required === true
+          : realtimeState.pendingBookingStepRequired,
+
+    pendingBookingStepSlot:
+      shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
+        ? undefined
+        : redirectedOk && nextRequiredStepExpectsUserInput
+          ? clean(nextRequiredStep?.slot || "")
+          : (realtimeState as any).pendingBookingStepSlot,
+
+    pendingBookingStepExpectedType:
+      shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
+        ? undefined
+        : redirectedOk && nextRequiredStepExpectsUserInput
+          ? clean(nextRequiredStep?.expected_type || "")
+          : (realtimeState as any).pendingBookingStepExpectedType,
 
     pendingBookingStepPrompt:
-        shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
+      shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
         ? undefined
-        : clean(nextRequiredStep?.prompt || "") || undefined,
+        : redirectedOk && nextRequiredStepExpectsUserInput
+          ? clean(nextRequiredStep?.prompt || "") || undefined
+          : realtimeState.pendingBookingStepPrompt,
 
     pendingBookingStepPromptAnchorTranscript:
-        shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
+      shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
         ? undefined
-        : clean(lastUserTranscript || ""),
+        : redirectedOk && nextRequiredStepExpectsUserInput
+          ? clean(lastUserTranscript || "")
+          : realtimeState.pendingBookingStepPromptAnchorTranscript,
 
-    lastSubmittedBookingStepKey: pendingStepKey,
-    lastSubmittedBookingTranscript: clean(lastUserTranscript || ""),
+    pendingBookingStepPromptAnchorSeq:
+      shouldExecuteOriginalToolAfterRedirect || !resolvedPendingBookingStepKey
+        ? undefined
+        : redirectedOk && nextRequiredStepExpectsUserInput
+          ? realtimeState.lastUserTranscriptSeq
+          : realtimeState.pendingBookingStepPromptAnchorSeq,
+
+    lastSubmittedBookingStepKey:
+      redirectedOk ? pendingStepKey : realtimeState.lastSubmittedBookingStepKey,
+
+    lastSubmittedBookingTranscript:
+      redirectedOk ? redirectedValue : realtimeState.lastSubmittedBookingTranscript,
+
+    lastSubmittedBookingTranscriptSeq:
+      redirectedOk
+        ? realtimeState.lastUserTranscriptSeq
+        : realtimeState.lastSubmittedBookingTranscriptSeq,
 
     pendingActionGranted: shouldExecuteOriginalToolAfterRedirect
-        ? true
-        : realtimeState.pendingActionGranted,
+      ? true
+      : realtimeState.pendingActionGranted,
 
     pendingActionAnswered:
-        redirectedToolResult?.ok === true
+      redirectedToolResult?.ok === true
         ? true
         : realtimeState.pendingActionAnswered,
 
     pendingActionToolName: shouldExecuteOriginalToolAfterRedirect
-        ? originalToolName
-        : realtimeState.pendingActionToolName,
+      ? originalToolName
+      : realtimeState.pendingActionToolName,
     } as CallState;
 
   console.log("[VOICE_REALTIME][TOOL_RESULT]", {
@@ -224,8 +286,11 @@ export async function handlePendingBookingStepToolRedirect(
 
       pendingBookingStepKey: undefined,
       pendingBookingStepRequired: undefined,
+      pendingBookingStepSlot: undefined,
+      pendingBookingStepExpectedType: undefined,
       pendingBookingStepPrompt: undefined,
       pendingBookingStepPromptAnchorTranscript: undefined,
+      pendingBookingStepPromptAnchorSeq: undefined,
 
       pendingActionGranted: undefined,
       pendingActionAnswered: true,
@@ -240,7 +305,12 @@ export async function handlePendingBookingStepToolRedirect(
         actionToolResult?.ok === true
         ? clean(lastUserTranscript || "")
         : nextRealtimeState.postBookingClosureTranscript,
-      } as CallState;
+
+      postBookingClosureTranscriptSeq:
+        actionToolResult?.ok === true
+        ? realtimeState.lastUserTranscriptSeq
+        : (nextRealtimeState as any).postBookingClosureTranscriptSeq,
+    } as CallState;
 
     console.log("[VOICE_REALTIME][TOOL_RESULT]", {
       callSid,

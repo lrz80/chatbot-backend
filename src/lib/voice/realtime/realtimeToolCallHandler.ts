@@ -60,8 +60,27 @@ function buildBlockedBookingStepResult(error: string): RealtimeToolResult {
 
 function shouldBlockEndCallForPendingStep(state: CallState): boolean {
   const pendingBookingStepKey = clean(state.pendingBookingStepKey || "");
+  const pendingSlot = clean((state as any).pendingBookingStepSlot || "");
+  const pendingExpectedType = clean(
+    (state as any).pendingBookingStepExpectedType || ""
+  );
+  const pendingRequired = (state as any).pendingBookingStepRequired === true;
 
-  if (pendingBookingStepKey) {
+  const pendingStepExpectsUserInput =
+    Boolean(pendingBookingStepKey) &&
+    (
+      pendingRequired ||
+      pendingExpectedType === "confirmation" ||
+      pendingExpectedType === "phone" ||
+      pendingExpectedType === "datetime" ||
+      pendingExpectedType === "number" ||
+      (
+        pendingExpectedType === "text" &&
+        pendingSlot !== "none"
+      )
+    );
+
+  if (pendingStepExpectsUserInput) {
     return true;
   }
 
@@ -643,8 +662,35 @@ export async function handleRealtimeToolCall(
     const resolvedPendingBookingStepKey =
       clean(nextRequiredStep?.step_key || "") || undefined;
 
+    const resolvedPendingBookingStepSlot = clean(nextRequiredStep?.slot || "");
+    const resolvedPendingBookingStepExpectedType = clean(
+      nextRequiredStep?.expected_type || ""
+    );
+    const resolvedPendingBookingStepRequired = nextRequiredStep?.required === true;
+
+    /**
+     * A pending booking step is only something that expects user input.
+     * Informational steps like slot="none" + expected_type="text" must not block
+     * the call or be treated as a question.
+     */
+    const nextStepExpectsUserInput =
+      Boolean(resolvedPendingBookingStepKey) &&
+      (
+        resolvedPendingBookingStepRequired ||
+        resolvedPendingBookingStepExpectedType === "confirmation" ||
+        resolvedPendingBookingStepExpectedType === "phone" ||
+        resolvedPendingBookingStepExpectedType === "datetime" ||
+        resolvedPendingBookingStepExpectedType === "number" ||
+        (
+          resolvedPendingBookingStepExpectedType === "text" &&
+          resolvedPendingBookingStepSlot !== "none"
+        )
+      );
+
     const shouldClearPendingBookingStep =
-      toolName === "send_booking_sms" || toolName === "end_call";
+      toolName === "send_booking_sms" ||
+      toolName === "end_call" ||
+      !nextStepExpectsUserInput;
 
     const submittedBookingStepKey =
       toolName === "submit_booking_step"
@@ -681,6 +727,16 @@ export async function handleRealtimeToolCall(
         shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
           ? undefined
           : nextRequiredStep?.required === true,
+
+      pendingBookingStepSlot:
+        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
+          ? undefined
+          : resolvedPendingBookingStepSlot,
+
+      pendingBookingStepExpectedType:
+        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
+          ? undefined
+          : resolvedPendingBookingStepExpectedType,
 
       pendingBookingStepPrompt:
         shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
