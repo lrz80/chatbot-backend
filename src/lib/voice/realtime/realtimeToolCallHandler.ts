@@ -2,11 +2,17 @@
 import WebSocket from "ws";
 import type { CallState } from "../types";
 import { executeRealtimeTool } from "./realtimeToolExecutor";
-import {
-  buildToolFollowupInstructions,
-  type RealtimeToolResult,
-} from "./buildToolFollowupInstructions";
-import { handlePendingBookingStepToolRedirect } from "./handlePendingBookingStepToolRedirect";
+import { type RealtimeToolResult } from "./buildToolFollowupInstructions";
+import { validateSubmitBookingStepFreshness } from "./toolGuards/validateSubmitBookingStepFreshness";
+import { guardRealtimeEndCall } from "./toolGuards/guardRealtimeEndCall";
+import { guardSendBookingSms } from "./toolGuards/guardSendBookingSms";
+import { buildNextRealtimeStateFromToolResult } from "./toolState/buildNextRealtimeStateFromToolResult";
+import { buildEffectiveRealtimeToolArgs } from "./toolArgs/buildEffectiveRealtimeToolArgs";
+import { resolveRealtimeToolFollowupInstructions } from "./toolFollowup/resolveRealtimeToolFollowupInstructions";
+import { guardSubmitBookingStepFlowLoaded } from "./toolGuards/guardSubmitBookingStepFlowLoaded";
+import { handleRealtimeToolError } from "./toolErrors/handleRealtimeToolError";
+import { guardTenantReady } from "./toolGuards/guardTenantReady";
+import { handleBlockedSubmitBookingStep } from "./toolGuards/handleBlockedSubmitBookingStep";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -48,64 +54,6 @@ function clean(value: unknown): string {
 function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
   if (socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify(payload));
-}
-
-function buildBlockedBookingStepResult(error: string): RealtimeToolResult {
-  return {
-    ok: false,
-    error,
-    message: error,
-  };
-}
-
-function shouldBlockEndCallForPendingStep(state: CallState): boolean {
-  const pendingBookingStepKey = clean(state.pendingBookingStepKey || "");
-  const pendingSlot = clean((state as any).pendingBookingStepSlot || "");
-  const pendingExpectedType = clean(
-    (state as any).pendingBookingStepExpectedType || ""
-  );
-  const pendingRequired = (state as any).pendingBookingStepRequired === true;
-
-  const pendingStepExpectsUserInput =
-    Boolean(pendingBookingStepKey) &&
-    (
-      pendingRequired ||
-      pendingExpectedType === "confirmation" ||
-      pendingExpectedType === "phone" ||
-      pendingExpectedType === "datetime" ||
-      pendingExpectedType === "number" ||
-      (
-        pendingExpectedType === "text" &&
-        pendingSlot !== "none"
-      )
-    );
-
-  if (pendingStepExpectsUserInput) {
-    return true;
-  }
-
-  const awaitingPostBookingClosure =
-    (state as any)?.awaitingPostBookingClosure === true;
-
-  if (!awaitingPostBookingClosure) {
-    return false;
-  }
-
-  const postBookingClosureTranscriptSeq =
-    typeof (state as any)?.postBookingClosureTranscriptSeq === "number"
-      ? (state as any).postBookingClosureTranscriptSeq
-      : null;
-
-  const currentTranscriptSeq =
-    typeof state.lastUserTranscriptSeq === "number"
-      ? state.lastUserTranscriptSeq
-      : null;
-
-  if (postBookingClosureTranscriptSeq === null || currentTranscriptSeq === null) {
-    return true;
-  }
-
-  return currentTranscriptSeq <= postBookingClosureTranscriptSeq;
 }
 
 export async function handleRealtimeToolCall(
@@ -177,33 +125,23 @@ export async function handleRealtimeToolCall(
   }
 
   if (toolName === "end_call") {
-    const awaitingPostBookingClosure =
-      (realtimeState as any)?.awaitingPostBookingClosure === true;
+    const endCallGuard = guardRealtimeEndCall({
+      callSid,
+      realtimeState,
+      lastUserTranscript,
+    });
 
-    const postBookingClosureTranscript = clean(
-      (realtimeState as any)?.postBookingClosureTranscript || ""
-    );
-
-    const currentTranscript = clean(lastUserTranscript || "");
-
-    const isImmediatePostSmsHangup =
-      awaitingPostBookingClosure &&
-      postBookingClosureTranscript &&
-      postBookingClosureTranscript === currentTranscript;
-
-    if (isImmediatePostSmsHangup) {
+    if (!endCallGuard.ok) {
       const blockedResult: RealtimeToolResult = {
         ok: false,
-        error: "POST_BOOKING_CLOSURE_ANSWER_REQUIRED",
-        message:
-          "The caller has not answered whether they need anything else after the booking SMS.",
+        error: endCallGuard.error,
+        message: endCallGuard.message,
       };
 
-      console.warn("[VOICE_REALTIME][END_CALL_BLOCKED_WAITING_POST_SMS_REPLY]", {
-        callSid,
-        postBookingClosureTranscript,
-        currentTranscript,
-      });
+      console.warn(
+        `[VOICE_REALTIME][${endCallGuard.logEvent}]`,
+        endCallGuard.logPayload
+      );
 
       sendJson(openAiSocket, {
         type: "conversation.item.create",
@@ -216,15 +154,9 @@ export async function handleRealtimeToolCall(
 
       requestRealtimeResponse(
         {
-          instructions: [
-            "Use only the tool result as source of truth.",
-            "Do not end the call yet.",
-            "The booking SMS was sent, but the caller has not answered whether they need anything else.",
-            "Ask briefly if the caller needs anything else.",
-            "Ask only one question and wait for the caller answer.",
-          ].join(" "),
+          instructions: endCallGuard.responseInstructions,
         },
-        "tool_guard:end_call_waiting_post_sms_reply"
+        endCallGuard.responseSource
       );
 
       return {
@@ -234,61 +166,9 @@ export async function handleRealtimeToolCall(
         bookingFlowLoaded,
         hangupRequestedByTool: false,
         callEnding,
-        resetLastUserDigits: true,
+        resetLastUserDigits: endCallGuard.resetLastUserDigits,
       };
     }
-  }
-
-  if (toolName === "end_call" && shouldBlockEndCallForPendingStep(realtimeState)) {
-    const blockedResult: RealtimeToolResult = {
-      ok: false,
-      error: "END_CALL_BLOCKED_PENDING_BOOKING_STEP",
-      message:
-        "The call cannot end yet because the booking flow is still waiting for the caller.",
-    };
-
-    console.warn("[VOICE_REALTIME][END_CALL_BLOCKED_PENDING_BOOKING_STEP]", {
-      callSid,
-      pendingBookingStepKey: clean(realtimeState.pendingBookingStepKey || ""),
-      awaitingPostBookingClosure:
-        (realtimeState as any)?.awaitingPostBookingClosure === true,
-      lastUserTranscript: clean(lastUserTranscript || ""),
-      lastUserTranscriptSeq: realtimeState.lastUserTranscriptSeq,
-      postBookingClosureTranscriptSeq:
-        (realtimeState as any)?.postBookingClosureTranscriptSeq,
-    });
-
-    sendJson(openAiSocket, {
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: callId,
-        output: JSON.stringify(blockedResult),
-      },
-    });
-
-    requestRealtimeResponse(
-      {
-        instructions: [
-          "Use only the tool result as source of truth.",
-          "Do not end the call yet.",
-          "The booking flow is still waiting for the caller.",
-          "Ask the current pending question briefly.",
-          "Ask only one question and wait.",
-        ].join(" "),
-      },
-      "tool_guard:end_call_blocked_pending_booking_step"
-    );
-
-    return {
-      consumed: true,
-      result: blockedResult,
-      realtimeState,
-      bookingFlowLoaded,
-      hangupRequestedByTool: false,
-      callEnding,
-      resetLastUserDigits: false,
-    };
   }
 
   console.log("[VOICE_REALTIME][TOOL_CALL]", {
@@ -298,293 +178,114 @@ export async function handleRealtimeToolCall(
     toolArgs,
   });
 
+  const tenantReadyGuard = guardTenantReady({
+    tenantId,
+    callId,
+    openAiSocket,
+    requestRealtimeResponse,
+    realtimeState,
+    bookingFlowLoaded,
+    callEnding,
+  });
+
+  if (tenantReadyGuard.handled) {
+    return {
+      consumed: true,
+      realtimeState: tenantReadyGuard.realtimeState,
+      bookingFlowLoaded: tenantReadyGuard.bookingFlowLoaded,
+      hangupRequestedByTool: tenantReadyGuard.hangupRequestedByTool,
+      callEnding: tenantReadyGuard.callEnding,
+      resetLastUserDigits: tenantReadyGuard.resetLastUserDigits,
+    };
+  }
+
   if (!tenantId) {
-    sendJson(openAiSocket, {
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: callId,
-        output: JSON.stringify({
-          ok: false,
-          error: "TENANT_NOT_READY",
-        }),
-      },
-    });
+    throw new Error("TENANT_NOT_READY_AFTER_GUARD");
+  }
 
-    requestRealtimeResponse({
-      instructions:
-        "Tell the caller briefly that the system is not ready to complete that action yet.",
-    });
+  const resolvedTenantId: string = tenantId;
+  
+  const sendBookingSmsGuard = await guardSendBookingSms({
+    toolName,
+    toolArgs,
+    callId,
+    openAiSocket,
+    requestRealtimeResponse,
+    callSid,
+    tenantId: resolvedTenantId,
+    callerPhone,
+    didNumber,
+    realtimeTenant,
+    realtimeCfg,
+    realtimeState,
+    currentLocale,
+    bookingFlowLoaded,
+    callEnding,
+    lastUserTranscript,
+    lastUserDigits,
+  });
 
+  if (sendBookingSmsGuard.handled) {
     return {
       consumed: true,
-      realtimeState,
-      bookingFlowLoaded,
-      hangupRequestedByTool: false,
-      callEnding,
-      resetLastUserDigits: false,
+      result: sendBookingSmsGuard.result,
+      realtimeState: sendBookingSmsGuard.realtimeState,
+      bookingFlowLoaded: sendBookingSmsGuard.bookingFlowLoaded,
+      hangupRequestedByTool: sendBookingSmsGuard.hangupRequestedByTool,
+      callEnding: sendBookingSmsGuard.callEnding,
+      resetLastUserDigits: sendBookingSmsGuard.resetLastUserDigits,
     };
   }
 
-  if (toolName === "send_booking_sms") {
-    const pendingActionGranted =
-      realtimeState.pendingActionGranted === true;
+  const bookingFlowLoadedGuard = guardSubmitBookingStepFlowLoaded({
+    toolName,
+    callId,
+    openAiSocket,
+    requestRealtimeResponse,
+    callSid,
+    realtimeState,
+    bookingFlowLoaded,
+    callEnding,
+  });
 
-    const pendingActionToolName = clean(
-      realtimeState.pendingActionToolName || ""
-    );
-
-    const canExecutePendingAction =
-      pendingActionGranted && pendingActionToolName === toolName;
-
-    if (!canExecutePendingAction) {
-      const redirectResult = await handlePendingBookingStepToolRedirect({
-        originalToolName: toolName,
-        originalToolArgs: toolArgs,
-        callId,
-        openAiSocket,
-        requestRealtimeResponse,
-        callSid,
-        tenantId,
-        callerPhone,
-        didNumber,
-        realtimeTenant,
-        realtimeCfg,
-        realtimeState,
-        currentLocale,
-        bookingFlowLoaded,
-        callEnding,
-        lastUserTranscript,
-        lastUserDigits,
-      });
-
-      if (redirectResult.handled) {
-        return {
-          consumed: true,
-          result: redirectResult.result,
-          realtimeState: redirectResult.realtimeState,
-          bookingFlowLoaded: redirectResult.bookingFlowLoaded,
-          hangupRequestedByTool: redirectResult.hangupRequestedByTool,
-          callEnding: redirectResult.callEnding,
-          resetLastUserDigits: redirectResult.resetLastUserDigits,
-        };
-      }
-
-      const blockedResult: RealtimeToolResult = {
-        ok: false,
-        error: "BOOKING_SMS_CONSENT_REQUIRED",
-        message: "BOOKING_SMS_CONSENT_REQUIRED",
-        next_required_step: null,
-      };
-
-      console.warn("[VOICE_REALTIME][BOOKING_SMS_BLOCKED_WITHOUT_PENDING_STEP]", {
-        callSid,
-        pendingActionGranted,
-        pendingActionToolName,
-        lastUserTranscript: clean(lastUserTranscript || ""),
-      });
-
-      sendJson(openAiSocket, {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: callId,
-          output: JSON.stringify(blockedResult),
-        },
-      });
-
-      requestRealtimeResponse(
-        {
-          instructions: [
-            "Use only the tool result as source of truth.",
-            "Do not call the blocked tool again.",
-            "The required booking confirmation state is missing.",
-            "Call get_booking_flow to recover the current configured booking step.",
-            "Do not invent a consent question.",
-          ].join(" "),
-        },
-        "tool_guard:missing_pending_booking_step"
-      );
-
-      return {
-        consumed: true,
-        result: blockedResult,
-        realtimeState,
-        bookingFlowLoaded,
-        hangupRequestedByTool: false,
-        callEnding,
-        resetLastUserDigits: true,
-      };
-    }
-  }
-
-  if (toolName === "submit_booking_step" && !bookingFlowLoaded) {
-    const blockedResult: RealtimeToolResult = {
-      ok: false,
-      error: "BOOKING_FLOW_NOT_LOADED",
-    };
-
-    console.log("[VOICE_REALTIME][TOOL_RESULT]", {
-      callSid,
-      toolName,
-      ok: false,
-      error: blockedResult.error,
-    });
-
-    sendJson(openAiSocket, {
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: callId,
-        output: JSON.stringify(blockedResult),
-      },
-    });
-
-    requestRealtimeResponse({
-      instructions: [
-        "Call get_booking_flow now.",
-        "Do not ask for any booking data yet.",
-        "Do not call submit_booking_step again until get_booking_flow returns.",
-        "After get_booking_flow returns, ask the next required booking question.",
-        "Do not invent the current booking step."
-      ].join(" "),
-    });
-
+  if (bookingFlowLoadedGuard.handled) {
     return {
       consumed: true,
-      realtimeState: {
-        ...realtimeState,
-        bookingStepIndex: undefined,
-        pendingBookingStepKey: undefined,
-      } as CallState,
-      bookingFlowLoaded: false,
-      hangupRequestedByTool: false,
-      callEnding,
-      resetLastUserDigits: true,
+      result: bookingFlowLoadedGuard.result,
+      realtimeState: bookingFlowLoadedGuard.realtimeState,
+      bookingFlowLoaded: bookingFlowLoadedGuard.bookingFlowLoaded,
+      hangupRequestedByTool: bookingFlowLoadedGuard.hangupRequestedByTool,
+      callEnding: bookingFlowLoadedGuard.callEnding,
+      resetLastUserDigits: bookingFlowLoadedGuard.resetLastUserDigits,
     };
   }
 
   if (toolName === "submit_booking_step") {
-    const submittedStepKey = clean(toolArgs.step_key || "");
-    const pendingStepKey = clean(realtimeState.pendingBookingStepKey || "");
-    const currentTranscript = clean(lastUserTranscript || "");
-    const promptAnchorTranscript = clean(
-      realtimeState.pendingBookingStepPromptAnchorTranscript || ""
-    );
+    const freshness = validateSubmitBookingStepFreshness({
+      toolArgs,
+      realtimeState,
+      lastUserTranscript,
+    });
 
-    const lastSubmittedStepKey = clean(
-      realtimeState.lastSubmittedBookingStepKey || ""
-    );
-
-    const lastSubmittedTranscript = clean(
-      realtimeState.lastSubmittedBookingTranscript || ""
-    );
-
-    const hasPendingStepState = Boolean(pendingStepKey);
-    const hasPromptAnchorTranscript = Boolean(promptAnchorTranscript);
-
-    const isSubmittingExpectedPendingStep =
-      hasPendingStepState && submittedStepKey === pendingStepKey;
-
-    const currentTranscriptSeq =
-      typeof realtimeState.lastUserTranscriptSeq === "number"
-        ? realtimeState.lastUserTranscriptSeq
-        : 0;
-
-    const promptAnchorSeq =
-      typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
-        ? realtimeState.pendingBookingStepPromptAnchorSeq
-        : -1;
-
-    const lastSubmittedTranscriptSeq =
-      typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
-        ? realtimeState.lastSubmittedBookingTranscriptSeq
-        : -1;
-
-    const hasNewHumanTranscript =
-      Boolean(currentTranscript) && currentTranscriptSeq > promptAnchorSeq;
-
-    const isDuplicateSubmit =
-      Boolean(submittedStepKey) &&
-      submittedStepKey === lastSubmittedStepKey &&
-      currentTranscriptSeq === lastSubmittedTranscriptSeq;
-
-    const shouldBlockStaleSubmit =
-      !hasNewHumanTranscript || isDuplicateSubmit;
-
-    if (shouldBlockStaleSubmit) {
-      const blockedResult = buildBlockedBookingStepResult(
-        "BOOKING_STEP_WAITING_FOR_NEW_USER_INPUT"
-      );
-
-      console.warn("[VOICE_REALTIME][BOOKING_STEP_SUBMIT_BLOCKED_STALE_OR_DUPLICATE_INPUT]", {
+    if (!freshness.ok) {
+      return handleBlockedSubmitBookingStep({
         callSid,
-        submittedStepKey,
-        pendingStepKey,
-        currentTranscript,
-        promptAnchorTranscript,
-        lastSubmittedStepKey,
-        lastSubmittedTranscript,
-        hasPendingStepState,
-        hasPromptAnchorTranscript,
-        isSubmittingExpectedPendingStep,
-        currentTranscriptSeq,
-        promptAnchorSeq,
-        lastSubmittedTranscriptSeq,
-        hasNewHumanTranscript,
-        isDuplicateSubmit,
-        shouldBlockStaleSubmit,
-      });
-
-      sendJson(openAiSocket, {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: callId,
-          output: JSON.stringify(blockedResult),
-        },
-      });
-
-      requestRealtimeResponse(
-        {
-          instructions: [
-            "Use only the tool result as source of truth.",
-            "Do not call submit_booking_step again yet.",
-            "The caller has not provided a new answer for the current booking step after the latest question.",
-            "Repeat the current pending booking question naturally and briefly.",
-            "Do not apologize excessively.",
-            "Do not mention an error.",
-            "Do not advance to another booking step.",
-            "Wait for the caller to answer.",
-          ].join(" "),
-        },
-        "tool_guard:booking_step_invalid_or_duplicate_input"
-      );
-
-      return {
-        consumed: true,
-        result: blockedResult,
+        callId,
+        openAiSocket,
+        requestRealtimeResponse,
+        freshness,
         realtimeState,
         bookingFlowLoaded,
-        hangupRequestedByTool: false,
         callEnding,
-        resetLastUserDigits: false,
-      };
+      });
     }
   }
 
-  const effectiveToolArgs =
-    toolName === "submit_booking_step"
-      ? {
-          ...toolArgs,
-          step_key: clean(toolArgs.step_key || ""),
-          value: clean(toolArgs.value || ""),
-          raw_transcript_value: clean(lastUserTranscript || ""),
-          model_value: clean(toolArgs.value || ""),
-        }
-      : {
-          ...toolArgs,
-        };
+  const effectiveToolArgs = buildEffectiveRealtimeToolArgs({
+    toolName,
+    toolArgs,
+    lastUserTranscript,
+  });
 
   if (toolName === "submit_booking_step") {
     console.log("[VOICE_REALTIME][SUBMIT_STEP_VALUE_SOURCE]", {
@@ -598,7 +299,7 @@ export async function handleRealtimeToolCall(
 
   try {
     const toolResult = await executeRealtimeTool({
-      tenantId,
+      tenantId: resolvedTenantId,
       callerPhone,
       toolName,
       args: effectiveToolArgs,
@@ -615,177 +316,14 @@ export async function handleRealtimeToolCall(
     const nextBookingFlowLoaded =
       toolName === "get_booking_flow" && toolResult?.ok ? true : bookingFlowLoaded;
 
-    const bookingState =
-      toolResult &&
-      typeof toolResult.booking_state === "object" &&
-      toolResult.booking_state !== null
-        ? (toolResult.booking_state as Record<string, unknown>)
-        : null;
-
-    const collectedSlots =
-      bookingState &&
-      bookingState.collected_slots &&
-      typeof bookingState.collected_slots === "object"
-        ? Object.fromEntries(
-            Object.entries(bookingState.collected_slots as Record<string, unknown>)
-              .map(([key, value]) => [clean(key), clean(value)])
-              .filter(([key, value]) => key && value)
-          )
-        : {};
-
-    const nextRequiredStep =
-      toolResult &&
-      typeof toolResult.next_required_step === "object" &&
-      toolResult.next_required_step !== null
-        ? (toolResult.next_required_step as Record<string, unknown>)
-        : null;
-
-    const resolvedPendingBookingStepKey =
-      clean(nextRequiredStep?.step_key || "") || undefined;
-
-    const resolvedPendingBookingStepSlot = clean(nextRequiredStep?.slot || "");
-    const resolvedPendingBookingStepExpectedType = clean(
-      nextRequiredStep?.expected_type || ""
-    );
-    const resolvedPendingBookingStepRequired = nextRequiredStep?.required === true;
-
-    /**
-     * A pending booking step is only something that expects user input.
-     * Informational steps like slot="none" + expected_type="text" must not block
-     * the call or be treated as a question.
-     */
-    const nextStepExpectsUserInput =
-      Boolean(resolvedPendingBookingStepKey) &&
-      (
-        resolvedPendingBookingStepRequired ||
-        resolvedPendingBookingStepExpectedType === "confirmation" ||
-        resolvedPendingBookingStepExpectedType === "phone" ||
-        resolvedPendingBookingStepExpectedType === "datetime" ||
-        resolvedPendingBookingStepExpectedType === "number" ||
-        (
-          resolvedPendingBookingStepExpectedType === "text" &&
-          resolvedPendingBookingStepSlot !== "none"
-        )
-      );
-
-    const shouldClearPendingBookingStep =
-      toolName === "send_booking_sms" ||
-      toolName === "end_call" ||
-      !nextStepExpectsUserInput;
-
-    const submittedBookingStepKey =
-      toolName === "submit_booking_step"
-        ? clean((effectiveToolArgs as any)?.step_key || "")
-        : "";
-
-    const hasSubmittedPendingBookingStep =
-      Boolean(submittedBookingStepKey) &&
-      submittedBookingStepKey ===
-        clean(realtimeState.pendingBookingStepKey || "");
-
-    const actionRequiredToolName = clean(
-      (toolResult as any)?.action_required || ""
-    );
-
-    const pendingActionGranted =
-      hasSubmittedPendingBookingStep &&
-      toolResult?.ok === true &&
-      Boolean(actionRequiredToolName);
-
-    const nextRealtimeState: CallState = {
-      ...realtimeState,
-      lang: currentLocale,
-      bookingData: {
-        ...(realtimeState.bookingData || {}),
-        ...collectedSlots,
-      },
-
-      pendingBookingStepKey: shouldClearPendingBookingStep
-        ? undefined
-        : resolvedPendingBookingStepKey,
-
-      pendingBookingStepRequired:
-        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
-          ? undefined
-          : nextRequiredStep?.required === true,
-
-      pendingBookingStepSlot:
-        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
-          ? undefined
-          : resolvedPendingBookingStepSlot,
-
-      pendingBookingStepExpectedType:
-        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
-          ? undefined
-          : resolvedPendingBookingStepExpectedType,
-
-      pendingBookingStepPrompt:
-        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
-          ? undefined
-          : clean(nextRequiredStep?.prompt || "") || undefined,
-
-      pendingBookingStepPromptAnchorTranscript:
-        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
-          ? undefined
-          : clean(lastUserTranscript || ""),
-
-      pendingBookingStepPromptAnchorSeq:
-        shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
-          ? undefined
-          : realtimeState.lastUserTranscriptSeq,
-
-      lastSubmittedBookingStepKey:
-        toolName === "submit_booking_step"
-          ? clean((effectiveToolArgs as any)?.step_key || "")
-          : realtimeState.lastSubmittedBookingStepKey,
-
-      lastSubmittedBookingTranscript:
-        toolName === "submit_booking_step"
-          ? clean((effectiveToolArgs as any)?.value || "")
-          : realtimeState.lastSubmittedBookingTranscript,
-
-      lastSubmittedBookingTranscriptSeq:
-        toolName === "submit_booking_step"
-          ? realtimeState.lastUserTranscriptSeq
-          : realtimeState.lastSubmittedBookingTranscriptSeq,
-
-      pendingActionGranted:
-        toolName === "send_booking_sms" || toolName === "end_call"
-          ? undefined
-          : pendingActionGranted
-            ? true
-            : realtimeState.pendingActionGranted,
-
-      pendingActionAnswered:
-        hasSubmittedPendingBookingStep &&
-        toolResult?.ok === true &&
-        Boolean(actionRequiredToolName)
-          ? true
-          : realtimeState.pendingActionAnswered,
-
-      pendingActionToolName:
-        toolName === "send_booking_sms" || toolName === "end_call"
-          ? undefined
-          : pendingActionGranted
-            ? actionRequiredToolName
-            : realtimeState.pendingActionToolName,
-
-      awaitingPostBookingClosure:
-        toolName === "send_booking_sms" && toolResult?.ok === true
-          ? true
-          : (realtimeState as any)?.awaitingPostBookingClosure,
-
-      postBookingClosureTranscript:
-        toolName === "send_booking_sms" && toolResult?.ok === true
-          ? clean(lastUserTranscript || "")
-          : (realtimeState as any)?.postBookingClosureTranscript,
-
-      postBookingClosureTranscriptSeq:
-        toolName === "send_booking_sms" && toolResult?.ok === true
-          ? realtimeState.lastUserTranscriptSeq
-          : (realtimeState as any)?.postBookingClosureTranscriptSeq,
-
-    } as CallState;
+    const nextRealtimeState = buildNextRealtimeStateFromToolResult({
+      realtimeState,
+      toolName,
+      toolResult,
+      effectiveToolArgs,
+      currentLocale,
+      lastUserTranscript,
+    });
 
     const hangupRequestedByTool =
       toolName === "end_call" && toolResult?.ok === true;
@@ -816,20 +354,10 @@ export async function handleRealtimeToolCall(
       },
     });
 
-    const followupInstructions =
-      toolName === "send_booking_sms" && toolResult?.ok === true
-        ? [
-            "Use only the tool result as source of truth.",
-            "Tell the caller briefly that the booking details were sent by SMS.",
-            "Then ask if they need anything else.",
-            "Ask only one question and wait for the caller answer.",
-            "Do not call end_call until the caller answers this final question.",
-            "Do not invent booking details, prices, dates, times, services, names, phone numbers, or policies.",
-          ].join(" ")
-        : buildToolFollowupInstructions({
-            toolName,
-            toolResult: (toolResult || {}) as RealtimeToolResult,
-          });
+    const followupInstructions = resolveRealtimeToolFollowupInstructions({
+      toolName,
+      toolResult: (toolResult || {}) as RealtimeToolResult,
+    });
 
     requestRealtimeResponse(
       {
@@ -848,43 +376,16 @@ export async function handleRealtimeToolCall(
       resetLastUserDigits: true,
     };
   } catch (error) {
-    console.error("[VOICE_REALTIME][TOOL_ERROR]", {
+    return handleRealtimeToolError({
+      error,
       callSid,
       toolName,
-      error: error instanceof Error ? error.message : String(error),
-    });
-
-    const toolErrorResult: RealtimeToolResult = {
-      ok: false,
-      error: error instanceof Error ? error.message : "TOOL_ERROR",
-    };
-
-    sendJson(openAiSocket, {
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: callId,
-        output: JSON.stringify(toolErrorResult),
-      },
-    });
-
-    requestRealtimeResponse(
-      {
-        instructions: buildToolFollowupInstructions({
-          toolName,
-          toolResult: toolErrorResult,
-        }),
-      },
-      `tool_error:${toolName}`
-    );
-
-    return {
-      consumed: true,
+      callId,
+      openAiSocket,
+      requestRealtimeResponse,
       realtimeState,
       bookingFlowLoaded,
-      hangupRequestedByTool: false,
       callEnding,
-      resetLastUserDigits: false,
-    };
+    });
   }
 }
