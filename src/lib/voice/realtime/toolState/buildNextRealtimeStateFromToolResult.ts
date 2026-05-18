@@ -28,27 +28,18 @@ export function buildNextRealtimeStateFromToolResult(
 
   const stateAny = realtimeState as any;
 
-  const normalizedLastUserTranscript = clean(lastUserTranscript || "");
-
-  const stateTranscriptSnapshot = clean(
-    stateAny.lastUserTranscript ||
+  const normalizedLastUserTranscript = clean(
+    lastUserTranscript ||
+      stateAny.lastUserTranscript ||
       stateAny.currentTranscript ||
       stateAny.lastTranscript ||
       ""
   );
 
-  const stateTranscriptSeq =
+  const effectiveCurrentTranscriptSeq =
     typeof realtimeState.lastUserTranscriptSeq === "number"
       ? realtimeState.lastUserTranscriptSeq
       : 0;
-
-  const transcriptLooksNewForState =
-    Boolean(normalizedLastUserTranscript) &&
-    normalizedLastUserTranscript !== stateTranscriptSnapshot;
-
-  const effectiveCurrentTranscriptSeq = transcriptLooksNewForState
-    ? stateTranscriptSeq + 1
-    : stateTranscriptSeq;
 
   const bookingState =
     toolResult &&
@@ -122,7 +113,7 @@ export function buildNextRealtimeStateFromToolResult(
     ...realtimeState,
     lang: currentLocale as any,
 
-    lastUserTranscript: normalizedLastUserTranscript || stateTranscriptSnapshot,
+    lastUserTranscript: normalizedLastUserTranscript,
     lastUserTranscriptSeq: effectiveCurrentTranscriptSeq,
 
     bookingData: {
@@ -165,6 +156,11 @@ export function buildNextRealtimeStateFromToolResult(
         : effectiveCurrentTranscriptSeq,
 
     pendingBookingStepAwaitingFreshUserInput:
+      shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
+        ? undefined
+        : true,
+
+    pendingBookingStepRequiresFreshInputAfterPrompt:
       shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
         ? undefined
         : true,

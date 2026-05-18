@@ -100,10 +100,17 @@ export function validateSubmitBookingStepFreshness(params: {
   const isAwaitingFreshUserInput =
     (realtimeState as any).pendingBookingStepAwaitingFreshUserInput === true;
 
+  const requiresFreshInputAfterPrompt =
+    (realtimeState as any).pendingBookingStepRequiresFreshInputAfterPrompt === true;
+
   const shouldBlockStaleSubmit =
-    isSubmittingExpectedPendingStep &&
-    isAwaitingFreshUserInput &&
-    (!hasNewHumanTranscript || isDuplicateSubmit);
+    !hasPendingStepState ||
+    !isSubmittingExpectedPendingStep ||
+    (
+      isAwaitingFreshUserInput &&
+      requiresFreshInputAfterPrompt &&
+      (!hasNewHumanTranscript || isDuplicateSubmit)
+    );
 
   const base = {
     submittedStepKey,
