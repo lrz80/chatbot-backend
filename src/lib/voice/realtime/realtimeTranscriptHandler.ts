@@ -1,4 +1,4 @@
-//src/lib/voice/realtime/realtimeTranscriptHandler.ts
+// src/lib/voice/realtime/realtimeTranscriptHandler.ts
 import type { CallState } from "../types";
 import { detectarIdioma } from "../../detectarIdioma";
 
@@ -74,22 +74,18 @@ export async function handleRealtimeTranscriptEvent(
     event,
     callSid,
     didNumber,
-    model,
     currentLocale,
     realtimeState,
     realtimeTenant,
     realtimeCfg,
     localeLocked,
     refreshRealtimeVoiceContext,
-    refreshRealtimeSession,
-    openAiSocket,
   } = params;
 
-  const isTranscriptEvent =
-    event?.type === "response.audio_transcript.done" ||
+  const isUserTranscriptEvent =
     event?.type === "conversation.item.input_audio_transcription.completed";
 
-  if (!isTranscriptEvent) {
+  if (!isUserTranscriptEvent) {
     return {
       consumed: false,
       transcript: "",
@@ -160,26 +156,13 @@ export async function handleRealtimeTranscriptEvent(
           nextRealtimeCfg = contextRefresh.cfg;
         }
 
-        const refreshed = refreshRealtimeSession({
-          openAiSocket,
-          model,
-          locale: nextLocale,
-          businessName:
-            clean(contextRefresh?.brand) ||
-            clean(nextRealtimeTenant?.name) ||
-            clean(nextRealtimeTenant?.business_name) ||
-            "the business",
-          businessInfo: clean(nextRealtimeTenant?.info_clave),
-          systemPrompt: clean(nextRealtimeCfg?.system_prompt),
-        });
-
         console.log("[VOICE_REALTIME][LANGUAGE_SWITCH]", {
           callSid,
           transcript,
           lang: detection?.lang || null,
           confidence: detection?.confidence ?? 0,
           locale: nextLocale,
-          voice: refreshed?.voice || null,
+          sessionRefresh: "skipped_runtime_stability",
         });
       } catch (error) {
         console.error("[VOICE_REALTIME][CONTEXT_REFRESH_ERROR]", {
