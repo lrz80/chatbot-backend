@@ -89,15 +89,21 @@ export function validateSubmitBookingStepFreshness(params: {
       : -1;
 
   const hasNewHumanTranscript =
-    Boolean(currentTranscript) && currentTranscriptSeq > promptAnchorSeq;
+    Boolean(currentTranscript) &&
+    currentTranscriptSeq > promptAnchorSeq;
 
   const isDuplicateSubmit =
     Boolean(submittedStepKey) &&
     submittedStepKey === lastSubmittedStepKey &&
     currentTranscriptSeq === lastSubmittedTranscriptSeq;
 
+  const isAwaitingFreshUserInput =
+    (realtimeState as any).pendingBookingStepAwaitingFreshUserInput === true;
+
   const shouldBlockStaleSubmit =
-    !hasNewHumanTranscript || isDuplicateSubmit;
+    isSubmittingExpectedPendingStep &&
+    isAwaitingFreshUserInput &&
+    (!hasNewHumanTranscript || isDuplicateSubmit);
 
   const base = {
     submittedStepKey,

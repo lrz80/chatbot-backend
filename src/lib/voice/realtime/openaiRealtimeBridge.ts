@@ -200,10 +200,12 @@ function buildOpenAiSessionUpdate(params: {
           },
           turn_detection: {
             type: "server_vad",
-            threshold: 0.65,
-            prefix_padding_ms: 500,
-            silence_duration_ms: 900,
-          },
+            threshold: 0.82,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 1100,
+            interrupt_response: false,
+            create_response: true,
+          }
         },
         output: {
           format: {

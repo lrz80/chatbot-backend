@@ -26,6 +26,30 @@ export function buildNextRealtimeStateFromToolResult(
     lastUserTranscript,
   } = params;
 
+  const stateAny = realtimeState as any;
+
+  const normalizedLastUserTranscript = clean(lastUserTranscript || "");
+
+  const stateTranscriptSnapshot = clean(
+    stateAny.lastUserTranscript ||
+      stateAny.currentTranscript ||
+      stateAny.lastTranscript ||
+      ""
+  );
+
+  const stateTranscriptSeq =
+    typeof realtimeState.lastUserTranscriptSeq === "number"
+      ? realtimeState.lastUserTranscriptSeq
+      : 0;
+
+  const transcriptLooksNewForState =
+    Boolean(normalizedLastUserTranscript) &&
+    normalizedLastUserTranscript !== stateTranscriptSnapshot;
+
+  const effectiveCurrentTranscriptSeq = transcriptLooksNewForState
+    ? stateTranscriptSeq + 1
+    : stateTranscriptSeq;
+
   const bookingState =
     toolResult &&
     typeof toolResult.booking_state === "object" &&
@@ -97,6 +121,10 @@ export function buildNextRealtimeStateFromToolResult(
   return {
     ...realtimeState,
     lang: currentLocale as any,
+
+    lastUserTranscript: normalizedLastUserTranscript || stateTranscriptSnapshot,
+    lastUserTranscriptSeq: effectiveCurrentTranscriptSeq,
+
     bookingData: {
       ...(realtimeState.bookingData || {}),
       ...collectedSlots,
@@ -129,12 +157,17 @@ export function buildNextRealtimeStateFromToolResult(
     pendingBookingStepPromptAnchorTranscript:
       shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
         ? undefined
-        : clean(lastUserTranscript || ""),
+        : normalizedLastUserTranscript,
 
     pendingBookingStepPromptAnchorSeq:
       shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
         ? undefined
-        : realtimeState.lastUserTranscriptSeq,
+        : effectiveCurrentTranscriptSeq,
+
+    pendingBookingStepAwaitingFreshUserInput:
+      shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
+        ? undefined
+        : true,
 
     lastSubmittedBookingStepKey:
       toolName === "submit_booking_step"
@@ -143,12 +176,12 @@ export function buildNextRealtimeStateFromToolResult(
 
     lastSubmittedBookingTranscript:
       toolName === "submit_booking_step"
-        ? clean(effectiveToolArgs.value || "")
+        ? normalizedLastUserTranscript || clean(effectiveToolArgs.value || "")
         : realtimeState.lastSubmittedBookingTranscript,
 
     lastSubmittedBookingTranscriptSeq:
       toolName === "submit_booking_step"
-        ? realtimeState.lastUserTranscriptSeq
+        ? effectiveCurrentTranscriptSeq
         : realtimeState.lastSubmittedBookingTranscriptSeq,
 
     pendingActionGranted:
@@ -179,12 +212,12 @@ export function buildNextRealtimeStateFromToolResult(
 
     postBookingClosureTranscript:
       toolName === "send_booking_sms" && toolResult?.ok === true
-        ? clean(lastUserTranscript || "")
+        ? normalizedLastUserTranscript
         : (realtimeState as any)?.postBookingClosureTranscript,
 
     postBookingClosureTranscriptSeq:
       toolName === "send_booking_sms" && toolResult?.ok === true
-        ? realtimeState.lastUserTranscriptSeq
+        ? effectiveCurrentTranscriptSeq
         : (realtimeState as any)?.postBookingClosureTranscriptSeq,
   } as CallState;
 }
