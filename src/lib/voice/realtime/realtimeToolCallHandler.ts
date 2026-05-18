@@ -580,12 +580,14 @@ export async function handleRealtimeToolCall(
           step_key: clean(toolArgs.step_key || ""),
 
           /**
-           * The guard above guarantees that lastUserTranscript is newer than
-           * the prompt anchor for the pending step. The model value is still
-           * passed as model_value for validators that need interpreted text,
-           * but the raw latest human answer remains the primary submitted value.
+           * Use the model-interpreted value as the submitted value.
+           * The stale-input guard above is responsible for blocking submits
+           * when the caller has not answered the current pending step yet.
+           *
+           * raw_transcript_value is still passed for validators that need
+           * to inspect the latest human utterance, especially datetime.
            */
-          value: clean(lastUserTranscript || toolArgs.value || ""),
+          value: clean(toolArgs.value || ""),
 
           raw_transcript_value: clean(lastUserTranscript || ""),
           model_value: clean(toolArgs.value || ""),

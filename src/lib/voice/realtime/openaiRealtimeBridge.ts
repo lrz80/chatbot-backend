@@ -109,6 +109,53 @@ function buildInitialGreetingInstruction(params: {
   return `Greet the caller in English for ${params.brand}. Keep it short and natural.`;
 }
 
+function resolveConfiguredWelcomeMessage(params: {
+  cfg: any;
+  tenant: any;
+}): string {
+  const cfgWelcome =
+    clean(params.cfg?.welcome_message) ||
+    clean(params.cfg?.welcomeMessage) ||
+    clean(params.cfg?.mensaje_bienvenida) ||
+    clean(params.cfg?.bienvenida);
+
+  if (cfgWelcome) {
+    return cfgWelcome;
+  }
+
+  const tenantWelcome =
+    clean(params.tenant?.welcome_message) ||
+    clean(params.tenant?.welcomeMessage) ||
+    clean(params.tenant?.mensaje_bienvenida) ||
+    clean(params.tenant?.bienvenida);
+
+  return tenantWelcome;
+}
+
+function buildInitialGreetingFromConfiguredWelcome(params: {
+  configuredWelcome: string;
+  brand: string;
+  locale: "en-US" | "es-ES" | "pt-BR";
+}): string {
+  const configuredWelcome = clean(params.configuredWelcome);
+
+  if (!configuredWelcome) {
+    return buildInitialGreetingInstruction({
+      brand: params.brand,
+      locale: params.locale,
+    });
+  }
+
+  return [
+    "Use only this configured welcome message as the source of truth.",
+    "Say it naturally as the first greeting of the phone call.",
+    "Do not replace it with a generic greeting.",
+    "Do not invent another business name.",
+    "Do not add menu options unless they are already included in the configured welcome message.",
+    `Configured welcome message: ${configuredWelcome}`,
+  ].join(" ");
+}
+
 function buildOpenAiSessionUpdate(params: {
   instructions: string;
   voice: string;
@@ -593,9 +640,15 @@ export async function createOpenAiRealtimeBridge({
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
     if (twilioSocket.readyState !== WebSocket.OPEN) return;
 
+    const configuredWelcomeMessage = resolveConfiguredWelcomeMessage({
+      cfg: context.cfg || {},
+      tenant: context.tenant || {},
+    });
+
     requestRealtimeResponse(
       {
-        instructions: buildInitialGreetingInstruction({
+        instructions: buildInitialGreetingFromConfiguredWelcome({
+          configuredWelcome: configuredWelcomeMessage,
           brand: context.brand || context.tenant.name || "the business",
           locale: currentLocale,
         }),
