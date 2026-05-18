@@ -361,19 +361,31 @@ export async function handleRealtimeSubmitBookingStep(
     workingState = serviceStepResult.workingState;
 
   } else if (isDatetimeStep) {
-    const datetimeInput =
+    const timeZone =
+      clean(
+        bookingContext.cfg?.timezone ||
+          bookingContext.cfg?.appointment_timezone ||
+          bookingContext.tenant?.timezone
+      ) || "America/New_York";
+
+    const modelValueHasDateAnchor =
+      value &&
+      hasExplicitVoiceDateAnchor({
+        raw: value,
+        timeZone,
+      });
+
+    const transcriptValueHasDateAnchor =
       rawTranscriptValue &&
       hasExplicitVoiceDateAnchor({
         raw: rawTranscriptValue,
-        timeZone:
-          clean(
-            bookingContext.cfg?.timezone ||
-              bookingContext.cfg?.appointment_timezone ||
-              bookingContext.tenant?.timezone
-          ) || "America/New_York",
-      })
-        ? rawTranscriptValue
-        : value;
+        timeZone,
+      });
+
+    const datetimeInput =
+      modelValueHasDateAnchor || !transcriptValueHasDateAnchor
+        ? value
+        : rawTranscriptValue;
 
     console.log("[VOICE_REALTIME][DATETIME_INPUT_SELECTED]", {
       callSid: bookingContext.callSid,

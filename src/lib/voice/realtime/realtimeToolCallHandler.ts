@@ -578,17 +578,7 @@ export async function handleRealtimeToolCall(
       ? {
           ...toolArgs,
           step_key: clean(toolArgs.step_key || ""),
-
-          /**
-           * Use the model-interpreted value as the submitted value.
-           * The stale-input guard above is responsible for blocking submits
-           * when the caller has not answered the current pending step yet.
-           *
-           * raw_transcript_value is still passed for validators that need
-           * to inspect the latest human utterance, especially datetime.
-           */
           value: clean(toolArgs.value || ""),
-
           raw_transcript_value: clean(lastUserTranscript || ""),
           model_value: clean(toolArgs.value || ""),
         }
