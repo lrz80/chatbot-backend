@@ -550,9 +550,12 @@ export async function handleRealtimeToolCall(
           instructions: [
             "Use only the tool result as source of truth.",
             "Do not call submit_booking_step again yet.",
-            "The caller has not provided a valid new answer for the current booking step.",
-            "Ask the current pending booking question again briefly.",
+            "The caller has not provided a new answer for the current booking step after the latest question.",
+            "Repeat the current pending booking question naturally and briefly.",
+            "Do not apologize excessively.",
+            "Do not mention an error.",
             "Do not advance to another booking step.",
+            "Wait for the caller to answer.",
           ].join(" "),
         },
         "tool_guard:booking_step_invalid_or_duplicate_input"
@@ -821,12 +824,24 @@ export async function handleRealtimeToolCall(
       },
     });
 
+    const followupInstructions =
+      toolName === "send_booking_sms" && toolResult?.ok === true
+        ? [
+            "Use only the tool result as source of truth.",
+            "Tell the caller briefly that the booking details were sent by SMS.",
+            "Then ask if they need anything else.",
+            "Ask only one question and wait for the caller answer.",
+            "Do not call end_call until the caller answers this final question.",
+            "Do not invent booking details, prices, dates, times, services, names, phone numbers, or policies.",
+          ].join(" ")
+        : buildToolFollowupInstructions({
+            toolName,
+            toolResult: (toolResult || {}) as RealtimeToolResult,
+          });
+
     requestRealtimeResponse(
       {
-        instructions: buildToolFollowupInstructions({
-          toolName,
-          toolResult: (toolResult || {}) as RealtimeToolResult,
-        }),
+        instructions: followupInstructions,
       },
       `tool_followup:${toolName}`
     );
