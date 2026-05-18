@@ -3,10 +3,8 @@
 import WebSocket from "ws";
 import type { CallState } from "../types";
 import { executeRealtimeTool } from "./realtimeToolExecutor";
-import {
-  buildToolFollowupInstructions,
-  type RealtimeToolResult,
-} from "./buildToolFollowupInstructions";
+import { type RealtimeToolResult } from "./buildToolFollowupInstructions";
+import { resolveRealtimeToolFollowupInstructions } from "./toolFollowup/resolveRealtimeToolFollowupInstructions";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -332,7 +330,7 @@ export async function handlePendingBookingStepToolRedirect(
 
     requestRealtimeResponse(
       {
-        instructions: buildToolFollowupInstructions({
+        instructions: resolveRealtimeToolFollowupInstructions({
           toolName: originalToolName,
           toolResult: (actionToolResult || {}) as RealtimeToolResult,
         }),
@@ -362,7 +360,7 @@ export async function handlePendingBookingStepToolRedirect(
 
   requestRealtimeResponse(
     {
-      instructions: buildToolFollowupInstructions({
+      instructions: resolveRealtimeToolFollowupInstructions({
         toolName: "submit_booking_step",
         toolResult: (redirectedToolResult || {}) as RealtimeToolResult,
       }),
