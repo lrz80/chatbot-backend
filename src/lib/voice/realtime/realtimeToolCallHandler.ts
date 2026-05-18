@@ -509,22 +509,8 @@ export async function handleRealtimeToolCall(
       submittedStepKey === lastSubmittedStepKey &&
       currentTranscriptSeq === lastSubmittedTranscriptSeq;
 
-    const modelSubmittedValue = clean(toolArgs.value || "");
-    const hasModelSubmittedValue = modelSubmittedValue.length > 0;
-
-    /**
-     * Realtime can call submit_booking_step with the correct interpreted value
-     * before lastUserTranscriptSeq is updated.
-     *
-     * If the model submitted a value for the expected pending step, do not block
-     * only because lastUserTranscript still looks stale.
-     */
-    const shouldAllowModelValueForPendingStep =
-      isSubmittingExpectedPendingStep && hasModelSubmittedValue && !isDuplicateSubmit;
-
     const shouldBlockStaleSubmit =
-      !shouldAllowModelValueForPendingStep &&
-      (!hasNewHumanTranscript || isDuplicateSubmit);
+      !hasNewHumanTranscript || isDuplicateSubmit;
 
     if (shouldBlockStaleSubmit) {
       const blockedResult = buildBlockedBookingStepResult(
@@ -591,12 +577,12 @@ export async function handleRealtimeToolCall(
           step_key: clean(toolArgs.step_key || ""),
 
           /**
-           * IMPORTANT:
-           * The model value is already the interpreted answer for the current step.
-           * Do not replace it with lastUserTranscript because lastUserTranscript can
-           * still contain the previous step audio/transcript.
+           * The guard above guarantees that lastUserTranscript is newer than
+           * the prompt anchor for the pending step. The model value is still
+           * passed as model_value for validators that need interpreted text,
+           * but the raw latest human answer remains the primary submitted value.
            */
-          value: clean(toolArgs.value || lastUserTranscript || ""),
+          value: clean(lastUserTranscript || toolArgs.value || ""),
 
           raw_transcript_value: clean(lastUserTranscript || ""),
           model_value: clean(toolArgs.value || ""),
