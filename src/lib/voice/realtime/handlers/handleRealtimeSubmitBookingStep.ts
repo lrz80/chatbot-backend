@@ -1,12 +1,10 @@
 //src/lib/voice/realtime/handlers/handleRealtimeSubmitBookingStep.ts
-import { executeCanonicalBookingServiceStep } from "../../booking/handleBookingServiceStep";
 import { executeCanonicalBookingDatetimeStep } from "../../booking/handleBookingDatetimeStep";
 import type { CallState, VoiceLocale } from "../../types";
 import {
   clean,
   normalizeComparable,
   getStepSlot,
-  canonicalizeGenericStepValue,
   buildAnswersBySlot,
   normalizeAnswersToCanonicalSlots,
   getStepIndexByKey,
@@ -22,6 +20,11 @@ import {
 } from "../realtimeBookingFlowUtils";
 import { hasExplicitVoiceDateAnchor } from "../../../appointments/parseVoiceRequestedDate";
 import { resolveExpectedTypeStepValue } from "../bookingStepValueValidators";
+import { buildInvalidExpectedTypeResult } from "./bookingStepToolResults";
+import { handlePostBookingSmsConsentStep } from "./handlePostBookingSmsConsentStep";
+import { handleFinalBookingConfirmationStep } from "./handleFinalBookingConfirmationStep";
+import { handlePostBookingGenericStep } from "./handlePostBookingGenericStep";
+import { handleBookingServiceRealtimeStep } from "./handleBookingServiceRealtimeStep";
 
 type RealtimeBookingContext = {
   tenant: any;
@@ -168,36 +171,6 @@ function renderConfiguredUnavailablePrompt(params: {
   };
 
   return renderBookingStepTemplate(template, templateValues);
-}
-
-function buildInvalidExpectedTypeResult(params: {
-  steps: BookingFlowStepLike[];
-  workingState: CallState;
-  currentIndex: number;
-  bookingContext: RealtimeBookingContext;
-  buildRealtimeBookingState: HandleRealtimeSubmitBookingStepParams["buildRealtimeBookingState"];
-  buildNextRequiredStep: HandleRealtimeSubmitBookingStepParams["buildNextRequiredStep"];
-  error: string;
-  message?: string;
-}) {
-  const bookingState = params.buildRealtimeBookingState({
-    steps: params.steps,
-    state: params.workingState,
-    explicitCurrentIndex: params.currentIndex,
-  });
-
-  return {
-    ok: false,
-    error: params.error,
-    message: params.message || params.error,
-    assistant_prompt: params.message || params.error,
-    booking_state: bookingState,
-    next_required_step: params.buildNextRequiredStep({
-      steps: params.steps,
-      bookingState,
-      locale: params.bookingContext.currentLocale,
-    }),
-  };
 }
 
 export async function handleRealtimeSubmitBookingStep(
@@ -365,53 +338,28 @@ export async function handleRealtimeSubmitBookingStep(
     !appointmentAlreadyCreated && isConfirmationLikeStep(currentStep);
 
   if (isServiceStep) {
-    const serviceResult = await executeCanonicalBookingServiceStep({
-      currentStep: currentStep as any,
+    const serviceStepResult = await handleBookingServiceRealtimeStep({
+      callerPhone,
+      currentStep,
+      currentIndex,
       currentLocale: bookingContext.currentLocale,
-      callerE164: callerPhone,
-      effectiveUserInput: value,
-      state: workingState,
+      value,
+      targetSlot,
+      stepKey,
+      rawAnswers,
+      workingState,
       rawConfig: bookingContext.cfg?.booking_services_text || "",
+      steps,
+      buildRealtimeBookingState,
+      buildNextRequiredStep,
     });
 
-    if (serviceResult.kind === "retry" || serviceResult.kind === "ambiguous") {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: workingState,
-        explicitCurrentIndex: currentIndex,
-      });
-
-      return {
-        ok: false,
-        error:
-          serviceResult.kind === "ambiguous"
-            ? "AMBIGUOUS_BOOKING_SERVICE"
-            : "UNRESOLVED_BOOKING_SERVICE",
-        message: serviceResult.prompt,
-        assistant_prompt: serviceResult.prompt,
-        booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: bookingContext.currentLocale,
-          overridePrompt: serviceResult.prompt,
-        }),
-        service_options:
-          serviceResult.kind === "ambiguous" ? serviceResult.options : [],
-      };
+    if (serviceStepResult.kind === "return") {
+      return serviceStepResult.result;
     }
 
-    const nextAnswers = {
-      ...rawAnswers,
-      [targetSlot]: serviceResult.resolvedValue,
-      [stepKey]: serviceResult.resolvedValue,
-    };
+    workingState = serviceStepResult.workingState;
 
-    workingState = buildCanonicalCallState({
-      state: serviceResult.state,
-      answersBySlot: nextAnswers,
-      bookingStepIndex: currentIndex,
-    });
   } else if (isDatetimeStep) {
     const datetimeInput =
       rawTranscriptValue &&
@@ -512,162 +460,49 @@ export async function handleRealtimeSubmitBookingStep(
     });
 
   } else if (isPostBookingStep && stepKey === "offer_booking_sms") {
-    const expectedTypeResult = resolveExpectedTypeStepValue({
-      step: currentStep,
-      value,
-      modelValue: clean(args.model_value || ""),
-    });
-
-    if (!expectedTypeResult.ok) {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: workingState,
-        explicitCurrentIndex: currentIndex,
-      });
-
-      return {
-        ok: false,
-        error: "UNRESOLVED_BOOKING_SMS_CONSENT",
-        message:
-          "The caller's SMS consent answer could not be resolved from the configured booking step.",
-        assistant_prompt: clean(currentStep.retry_prompt || currentStep.prompt),
-        booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: bookingContext.currentLocale,
-        }),
-      };
-    }
-
-    const normalizedStepValue = clean(expectedTypeResult.value);
-    const normalizedComparableValue = normalizeComparable(normalizedStepValue);
-
-    const storageSlot =
-      targetSlot && targetSlot !== "none" ? targetSlot : stepKey;
-
-    const nextAnswers = {
-      ...rawAnswers,
-      [storageSlot]: normalizedStepValue,
-      [stepKey]: normalizedStepValue,
-      booking_sms_consent: normalizedStepValue,
-    };
-
-    const consentState = buildCanonicalCallState({
-      state: workingState,
-      answersBySlot: nextAnswers,
-      bookingStepIndex: undefined,
-    });
-
-    Object.assign(bookingContext.state, consentState);
-
-    await persistVoiceState({
+    return await handlePostBookingSmsConsentStep({
       tenantId,
-      callSid: bookingContext.callSid,
-      state: consentState,
-      locale: bookingContext.currentLocale,
-    });
-
-    const bookingState = buildRealtimeBookingState({
+      callerPhone,
+      stepKey,
+      targetSlot,
+      currentStep,
+      currentIndex,
+      rawAnswers,
+      workingState,
+      bookingContext,
       steps,
-      state: consentState,
-      explicitCurrentIndex: null,
+      args,
+      buildRealtimeBookingState,
+      buildNextRequiredStep,
+      persistVoiceState,
     });
-
-    if (normalizedComparableValue !== "yes" && normalizedComparableValue !== "no") {
-      return {
-        ok: false,
-        error: "UNRESOLVED_BOOKING_SMS_CONSENT",
-        message:
-          "The caller's SMS consent answer was resolved, but not to a canonical yes/no value.",
-        assistant_prompt: clean(currentStep.retry_prompt || currentStep.prompt),
-        booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: bookingContext.currentLocale,
-        }),
-      };
-    }
-
-    const smsConsentGranted = normalizedComparableValue === "yes";
-
-    return {
-      ok: true,
-      booking_state: bookingState,
-      next_required_step: null,
-      booking_sms_consent: normalizedStepValue,
-      action_required: smsConsentGranted
-        ? "send_booking_sms"
-        : "skip_booking_sms",
-      message: smsConsentGranted
-        ? "El cliente aceptó recibir los detalles por SMS."
-        : "El cliente no quiere recibir los detalles por SMS.",
-      assistant_prompt: smsConsentGranted
-        ? ""
-        : "Perfecto, no envío el SMS. ¿Puedo ayudarte con algo más?",
-    };
 
   } else if (isPostBookingStep) {
-    const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
-
-    const storageSlot =
-      targetSlot && targetSlot !== "none" ? targetSlot : stepKey;
-
-    const nextAnswers = {
-      ...rawAnswers,
-      [storageSlot]: normalizedStepValue,
-      [stepKey]: normalizedStepValue,
-    };
-
-    workingState = buildCanonicalCallState({
-      state: workingState,
-      answersBySlot: nextAnswers,
-      bookingStepIndex: currentIndex,
+    workingState = handlePostBookingGenericStep({
+      stepKey,
+      targetSlot,
+      currentStep,
+      currentIndex,
+      rawAnswers,
+      workingState,
+      value,
     });
 
   } else if (isFinalConfirmationBeforeCreate) {
-    const normalizedStepValue = canonicalizeGenericStepValue(currentStep, value);
-
-    const storageSlot =
-      targetSlot && targetSlot !== "none" ? targetSlot : stepKey;
-
-    const nextAnswers = {
-      ...rawAnswers,
-      [storageSlot]: normalizedStepValue,
-      [stepKey]: normalizedStepValue,
-    };
-
-    const confirmationState = buildCanonicalCallState({
-      state: workingState,
-      answersBySlot: nextAnswers,
-      bookingStepIndex: currentIndex,
-    });
-
-    Object.assign(bookingContext.state, confirmationState);
-
-    await persistVoiceState({
+    return await handleFinalBookingConfirmationStep({
       tenantId,
-      callSid: bookingContext.callSid,
-      state: confirmationState,
-      locale: bookingContext.currentLocale,
-    });
-
-    const bookingState = buildRealtimeBookingState({
+      stepKey,
+      targetSlot,
+      currentStep,
+      currentIndex,
+      rawAnswers,
+      workingState,
+      bookingContext,
       steps,
-      state: confirmationState,
-      explicitCurrentIndex: null,
-      finalConfirmationGranted: true,
-      readyToCreate: true,
+      value,
+      buildRealtimeBookingState,
+      persistVoiceState,
     });
-
-    return {
-      ok: true,
-      booking_state: bookingState,
-      next_required_step: null,
-      assistant_prompt: "",
-      action_required: "create_appointment",
-    };
   } else {
     const expectedTypeResult = resolveExpectedTypeStepValue({
       step: currentStep,
@@ -680,7 +515,7 @@ export async function handleRealtimeSubmitBookingStep(
         steps,
         workingState,
         currentIndex,
-        bookingContext,
+        currentLocale: bookingContext.currentLocale,
         buildRealtimeBookingState,
         buildNextRequiredStep,
         error: expectedTypeResult.error,

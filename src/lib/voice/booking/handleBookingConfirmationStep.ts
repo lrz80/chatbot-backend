@@ -1,21 +1,15 @@
 // src/lib/voice/booking/handleBookingConfirmationStep.ts
 import { twiml } from "twilio";
-import pool from "../../db";
-import { createAppointmentFromVoice } from "../../appointments/createAppointmentFromVoice";
 import {
-  buildAnswersBySlot,
   resolveBookingFlowSpeech,
-  resolveBookingPromptText,
   resolveBookingRetryText,
-  resolveBookingSuccessStep,
 } from "../voiceBookingHelpers";
-import { resolveVoiceMetaSignal } from "../resolveVoiceMetaSignal";
 import { twoSentencesMax } from "../speechFormatting";
 import { handleBookingSlotBusyRecovery } from "../voiceBookingBusyRecovery";
-import {
-  assertNonEmptyBookingSpeech,
-  buildExtraBookingFields,
-} from "./bookingSpeech";
+import { assertNonEmptyBookingSpeech } from "./bookingSpeech";
+import { resolveConfirmationMetaSignal } from "./confirmation/resolveConfirmationMetaSignal";
+import { resolveSmsDestination } from "./confirmation/resolveSmsDestination";
+import { createConfirmedVoiceAppointment } from "./confirmation/createConfirmedVoiceAppointment";
 import type {
   BookingFlow,
   BookingStep,
@@ -42,11 +36,6 @@ type HandleBookingConfirmationStepParams = {
   createBookingGather: CreateBookingGatherFn;
   logBotSay: VoiceBotSayLogger;
   upsertVoiceCallState: typeof import("../upsertVoiceCallState").upsertVoiceCallState;
-};
-
-type ConfirmationMetaSignal = {
-  intent: "affirm" | "reject" | "none";
-  confidence?: number;
 };
 
 export type CanonicalBookingConfirmationStepParams = {
@@ -113,61 +102,136 @@ export type CanonicalBookingConfirmationStepResult =
       context: "booking_create_failed_keep_call_alive";
     };
 
-async function resolveConfirmationMetaSignal(params: {
-  digits: string;
-  userInput: string;
-  currentLocale: VoiceLocale;
-}): Promise<ConfirmationMetaSignal> {
-  const { digits, userInput, currentLocale } = params;
-
-  if (digits === "1") {
-    return { intent: "affirm", confidence: 1 };
+function resolveSmsAcceptedPrompt(currentLocale: VoiceLocale): string {
+  if (currentLocale.startsWith("es")) {
+    return "Perfecto, te enviaré los detalles por SMS a este número.";
   }
 
-  if (digits === "2") {
-    return { intent: "reject", confidence: 1 };
+  if (currentLocale.startsWith("pt")) {
+    return "Perfeito, vou enviar os detalhes por SMS para este número.";
   }
 
-  const resolved = await resolveVoiceMetaSignal({
-    utterance: userInput,
-    locale: currentLocale,
-  });
-
-  if (resolved.intent === "affirm") {
-    return {
-      intent: "affirm",
-      confidence: resolved.confidence,
-    };
-  }
-
-  if (resolved.intent === "reject") {
-    return {
-      intent: "reject",
-      confidence: resolved.confidence,
-    };
-  }
-
-  return {
-    intent: "none",
-    confidence: resolved.confidence,
-  };
+  return "Perfect, I will send the booking details by SMS to this number.";
 }
 
-function resolveSmsDestination(params: {
+function resolveSmsAcceptedStateText(currentLocale: VoiceLocale): string {
+  if (currentLocale.startsWith("es")) {
+    return "Cliente aceptó recibir los detalles por SMS.";
+  }
+
+  if (currentLocale.startsWith("pt")) {
+    return "O cliente aceitou receber os detalhes por SMS.";
+  }
+
+  return "Customer accepted receiving the booking details by SMS.";
+}
+
+function resolveBookingCreateFailedPrompt(params: {
+  cfg: any;
+  currentLocale: VoiceLocale;
+}): string {
+  const { cfg, currentLocale } = params;
+
+  const configured =
+    typeof cfg?.booking_error_message === "string" &&
+    cfg.booking_error_message.trim()
+      ? cfg.booking_error_message.trim()
+      : "";
+
+  if (configured) {
+    return twoSentencesMax(configured);
+  }
+
+  if (currentLocale.startsWith("es")) {
+    return "No pude completar la reserva en este momento. ¿Quieres que te ayude con otra cosa?";
+  }
+
+  if (currentLocale.startsWith("pt")) {
+    return "Não consegui concluir a reserva neste momento. Posso te ajudar com mais alguma coisa?";
+  }
+
+  return "I could not complete the booking right now. Can I help you with anything else?";
+}
+
+async function persistVoiceBookingState(params: {
+  tenantId: string;
+  callSid: string;
+  currentLocale: VoiceLocale;
   state: CallState;
+  upsertVoiceCallState: HandleBookingConfirmationStepParams["upsertVoiceCallState"];
+}): Promise<void> {
+  const { tenantId, callSid, currentLocale, state, upsertVoiceCallState } =
+    params;
+
+  await upsertVoiceCallState({
+    callSid,
+    tenantId,
+    lang: state.lang ?? currentLocale,
+    turn: state.turn ?? 0,
+    awaiting: state.awaiting ?? false,
+    pendingType: state.pendingType ?? null,
+    awaitingNumber: state.awaitingNumber ?? false,
+    altDest: state.altDest ?? null,
+    smsSent: state.smsSent ?? false,
+    bookingStepIndex:
+      typeof state.bookingStepIndex === "number" ? state.bookingStepIndex : null,
+    bookingData: state.bookingData || {},
+  });
+}
+
+function buildCancelPrompt(params: {
+  currentStep: BookingStep;
+  currentLocale: VoiceLocale;
+  bookingData: CallState["bookingData"];
   callerE164: string | null;
 }): string {
-  const { state, callerE164 } = params;
+  const { currentStep, currentLocale, bookingData, callerE164 } = params;
 
-  const fromState = [
-    state.bookingData?.customer_phone,
-    state.bookingData?.phone,
+  const cancelMessageTemplate =
+    typeof currentStep.validation_config?.cancel_message === "string"
+      ? currentStep.validation_config.cancel_message.trim()
+      : "";
+
+  const cancelMessageResolved = resolveBookingFlowSpeech({
+    baseText: cancelMessageTemplate,
+    locale: currentLocale,
+    bookingData: bookingData || {},
     callerE164,
-  ]
-    .map((value) => String(value || "").trim())
-    .find((value) => value.length >= 7);
+  });
 
-  return fromState || "";
+  return twoSentencesMax(
+    assertNonEmptyBookingSpeech({
+      text: cancelMessageResolved,
+      stepKey: currentStep.step_key,
+      field: "prompt",
+    })
+  );
+}
+
+function buildRetryPrompt(params: {
+  currentStep: BookingStep;
+  currentLocale: VoiceLocale;
+  bookingData: CallState["bookingData"];
+  callerE164: string | null;
+}): string {
+  const { currentStep, currentLocale, bookingData, callerE164 } = params;
+
+  const retryText = resolveBookingRetryText({
+    locale: currentLocale,
+    retryPrompt: currentStep.retry_prompt || "",
+    retryPromptTranslations: currentStep.retry_prompt_translations || null,
+    fallbackPrompt: currentStep.prompt || "",
+    fallbackPromptTranslations: currentStep.prompt_translations || null,
+  });
+
+  return twoSentencesMax(
+    resolveBookingFlowSpeech({
+      baseText: retryText,
+      locale: currentLocale,
+      bookingData: bookingData || {},
+      callerE164,
+    })
+  );
 }
 
 export async function executeCanonicalBookingConfirmationStep(
@@ -203,7 +267,7 @@ export async function executeCanonicalBookingConfirmationStep(
 
   const isOfferBookingSmsStep = currentStep.step_key === "offer_booking_sms";
 
-    if (isOfferBookingSmsStep) {
+  if (isOfferBookingSmsStep) {
     if (confirmationMetaSignal.intent === "affirm") {
       const preservedBookingSmsPayload =
         typeof state.bookingData?.booking_sms_payload === "string"
@@ -216,18 +280,17 @@ export async function executeCanonicalBookingConfirmationStep(
       });
 
       if (smsDestination) {
+        const spokenPrompt = resolveSmsAcceptedPrompt(currentLocale);
+
         const postBookingStateData = {
           ...(state.bookingData || {}),
           booking_sms_payload: preservedBookingSmsPayload,
           customer_phone:
-            String(state.bookingData?.customer_phone || "").trim() || smsDestination,
+            String(state.bookingData?.customer_phone || "").trim() ||
+            smsDestination,
           __last_voice_domain: "booking",
           __last_booking_outcome: "confirmed",
-          __last_assistant_text: currentLocale.startsWith("es")
-            ? "Perfecto, te enviaré los detalles por SMS a este número."
-            : currentLocale.startsWith("pt")
-              ? "Perfeito, vou enviar os detalhes por SMS para este número."
-              : "Perfect, I will send the booking details by SMS to this number.",
+          __last_assistant_text: spokenPrompt,
         };
 
         const nextState: CallState = {
@@ -241,28 +304,18 @@ export async function executeCanonicalBookingConfirmationStep(
           bookingData: postBookingStateData,
         };
 
-        await upsertVoiceCallState({
-          callSid,
+        await persistVoiceBookingState({
           tenantId: tenant.id,
-          lang: nextState.lang ?? currentLocale,
-          turn: nextState.turn ?? 0,
-          awaiting: false,
-          pendingType: null,
-          awaitingNumber: false,
-          altDest: smsDestination,
-          smsSent: false,
-          bookingStepIndex: null,
-          bookingData: postBookingStateData,
+          callSid,
+          currentLocale,
+          state: nextState,
+          upsertVoiceCallState,
         });
 
         return {
           kind: "success",
           state: nextState,
-          prompt: currentLocale.startsWith("es")
-            ? "Perfecto, te enviaré los detalles por SMS a este número."
-            : currentLocale.startsWith("pt")
-              ? "Perfeito, vou enviar os detalhes por SMS para este número."
-              : "Perfect, I will send the booking details by SMS to this number.",
+          prompt: spokenPrompt,
           context: "booking_success",
         };
       }
@@ -272,11 +325,7 @@ export async function executeCanonicalBookingConfirmationStep(
         booking_sms_payload: preservedBookingSmsPayload,
         __last_voice_domain: "booking",
         __last_booking_outcome: "confirmed",
-        __last_assistant_text: currentLocale.startsWith("es")
-          ? "Cliente aceptó recibir los detalles por SMS."
-          : currentLocale.startsWith("pt")
-            ? "O cliente aceitou receber os detalhes por SMS."
-            : "Customer accepted receiving the booking details by SMS.",
+        __last_assistant_text: resolveSmsAcceptedStateText(currentLocale),
       };
 
       const nextState: CallState = {
@@ -289,18 +338,12 @@ export async function executeCanonicalBookingConfirmationStep(
         bookingData: postBookingStateData,
       };
 
-      await upsertVoiceCallState({
-        callSid,
+      await persistVoiceBookingState({
         tenantId: tenant.id,
-        lang: nextState.lang ?? currentLocale,
-        turn: nextState.turn ?? 0,
-        awaiting: true,
-        pendingType: "reservar",
-        awaitingNumber: true,
-        altDest: nextState.altDest ?? null,
-        smsSent: false,
-        bookingStepIndex: null,
-        bookingData: postBookingStateData,
+        callSid,
+        currentLocale,
+        state: nextState,
+        upsertVoiceCallState,
       });
 
       return {
@@ -310,25 +353,12 @@ export async function executeCanonicalBookingConfirmationStep(
     }
 
     if (confirmationMetaSignal.intent === "reject") {
-      const cancelMessageTemplate =
-        typeof currentStep.validation_config?.cancel_message === "string"
-          ? currentStep.validation_config.cancel_message.trim()
-          : "";
-
-      const cancelMessageResolved = resolveBookingFlowSpeech({
-        baseText: cancelMessageTemplate,
-        locale: currentLocale,
-        bookingData: state.bookingData || {},
+      const spokenPrompt = buildCancelPrompt({
+        currentStep,
+        currentLocale,
+        bookingData: state.bookingData,
         callerE164,
       });
-
-      const spokenPrompt = twoSentencesMax(
-        assertNonEmptyBookingSpeech({
-          text: cancelMessageResolved,
-          stepKey: currentStep.step_key,
-          field: "prompt",
-        })
-      );
 
       const postBookingStateData = {
         ...(state.bookingData || {}),
@@ -347,18 +377,12 @@ export async function executeCanonicalBookingConfirmationStep(
         bookingData: postBookingStateData,
       };
 
-      await upsertVoiceCallState({
-        callSid,
+      await persistVoiceBookingState({
         tenantId: tenant.id,
-        lang: nextState.lang ?? currentLocale,
-        turn: nextState.turn ?? 0,
-        awaiting: false,
-        pendingType: null,
-        awaitingNumber: false,
-        altDest: nextState.altDest ?? null,
-        smsSent: false,
-        bookingStepIndex: null,
-        bookingData: postBookingStateData,
+        callSid,
+        currentLocale,
+        state: nextState,
+        upsertVoiceCallState,
       });
 
       return {
@@ -369,22 +393,12 @@ export async function executeCanonicalBookingConfirmationStep(
       };
     }
 
-    const smsRetryText = resolveBookingRetryText({
-      locale: currentLocale,
-      retryPrompt: currentStep.retry_prompt || "",
-      retryPromptTranslations: currentStep.retry_prompt_translations || null,
-      fallbackPrompt: currentStep.prompt || "",
-      fallbackPromptTranslations: currentStep.prompt_translations || null,
+    const retry = buildRetryPrompt({
+      currentStep,
+      currentLocale,
+      bookingData: state.bookingData,
+      callerE164,
     });
-
-    const retry = twoSentencesMax(
-      resolveBookingFlowSpeech({
-        baseText: smsRetryText,
-        locale: currentLocale,
-        bookingData: state.bookingData || {},
-        callerE164,
-      })
-    );
 
     return {
       kind: "retry",
@@ -402,219 +416,44 @@ export async function executeCanonicalBookingConfirmationStep(
   }
 
   if (confirmationMetaSignal.intent === "affirm") {
-    let bookingTimeZone = "America/New_York";
-
     try {
-      const { rows: settingsRows } = await pool.query(
-        `
-        SELECT
-          default_duration_min,
-          buffer_min,
-          min_lead_minutes,
-          timezone,
-          enabled
-        FROM appointment_settings
-        WHERE tenant_id = $1
-        LIMIT 1
-        `,
-        [tenant.id]
-      );
-
-      const appointmentSettings = settingsRows[0] || {
-        default_duration_min: 30,
-        buffer_min: 10,
-        min_lead_minutes: 60,
-        timezone: "America/New_York",
-        enabled: true,
-      };
-
-      bookingTimeZone =
-        String(appointmentSettings?.timezone || "").trim() || bookingTimeZone;
-
-      const rawBookingData = state.bookingData || {};
-
-      const answersBySlotBase = buildAnswersBySlot({
+      const confirmed = await createConfirmedVoiceAppointment({
+        tenant,
+        cfg,
         flow,
-        bookingData: rawBookingData,
-      });
-
-      const answersBySlot: Record<string, string | null | undefined> = {
-        ...answersBySlotBase,
-      };
-
-      if (
-        typeof rawBookingData.datetime_iso === "string" &&
-        rawBookingData.datetime_iso.trim()
-      ) {
-        answersBySlot.datetime_iso = rawBookingData.datetime_iso.trim();
-      }
-
-      if (
-        typeof rawBookingData.datetime_display === "string" &&
-        rawBookingData.datetime_display.trim()
-      ) {
-        answersBySlot.datetime_display = rawBookingData.datetime_display.trim();
-      }
-
-      const appointment = await createAppointmentFromVoice({
-        tenantId: tenant.id,
-        answersBySlot,
-        idempotencyKey: `voice:${callSid}`,
-        settings: appointmentSettings,
-      });
-
-      const appointmentRecord = appointment as any;
-
-      const successStep = resolveBookingSuccessStep({ flow });
-      if (!successStep) {
-        throw new Error("BOOKING_SUCCESS_STEP_NOT_CONFIGURED");
-      }
-
-      const successStepIndex = flow.findIndex(
-        (step) => step.step_key === successStep.step_key
-      );
-
-      if (successStepIndex === -1) {
-        throw new Error("BOOKING_SUCCESS_STEP_INDEX_NOT_FOUND");
-      }
-
-      const extraFields = buildExtraBookingFields(state.bookingData || {});
-
-      const bookingSmsPayload = {
-        business_name: String(tenant?.name || "").trim(),
-        business_phone: String(
-          cfg?.representante_number ||
-            tenant?.twilio_voice_number ||
-            tenant?.twilio_sms_number ||
-            ""
-        ).trim(),
-        service: String(
-          state.bookingData?.service_display || state.bookingData?.service || ""
-        ).trim(),
-        datetime: String(
-          state.bookingData?.datetime_display ||
-            state.bookingData?.datetime ||
-            ""
-        ).trim(),
-        customer_name: String(
-          state.bookingData?.customer_name || state.bookingData?.name || ""
-        ).trim(),
-        google_calendar_link: String(
-          appointmentRecord?.google_event_link ||
-            appointmentRecord?.googleEventLink ||
-            appointmentRecord?.html_link ||
-            appointmentRecord?.htmlLink ||
-            appointmentRecord?.google_event_url ||
-            appointmentRecord?.event_link ||
-            ""
-        ).trim(),
-        extra_fields: extraFields,
-      };
-
-      const bookingSmsPayloadJson = JSON.stringify(bookingSmsPayload);
-
-      const bookingSpeechData: Record<string, string> = {
-        ...(state.bookingData || {}),
-        service:
-          state.bookingData?.service_display || state.bookingData?.service || "",
-        datetime:
-          state.bookingData?.datetime_display ||
-          state.bookingData?.datetime ||
-          "",
-        datetime_display:
-          state.bookingData?.datetime_display ||
-          state.bookingData?.datetime ||
-          "",
-        datetime_iso:
-          typeof state.bookingData?.datetime_iso === "string"
-            ? state.bookingData.datetime_iso
-            : "",
-      };
-
-      const successPromptText = resolveBookingPromptText({
-        locale: currentLocale,
-        prompt: successStep.prompt || "",
-        promptTranslations: successStep.prompt_translations || null,
-      });
-
-      const successPromptResolved = resolveBookingFlowSpeech({
-        baseText: successPromptText,
-        locale: currentLocale,
-        bookingData: bookingSpeechData,
+        currentLocale,
+        callSid,
         callerE164,
+        state,
       });
 
-      const successPrompt = twoSentencesMax(
-        assertNonEmptyBookingSpeech({
-          text: successPromptResolved,
-          stepKey: successStep.step_key,
-          field: "prompt",
-        })
-      );
-
-      const nextStepAfterSuccess = flow[successStepIndex + 1];
-
-      if (
-        nextStepAfterSuccess &&
-        nextStepAfterSuccess.step_key === "offer_booking_sms"
-      ) {
-        const nextPromptText = resolveBookingPromptText({
-          locale: currentLocale,
-          prompt: nextStepAfterSuccess.prompt || "",
-          promptTranslations:
-            nextStepAfterSuccess.prompt_translations || null,
-        });
-
-        const nextPromptResolved = resolveBookingFlowSpeech({
-          baseText: nextPromptText,
-          locale: currentLocale,
-          bookingData: bookingSpeechData,
-          callerE164,
-        });
-
-        const smsOfferPrompt = twoSentencesMax(
-          assertNonEmptyBookingSpeech({
-            text: nextPromptResolved,
-            stepKey: nextStepAfterSuccess.step_key,
-            field: "prompt",
-          })
-        );
-
+      if (confirmed.smsOfferPrompt) {
         const nextState: CallState = {
           ...state,
           awaiting: false,
           pendingType: null,
           awaitingNumber: false,
           smsSent: false,
-          bookingStepIndex: successStepIndex + 1,
+          bookingStepIndex: confirmed.successStepIndex + 1,
           bookingData: {
-            ...bookingSpeechData,
-            booking_sms_payload: bookingSmsPayloadJson,
+            ...confirmed.bookingSpeechData,
+            booking_sms_payload: confirmed.bookingSmsPayloadJson,
           },
         };
 
-        await upsertVoiceCallState({
-          callSid,
+        await persistVoiceBookingState({
           tenantId: tenant.id,
-          lang: nextState.lang ?? currentLocale,
-          turn: nextState.turn ?? 0,
-          awaiting: false,
-          pendingType: null,
-          awaitingNumber: false,
-          altDest: nextState.altDest ?? null,
-          smsSent: false,
-          bookingStepIndex: successStepIndex + 1,
-          bookingData: {
-            ...bookingSpeechData,
-            booking_sms_payload: bookingSmsPayloadJson,
-          },
+          callSid,
+          currentLocale,
+          state: nextState,
+          upsertVoiceCallState,
         });
 
         return {
           kind: "success_offer_sms",
           state: nextState,
-          successPrompt,
-          smsOfferPrompt,
+          successPrompt: confirmed.successPrompt,
+          smsOfferPrompt: confirmed.smsOfferPrompt,
           context: "booking_success_offer_sms",
         };
       }
@@ -627,32 +466,26 @@ export async function executeCanonicalBookingConfirmationStep(
         smsSent: false,
         bookingStepIndex: undefined,
         bookingData: {
-          ...bookingSpeechData,
-          booking_sms_payload: bookingSmsPayloadJson,
+          ...confirmed.bookingSpeechData,
+          booking_sms_payload: confirmed.bookingSmsPayloadJson,
           __last_voice_domain: "booking",
           __last_booking_outcome: "confirmed",
-          __last_assistant_text: successPrompt,
+          __last_assistant_text: confirmed.successPrompt,
         },
       };
 
-      await upsertVoiceCallState({
-        callSid,
+      await persistVoiceBookingState({
         tenantId: tenant.id,
-        lang: nextState.lang ?? currentLocale,
-        turn: nextState.turn ?? 0,
-        awaiting: false,
-        pendingType: null,
-        awaitingNumber: false,
-        altDest: nextState.altDest ?? null,
-        smsSent: false,
-        bookingStepIndex: null,
-        bookingData: nextState.bookingData || {},
+        callSid,
+        currentLocale,
+        state: nextState,
+        upsertVoiceCallState,
       });
 
       return {
         kind: "success",
         state: nextState,
-        prompt: successPrompt,
+        prompt: confirmed.successPrompt,
         context: "booking_success",
       };
     } catch (err: any) {
@@ -678,23 +511,20 @@ export async function executeCanonicalBookingConfirmationStep(
           kind: "busy_recovery",
           state: postBusyState,
           busyRecovery: {
-            timeZone: bookingTimeZone,
+            timeZone:
+              typeof err?.bookingTimeZone === "string" &&
+              err.bookingTimeZone.trim()
+                ? err.bookingTimeZone.trim()
+                : "America/New_York",
             suggestedStarts,
           },
         };
       }
 
-      const failRaw =
-        typeof cfg?.booking_error_message === "string" &&
-        cfg.booking_error_message.trim()
-          ? cfg.booking_error_message.trim()
-          : currentLocale.startsWith("es")
-            ? "No pude completar la reserva en este momento. ¿Quieres que te ayude con otra cosa?"
-            : currentLocale.startsWith("pt")
-              ? "Não consegui concluir a reserva neste momento. Posso te ajudar com mais alguma coisa?"
-              : "I could not complete the booking right now. Can I help you with anything else?";
-
-      const failPrompt = twoSentencesMax(failRaw);
+      const failPrompt = resolveBookingCreateFailedPrompt({
+        cfg,
+        currentLocale,
+      });
 
       const postBookingStateData = {
         ...(state.bookingData || {}),
@@ -719,18 +549,12 @@ export async function executeCanonicalBookingConfirmationStep(
         bookingData: postBookingStateData,
       };
 
-      await upsertVoiceCallState({
-        callSid,
+      await persistVoiceBookingState({
         tenantId: tenant.id,
-        lang: nextState.lang ?? currentLocale,
-        turn: nextState.turn ?? 0,
-        awaiting: false,
-        pendingType: null,
-        awaitingNumber: false,
-        altDest: nextState.altDest ?? null,
-        smsSent: false,
-        bookingStepIndex: null,
-        bookingData: postBookingStateData,
+        callSid,
+        currentLocale,
+        state: nextState,
+        upsertVoiceCallState,
       });
 
       return {
@@ -743,25 +567,12 @@ export async function executeCanonicalBookingConfirmationStep(
   }
 
   if (confirmationMetaSignal.intent === "reject") {
-    const cancelMessageTemplate =
-      typeof currentStep.validation_config?.cancel_message === "string"
-        ? currentStep.validation_config.cancel_message.trim()
-        : "";
-
-    const cancelMessageResolved = resolveBookingFlowSpeech({
-      baseText: cancelMessageTemplate,
-      locale: currentLocale,
-      bookingData: state.bookingData || {},
+    const cancelPrompt = buildCancelPrompt({
+      currentStep,
+      currentLocale,
+      bookingData: state.bookingData,
       callerE164,
     });
-
-    const cancelPrompt = twoSentencesMax(
-      assertNonEmptyBookingSpeech({
-        text: cancelMessageResolved,
-        stepKey: currentStep.step_key,
-        field: "prompt",
-      })
-    );
 
     const spokenPrompt = assertNonEmptyBookingSpeech({
       text: cancelPrompt,
@@ -785,18 +596,12 @@ export async function executeCanonicalBookingConfirmationStep(
       bookingData: postBookingStateData,
     };
 
-    await upsertVoiceCallState({
-      callSid,
+    await persistVoiceBookingState({
       tenantId: tenant.id,
-      lang: nextState.lang ?? currentLocale,
-      turn: nextState.turn ?? 0,
-      awaiting: false,
-      pendingType: null,
-      awaitingNumber: false,
-      altDest: nextState.altDest ?? null,
-      smsSent: false,
-      bookingStepIndex: null,
-      bookingData: postBookingStateData,
+      callSid,
+      currentLocale,
+      state: nextState,
+      upsertVoiceCallState,
     });
 
     return {
@@ -807,22 +612,12 @@ export async function executeCanonicalBookingConfirmationStep(
     };
   }
 
-  const confirmationRetryText = resolveBookingRetryText({
-    locale: currentLocale,
-    retryPrompt: currentStep.retry_prompt || "",
-    retryPromptTranslations: currentStep.retry_prompt_translations || null,
-    fallbackPrompt: currentStep.prompt || "",
-    fallbackPromptTranslations: currentStep.prompt_translations || null,
+  const retry = buildRetryPrompt({
+    currentStep,
+    currentLocale,
+    bookingData: state.bookingData,
+    callerE164,
   });
-
-  const retry = twoSentencesMax(
-    resolveBookingFlowSpeech({
-      baseText: confirmationRetryText,
-      locale: currentLocale,
-      bookingData: state.bookingData || {},
-      callerE164,
-    })
-  );
 
   return {
     kind: "retry",
