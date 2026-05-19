@@ -3,8 +3,9 @@ import { getBookingProviderConnection } from "./providerConnections.repo";
 import type { BookingProvider } from "./types";
 
 const SUPPORTED_ACTIVE_PROVIDERS: BookingProvider[] = [
-  "square",
   "google_calendar",
+  "square",
+  "moego",
 ];
 
 type ProviderCacheEntry = {

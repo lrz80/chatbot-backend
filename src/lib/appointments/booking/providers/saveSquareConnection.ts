@@ -1,3 +1,4 @@
+//src/lib/appointments/booking/providers/saveSquareConnections.ts
 import { squareRetrieveLocation, type SquareEnvironment } from "./square.client";
 import {
   upsertBookingProviderConnection,
@@ -85,6 +86,7 @@ export async function saveSquareConnection(
       externalLocationId: locationId,
       accessToken,
       refreshToken: refreshToken || null,
+      tokenExpiresAt: expiresAt,
       metadata: {
         environment,
         expires_at: expiresAt,
@@ -114,6 +116,7 @@ export async function saveSquareConnection(
     externalLocationId: squareLocation?.id ?? locationId,
     accessToken,
     refreshToken: refreshToken || null,
+    tokenExpiresAt: expiresAt,
     metadata: {
       environment,
       expires_at: expiresAt,

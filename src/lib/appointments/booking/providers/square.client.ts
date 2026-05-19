@@ -28,6 +28,28 @@ export type SquareApiResult<T = unknown> =
   | SquareApiSuccess<T>
   | SquareApiFailure;
 
+export type SquareCreateBookingInput = {
+  accessToken: string;
+  environment: SquareEnvironment;
+  idempotencyKey: string;
+  locationId: string;
+  customerId?: string | null;
+  startAt: string;
+  teamMemberId: string;
+  serviceVariationId: string;
+  serviceVariationVersion: number;
+};
+
+export type SquareSearchAvailabilityInput = {
+  accessToken: string;
+  environment: SquareEnvironment;
+  startAt: string;
+  endAt: string;
+  locationId: string;
+  teamMemberId: string;
+  serviceVariationId: string;
+};
+
 function resolveSquareBaseUrl(environment: SquareEnvironment): string {
   return environment === "sandbox"
     ? "https://connect.squareupsandbox.com"
@@ -44,6 +66,15 @@ function safeJsonParse(value: string): unknown {
   } catch {
     return null;
   }
+}
+
+function normalizeNumber(value: number | string | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  const parsed = Number(String(value || "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export async function squareRequest<T = unknown>(
@@ -129,5 +160,136 @@ export async function squareRetrieveLocation(args: {
     environment: args.environment,
     path: `/v2/locations/${encodeURIComponent(locationId)}`,
     method: "GET",
+  });
+}
+
+export async function squareSearchAvailability(args: SquareSearchAvailabilityInput): Promise<
+  SquareApiResult<{
+    availabilities?: Array<{
+      start_at?: string;
+      location_id?: string;
+      appointment_segments?: Array<{
+        duration_minutes?: number;
+        service_variation_id?: string;
+        team_member_id?: string;
+        service_variation_version?: number;
+      }>;
+    }>;
+  }>
+> {
+  const locationId = String(args.locationId || "").trim();
+  const teamMemberId = String(args.teamMemberId || "").trim();
+  const serviceVariationId = String(args.serviceVariationId || "").trim();
+  const startAt = String(args.startAt || "").trim();
+  const endAt = String(args.endAt || "").trim();
+
+  if (!locationId || !teamMemberId || !serviceVariationId || !startAt || !endAt) {
+    return {
+      ok: false,
+      status: 400,
+      error: "SQUARE_AVAILABILITY_INPUT_MISSING",
+    };
+  }
+
+  return squareRequest({
+    accessToken: args.accessToken,
+    environment: args.environment,
+    path: "/v2/bookings/availability/search",
+    method: "POST",
+    body: {
+      query: {
+        filter: {
+          start_at_range: {
+            start_at: startAt,
+            end_at: endAt,
+          },
+          location_id: locationId,
+          segment_filters: [
+            {
+              service_variation_id: serviceVariationId,
+              team_member_id_filter: {
+                any: [teamMemberId],
+              },
+            },
+          ],
+        },
+      },
+    },
+  });
+}
+
+export async function squareCreateBooking(args: SquareCreateBookingInput): Promise<
+  SquareApiResult<{
+    booking?: {
+      id?: string;
+      location_id?: string;
+      customer_id?: string;
+      start_at?: string;
+      status?: string;
+      appointment_segments?: Array<{
+        team_member_id?: string;
+        service_variation_id?: string;
+        service_variation_version?: number;
+      }>;
+    };
+  }>
+> {
+  const locationId = String(args.locationId || "").trim();
+  const teamMemberId = String(args.teamMemberId || "").trim();
+  const serviceVariationId = String(args.serviceVariationId || "").trim();
+  const serviceVariationVersion = normalizeNumber(args.serviceVariationVersion);
+  const startAt = String(args.startAt || "").trim();
+  const idempotencyKey = String(args.idempotencyKey || "").trim();
+
+  if (
+    !locationId ||
+    !teamMemberId ||
+    !serviceVariationId ||
+    serviceVariationVersion == null ||
+    !startAt ||
+    !idempotencyKey
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      error: "SQUARE_CREATE_BOOKING_INPUT_MISSING",
+      details: {
+        hasLocationId: Boolean(locationId),
+        hasTeamMemberId: Boolean(teamMemberId),
+        hasServiceVariationId: Boolean(serviceVariationId),
+        hasServiceVariationVersion: serviceVariationVersion != null,
+        hasStartAt: Boolean(startAt),
+        hasIdempotencyKey: Boolean(idempotencyKey),
+      },
+    };
+  }
+
+  const booking: Record<string, unknown> = {
+    location_id: locationId,
+    start_at: startAt,
+    appointment_segments: [
+      {
+        team_member_id: teamMemberId,
+        service_variation_id: serviceVariationId,
+        service_variation_version: serviceVariationVersion,
+      },
+    ],
+  };
+
+  const customerId = String(args.customerId || "").trim();
+
+  if (customerId) {
+    booking.customer_id = customerId;
+  }
+
+  return squareRequest({
+    accessToken: args.accessToken,
+    environment: args.environment,
+    path: "/v2/bookings",
+    method: "POST",
+    body: {
+      idempotency_key: idempotencyKey,
+      booking,
+    },
   });
 }

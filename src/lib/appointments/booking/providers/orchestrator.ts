@@ -2,6 +2,8 @@
 import { BookingProviderRegistry } from "./registry";
 import { resolveTenantBookingProvider } from "./resolveTenantBookingProvider";
 import type {
+  CheckExternalAvailabilityInput,
+  CheckExternalAvailabilityResult,
   CreateExternalBookingInput,
   CreateExternalBookingResult,
 } from "./types";
@@ -31,21 +33,9 @@ export class BookingProviderOrchestrator {
     return adapter.createExternalBooking(input);
   }
 
-  async checkAvailability(input: {
-    tenantId: string;
-    summary: string;
-    startISO: string;
-    endISO: string;
-    timeZone: string;
-    bufferMin: number;
-    calendarId?: string | null;
-  }): Promise<{
-    ok: boolean;
-    provider: string;
-    error?: string;
-    busy: Array<{ start: string; end?: string }>;
-    suggestedStarts?: string[];
-  }> {
+  async checkAvailability(
+    input: CheckExternalAvailabilityInput
+  ): Promise<CheckExternalAvailabilityResult> {
     const provider = await resolveTenantBookingProvider(input.tenantId);
 
     if (!provider) {
@@ -60,7 +50,7 @@ export class BookingProviderOrchestrator {
 
     const adapter = this.registry.get(provider);
 
-    if (typeof (adapter as any).checkAvailability !== "function") {
+    if (typeof adapter.checkAvailability !== "function") {
       return {
         ok: false,
         provider,
@@ -70,6 +60,6 @@ export class BookingProviderOrchestrator {
       };
     }
 
-    return (adapter as any).checkAvailability(input);
+    return adapter.checkAvailability(input);
   }
 }
