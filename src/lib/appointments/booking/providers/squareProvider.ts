@@ -113,6 +113,14 @@ async function resolveSquarePayloadForInput(input: {
   });
 
   if (!mappingResult.ok) {
+    console.warn("🟨 [SQUARE_PROVIDER] mapping lookup failed", {
+      tenantId: input.tenantId,
+      summary: input.summary,
+      error: mappingResult.error,
+      status: mappingResult.status,
+      details: mappingResult.details,
+    });
+
     return directPayload;
   }
 
