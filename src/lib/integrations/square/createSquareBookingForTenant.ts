@@ -16,6 +16,13 @@ export type CreateSquareBookingForTenantArgs = {
   durationMinutes: number;
 };
 
+export type SquareApiError = {
+  category?: string;
+  code?: string;
+  detail?: string;
+  field?: string;
+};
+
 export type CreateSquareBookingForTenantResult =
   | {
       ok: true;
@@ -25,6 +32,7 @@ export type CreateSquareBookingForTenantResult =
       ok: false;
       error: string;
       details?: unknown;
+      squareErrors?: SquareApiError[];
       status?: number;
     };
 
@@ -86,7 +94,13 @@ export async function createSquareBookingForTenant(
   });
 
   if (!bookingResult.ok) {
-    return bookingResult;
+    return {
+      ok: false,
+      error: bookingResult.error,
+      status: bookingResult.status,
+      details: bookingResult.details,
+      squareErrors: bookingResult.squareErrors,
+    };
   }
 
   return {

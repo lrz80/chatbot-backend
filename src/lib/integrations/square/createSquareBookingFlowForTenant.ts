@@ -1,7 +1,9 @@
 // src/lib/integrations/square/createSquareBookingFlowForTenant.ts
+// src/lib/integrations/square/createSquareBookingFlowForTenant.ts
 import { getOrCreateSquareCustomerForTenant } from "./getOrCreateSquareCustomerForTenant";
 import { searchSquareAvailabilityForTenant } from "./searchSquareAvailabilityForTenant";
 import { createSquareBookingForTenant } from "./createSquareBookingForTenant";
+import { isSquareBookingCustomerActionRequired } from "./isSquareBookingCustomerActionRequired";
 import type { SquareBooking } from "./createSquareBooking";
 import type { SquareAvailability } from "./searchSquareAvailability";
 
@@ -33,6 +35,9 @@ export type CreateSquareBookingFlowForTenantResult =
       details?: unknown;
       status?: number;
       stage?: "customer" | "availability" | "booking";
+      customerActionRequired?: boolean;
+      action?: "SEND_SQUARE_BOOKING_LINK";
+      reason?: "square_requires_payment_or_customer_action";
     };
 
 export async function createSquareBookingFlowForTenant(
@@ -58,7 +63,7 @@ export async function createSquareBookingFlowForTenant(
     familyName: args.customer.familyName,
     email: args.customer.email,
     phoneNumber: args.customer.phoneNumber,
-    });
+  });
 
   if (!customerResult.ok) {
     return {
@@ -122,6 +127,19 @@ export async function createSquareBookingFlowForTenant(
   });
 
   if (!bookingResult.ok) {
+    if (isSquareBookingCustomerActionRequired(bookingResult)) {
+      return {
+        ...bookingResult,
+        ok: false,
+        error: "SQUARE_BOOKING_REQUIRES_CUSTOMER_ACTION",
+        status: bookingResult.status || 409,
+        stage: "booking",
+        customerActionRequired: true,
+        action: "SEND_SQUARE_BOOKING_LINK",
+        reason: "square_requires_payment_or_customer_action",
+      };
+    }
+
     return {
       ...bookingResult,
       stage: "booking",

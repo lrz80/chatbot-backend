@@ -24,14 +24,16 @@ export type SquareBooking = {
   }>;
 };
 
+export type SquareApiError = {
+  category?: string;
+  code?: string;
+  detail?: string;
+  field?: string;
+};
+
 type SquareCreateBookingResponse = {
   booking?: SquareBooking;
-  errors?: Array<{
-    category?: string;
-    code?: string;
-    detail?: string;
-    field?: string;
-  }>;
+  errors?: SquareApiError[];
 };
 
 export type CreateSquareBookingArgs = {
@@ -55,6 +57,7 @@ export type CreateSquareBookingResult =
       ok: false;
       error: string;
       details?: unknown;
+      squareErrors?: SquareApiError[];
       status?: number;
     };
 
@@ -102,7 +105,7 @@ export async function createSquareBooking(
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
-        "Square-Version": "2026-01-22",
+        "Square-Version": process.env.SQUARE_API_VERSION?.trim() || "2026-01-22",
       },
       body: JSON.stringify({
         idempotency_key: crypto.randomUUID(),
@@ -123,12 +126,14 @@ export async function createSquareBooking(
     });
 
     const data = (await response.json()) as SquareCreateBookingResponse;
+    const squareErrors = Array.isArray(data?.errors) ? data.errors : [];
 
     if (!response.ok || !data?.booking) {
       return {
         ok: false,
         error: "SQUARE_CREATE_BOOKING_FAILED",
-        details: data?.errors || data,
+        details: data,
+        squareErrors,
         status: response.status,
       };
     }
@@ -139,10 +144,12 @@ export async function createSquareBooking(
     };
   } catch (error) {
     console.error("[createSquareBooking] unexpected error", error);
+
     return {
       ok: false,
       error: "SQUARE_CREATE_BOOKING_UNEXPECTED_ERROR",
       details: error instanceof Error ? error.message : error,
+      squareErrors: [],
       status: 500,
     };
   }
