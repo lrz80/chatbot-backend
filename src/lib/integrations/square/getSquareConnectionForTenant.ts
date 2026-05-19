@@ -1,99 +1,95 @@
-import pool from "../../db";
+//src/lib/integrations/square/getSquareConnectionForTenant.ts
+import {
+  getBookingProviderConnection,
+  getBookingProviderSecrets,
+} from "../../appointments/booking/providers/providerConnections.repo";
 
-export type SquareEnvironment = "sandbox" | "production";
+type SquareEnvironment = "sandbox" | "production";
 
-export type SquareTenantConnection = {
-  tenantId: string;
-  accessToken: string;
-  refreshToken: string | null;
-  merchantId: string | null;
-  locationId: string | null;
-  expiresAt: string | null;
-  environment: SquareEnvironment;
-  status: string | null;
-};
-
-export type GetSquareConnectionForTenantResult =
+type GetSquareConnectionForTenantResult =
   | {
       ok: true;
-      connection: SquareTenantConnection;
+      connection: {
+        tenantId: string;
+        accessToken: string;
+        refreshToken: string | null;
+        merchantId: string | null;
+        locationId: string | null;
+        environment: SquareEnvironment;
+        expiresAt: string | null;
+        status: "active" | "inactive" | "error";
+        metadata: Record<string, unknown>;
+      };
     }
   | {
       ok: false;
+      status: number;
       error: string;
-      status?: number;
+      details?: unknown;
     };
+
+function resolveSquareEnvironment(value: unknown): SquareEnvironment {
+  return value === "sandbox" ? "sandbox" : "production";
+}
 
 export async function getSquareConnectionForTenant(
-  tenantId: string
+  tenantIdInput: string
 ): Promise<GetSquareConnectionForTenantResult> {
-  const normalizedTenantId = String(tenantId || "").trim();
+  const tenantId = String(tenantIdInput || "").trim();
 
-  if (!normalizedTenantId) {
+  if (!tenantId) {
     return {
       ok: false,
-      error: "TENANT_ID_REQUIRED",
       status: 400,
+      error: "TENANT_ID_REQUIRED",
     };
   }
 
-  const result = await pool.query(
-    `
-    SELECT
-      id,
-      square_access_token,
-      square_refresh_token,
-      square_merchant_id,
-      square_location_id,
-      square_token_expires_at,
-      square_environment,
-      square_status
-    FROM tenants
-    WHERE id = $1
-    LIMIT 1
-    `,
-    [normalizedTenantId]
-  );
+  const connection = await getBookingProviderConnection(tenantId, "square");
 
-  const row = result.rows[0];
-
-  if (!row) {
+  if (!connection) {
     return {
       ok: false,
-      error: "TENANT_NOT_FOUND",
       status: 404,
+      error: "SQUARE_CONNECTION_NOT_FOUND",
     };
   }
 
-  const accessToken = String(row.square_access_token || "").trim();
-  const environment =
-    String(row.square_environment || "").trim().toLowerCase() === "sandbox"
-      ? "sandbox"
-      : "production";
+  if (connection.status !== "active") {
+    return {
+      ok: false,
+      status: 409,
+      error: "SQUARE_CONNECTION_NOT_ACTIVE",
+      details: {
+        status: connection.status,
+      },
+    };
+  }
+
+  const secrets = await getBookingProviderSecrets(tenantId, "square");
+
+  const accessToken = String(secrets?.accessToken || "").trim();
 
   if (!accessToken) {
     return {
       ok: false,
-      error: "SQUARE_NOT_CONNECTED",
-      status: 404,
+      status: 400,
+      error: "SQUARE_ACCESS_TOKEN_MISSING",
     };
   }
 
   return {
     ok: true,
     connection: {
-      tenantId: String(row.id),
+      tenantId: connection.tenant_id,
       accessToken,
-      refreshToken: row.square_refresh_token
-        ? String(row.square_refresh_token)
-        : null,
-      merchantId: row.square_merchant_id ? String(row.square_merchant_id) : null,
-      locationId: row.square_location_id ? String(row.square_location_id) : null,
-      expiresAt: row.square_token_expires_at
-        ? new Date(row.square_token_expires_at).toISOString()
-        : null,
-      environment,
-      status: row.square_status ? String(row.square_status) : null,
+      refreshToken: secrets?.refreshToken || null,
+      merchantId: connection.external_account_id,
+      locationId: connection.external_location_id,
+      environment: resolveSquareEnvironment(connection.metadata?.environment),
+      expiresAt: secrets?.tokenExpiresAt || connection.token_expires_at || null,
+      status: connection.status,
+      metadata: connection.metadata || {},
     },
   };
 }
