@@ -16,6 +16,7 @@ import type {
   CreateExternalBookingResult,
   SquareBookingPayload,
 } from "./types";
+import { resolveSquareServiceMappingFromDbForTenant } from "../../../integrations/square/resolveSquareServiceMappingFromDbForTenant";
 
 function resolveSquareEnvironment(value: unknown): SquareEnvironment {
   return value === "sandbox" ? "sandbox" : "production";
@@ -79,6 +80,84 @@ function resolveSquarePayload(input: {
   };
 }
 
+async function resolveSquarePayloadForInput(input: {
+  tenantId: string;
+  summary: string;
+  connectionLocationId?: string | null;
+  metadata?: Record<string, unknown>;
+  payload?: SquareBookingPayload;
+}): Promise<{
+  locationId: string;
+  customerId: string | null;
+  teamMemberId: string;
+  serviceVariationId: string;
+  serviceVariationVersion: number | null;
+}> {
+  const directPayload = resolveSquarePayload({
+    connectionLocationId: input.connectionLocationId,
+    metadata: input.metadata,
+    payload: input.payload,
+  });
+
+  if (
+    directPayload.teamMemberId &&
+    directPayload.serviceVariationId &&
+    directPayload.serviceVariationVersion != null
+  ) {
+    return directPayload;
+  }
+
+  const mappingResult = await resolveSquareServiceMappingFromDbForTenant({
+    tenantId: input.tenantId,
+    internalServiceKey: input.summary,
+  });
+
+  if (!mappingResult.ok) {
+    return directPayload;
+  }
+
+  const mappedTeamMemberId = cleanString(
+    mappingResult.mapping.externalMetadata?.team_member_id
+  );
+
+  return {
+    locationId:
+      directPayload.locationId ||
+      cleanString(mappingResult.mapping.externalLocationId) ||
+      cleanString(input.connectionLocationId) ||
+      cleanString(input.metadata?.["location_id"]),
+    customerId: directPayload.customerId,
+    teamMemberId: directPayload.teamMemberId || mappedTeamMemberId,
+    serviceVariationId:
+      directPayload.serviceVariationId ||
+      cleanString(mappingResult.mapping.externalServiceId),
+    serviceVariationVersion:
+      directPayload.serviceVariationVersion ??
+      mappingResult.mapping.externalServiceVersion ??
+      cleanNumber(mappingResult.service.variationVersion),
+  };
+}
+
+function ensureMinimumSquareAvailabilityEndISO(params: {
+  startISO: string;
+  endISO: string;
+  minimumMinutes?: number;
+}): string {
+  const start = new Date(params.startISO);
+  const end = new Date(params.endISO);
+  const minimumMinutes = params.minimumMinutes ?? 60;
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return params.endISO;
+  }
+
+  const minimumEnd = new Date(start.getTime() + minimumMinutes * 60 * 1000);
+
+  return end.getTime() < minimumEnd.getTime()
+    ? minimumEnd.toISOString()
+    : end.toISOString();
+}
+
 function buildSquareIdempotencyKey(input: CreateExternalBookingInput): string {
   return [
     "aamy",
@@ -125,7 +204,9 @@ export class SquareProvider implements BookingProviderAdapter {
     const accessToken = cleanString(secrets?.accessToken);
     const environment = resolveSquareEnvironment(connection.metadata?.["environment"]);
 
-    const squarePayload = resolveSquarePayload({
+    const squarePayload = await resolveSquarePayloadForInput({
+      tenantId: input.tenantId,
+      summary: input.summary,
       connectionLocationId: connection.external_location_id,
       metadata: connection.metadata,
       payload: input.providerPayload?.square,
@@ -154,11 +235,17 @@ export class SquareProvider implements BookingProviderAdapter {
       };
     }
 
+    const availabilityEndISO = ensureMinimumSquareAvailabilityEndISO({
+      startISO: input.startISO,
+      endISO: input.endISO,
+      minimumMinutes: 60,
+    });
+
     const availabilityResult = await squareSearchAvailability({
       accessToken,
       environment,
       startAt: input.startISO,
-      endAt: input.endISO,
+      endAt: availabilityEndISO,
       locationId: squarePayload.locationId,
       teamMemberId: squarePayload.teamMemberId,
       serviceVariationId: squarePayload.serviceVariationId,
@@ -247,7 +334,9 @@ export class SquareProvider implements BookingProviderAdapter {
     const accessToken = cleanString(secrets?.accessToken);
     const environment = resolveSquareEnvironment(connection.metadata?.["environment"]);
 
-    const squarePayload = resolveSquarePayload({
+    const squarePayload = await resolveSquarePayloadForInput({
+      tenantId: input.tenantId,
+      summary: input.summary,
       connectionLocationId: connection.external_location_id,
       metadata: connection.metadata,
       payload: input.providerPayload?.square,
