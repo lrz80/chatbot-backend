@@ -227,6 +227,11 @@ export async function createAppointmentFromVoice(args: Args) {
     timeZone,
     bufferMin: args.settings.buffer_min,
     calendarId: null,
+    customer: {
+      name: customerName,
+      phone: customerPhone,
+      email: customerEmail,
+    },
     providerPayload,
   });
 

@@ -25,17 +25,14 @@ export type CreateExternalBookingInput = {
   timeZone: string;
   bufferMin: number;
 
-  /**
-   * Contexto opcional del provider.
-   * Google puede usar calendarId.
-   * Otros providers pueden ignorarlo.
-   */
   calendarId?: string | null;
 
-  /**
-   * Payload genérico por provider.
-   * No hardcodea negocios ni tenants.
-   */
+  customer?: {
+    name?: string | null;
+    phone?: string | null;
+    email?: string | null;
+  };
+
   providerPayload?: {
     square?: SquareBookingPayload;
   };

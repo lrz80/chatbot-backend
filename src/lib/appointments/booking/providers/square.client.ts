@@ -40,6 +40,15 @@ export type SquareCreateBookingInput = {
   serviceVariationVersion: number;
 };
 
+export type SquareCreateCustomerInput = {
+  accessToken: string;
+  environment: SquareEnvironment;
+  givenName?: string | null;
+  familyName?: string | null;
+  email?: string | null;
+  phoneNumber?: string | null;
+};
+
 export type SquareSearchAvailabilityInput = {
   accessToken: string;
   environment: SquareEnvironment;
@@ -214,6 +223,57 @@ export async function squareSearchAvailability(args: SquareSearchAvailabilityInp
           ],
         },
       },
+    },
+  });
+}
+
+export async function squareCreateCustomer(args: SquareCreateCustomerInput): Promise<
+  SquareApiResult<{
+    customer?: {
+      id?: string;
+      given_name?: string;
+      family_name?: string;
+      email_address?: string;
+      phone_number?: string;
+    };
+  }>
+> {
+  const givenName = String(args.givenName || "").trim();
+  const familyName = String(args.familyName || "").trim();
+  const email = String(args.email || "").trim();
+  const phoneNumber = String(args.phoneNumber || "").trim();
+
+  if (!givenName && !familyName && !email && !phoneNumber) {
+    return {
+      ok: false,
+      status: 400,
+      error: "SQUARE_CUSTOMER_INPUT_MISSING",
+    };
+  }
+
+  const customer: Record<string, unknown> = {};
+
+  if (givenName) customer.given_name = givenName;
+  if (familyName) customer.family_name = familyName;
+  if (email) customer.email_address = email;
+  if (phoneNumber) customer.phone_number = phoneNumber;
+
+  return squareRequest({
+    accessToken: args.accessToken,
+    environment: args.environment,
+    path: "/v2/customers",
+    method: "POST",
+    body: {
+      idempotency_key: [
+        "aamy",
+        "square",
+        "customer",
+        email || phoneNumber || `${givenName}_${familyName}`,
+      ]
+        .map((part) => String(part || "").replace(/\s+/g, "_"))
+        .join(":")
+        .slice(0, 128),
+      ...customer,
     },
   });
 }

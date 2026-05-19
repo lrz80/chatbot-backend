@@ -5,6 +5,7 @@ import {
 } from "./providerConnections.repo";
 import {
   squareCreateBooking,
+  squareCreateCustomer,
   squareSearchAvailability,
   type SquareEnvironment,
 } from "./square.client";
@@ -17,7 +18,81 @@ import type {
   SquareBookingPayload,
 } from "./types";
 import { resolveSquareServiceMappingFromDbForTenant } from "../../../integrations/square/resolveSquareServiceMappingFromDbForTenant";
-import { getTenantExternalServiceMapping } from "../../../integrations/serviceMappings/getTenantExternalServiceMapping";
+
+function splitCustomerName(fullName: unknown): {
+  givenName: string;
+  familyName: string;
+} {
+  const cleanName = cleanString(fullName);
+  const parts = cleanName.split(/\s+/).filter(Boolean);
+
+  if (parts.length === 0) {
+    return {
+      givenName: "Customer",
+      familyName: "",
+    };
+  }
+
+  if (parts.length === 1) {
+    return {
+      givenName: parts[0],
+      familyName: "",
+    };
+  }
+
+  return {
+    givenName: parts[0],
+    familyName: parts.slice(1).join(" "),
+  };
+}
+
+async function resolveSquareCustomerIdForBooking(args: {
+  accessToken: string;
+  environment: SquareEnvironment;
+  existingCustomerId?: string | null;
+  customer?: {
+    name?: string | null;
+    phone?: string | null;
+    email?: string | null;
+  };
+}): Promise<string | null> {
+  const existingCustomerId = cleanString(args.existingCustomerId);
+
+  if (existingCustomerId) {
+    return existingCustomerId;
+  }
+
+  const customerName = cleanString(args.customer?.name);
+  const customerPhone = cleanString(args.customer?.phone);
+  const customerEmail = cleanString(args.customer?.email);
+
+  if (!customerName && !customerPhone && !customerEmail) {
+    return null;
+  }
+
+  const { givenName, familyName } = splitCustomerName(customerName);
+
+  const result = await squareCreateCustomer({
+    accessToken: args.accessToken,
+    environment: args.environment,
+    givenName,
+    familyName,
+    email: customerEmail || null,
+    phoneNumber: customerPhone || null,
+  });
+
+  if (!result.ok) {
+    console.error("🟥 [SQUARE_PROVIDER] create customer failed", {
+      status: result.status,
+      error: result.error,
+      details: JSON.stringify(result.details || {}, null, 2),
+    });
+
+    return null;
+  }
+
+  return cleanString(result.data.customer?.id) || null;
+}
 
 function resolveSquareEnvironment(value: unknown): SquareEnvironment {
   return value === "sandbox" ? "sandbox" : "production";
@@ -455,12 +530,28 @@ export class SquareProvider implements BookingProviderAdapter {
       };
     }
 
+    const squareCustomerId = await resolveSquareCustomerIdForBooking({
+      accessToken,
+      environment,
+      existingCustomerId: squarePayload.customerId,
+      customer: input.customer,
+    });
+
+    if (!squareCustomerId) {
+      return {
+        ok: false,
+        provider: this.provider,
+        error: "CREATE_EVENT_FAILED",
+        busy: [],
+      };
+    }
+
     const createResult = await squareCreateBooking({
       accessToken,
       environment,
       idempotencyKey: buildSquareIdempotencyKey(input),
       locationId: squarePayload.locationId,
-      customerId: squarePayload.customerId,
+      customerId: squareCustomerId,
       startAt: input.startISO,
       teamMemberId: squarePayload.teamMemberId,
       serviceVariationId: squarePayload.serviceVariationId,
@@ -472,7 +563,7 @@ export class SquareProvider implements BookingProviderAdapter {
         tenantId: input.tenantId,
         status: createResult.status,
         error: createResult.error,
-        details: createResult.details,
+        details: JSON.stringify(createResult.details || {}, null, 2),
       });
 
       return {
