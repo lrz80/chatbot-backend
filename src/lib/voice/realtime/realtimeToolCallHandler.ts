@@ -295,18 +295,20 @@ export async function handleRealtimeToolCall(
     effectiveToolArgs.transcript_value = transcriptValue;
 
     /**
-     * For booking steps, the model is not the source of truth.
-     * The real caller transcript is the source of truth.
+     * For submit_booking_step, prefer the structured value extracted by the
+     * realtime model when it is present.
      *
-     * This prevents the model from inventing or carrying over answers like:
-     * - model_value: "en el salón"
-     * - transcript_value: "Buenos días, quiero agendar una cita"
+     * lastUserTranscript can lag behind, include previous speech, or contain
+     * noisy partial transcription. The model tool argument is the extracted
+     * value for the current pending step.
      *
-     * If the transcript does not satisfy the current step validation,
-     * executeRealtimeTool must reject it and keep the same step pending.
+     * Validation inside executeRealtimeTool remains the source of truth:
+     * if the extracted value does not satisfy the current step, it must reject it.
      */
-    effectiveToolArgs.value = transcriptValue;
-    effectiveToolArgs.value_source = "fresh_user_transcript";
+    effectiveToolArgs.value = modelValue || transcriptValue;
+    effectiveToolArgs.value_source = modelValue
+      ? "model_extracted_value"
+      : "fresh_user_transcript";
   }
 
   if (toolName === "submit_booking_step") {
