@@ -17,7 +17,10 @@ import { saveTenantExternalServiceMapping } from "../../lib/integrations/service
 import { getTenantExternalServiceMapping } from "../../lib/integrations/serviceMappings/getTenantExternalServiceMapping";
 import { createSquareBookingFlowFromInternalServiceForTenant } from "../../lib/integrations/square/createSquareBookingFlowFromInternalServiceForTenant";
 import { clearTenantBookingProviderCache } from "../../lib/appointments/booking/providers/resolveTenantBookingProvider";
-import { getBookingProviderConnection } from "../../lib/appointments/booking/providers/providerConnections.repo";
+import {
+  getBookingProviderConnection,
+  getBookingProviderSecrets,
+} from "../../lib/appointments/booking/providers/providerConnections.repo";
 
 const router = Router();
 
@@ -775,15 +778,38 @@ router.get("/tenant/services", async (req, res) => {
   try {
     const tenantId = String(req.query?.tenantId || "").trim();
 
-    const connectionResult = await getSquareConnectionForTenant(tenantId);
+    if (!tenantId) {
+      return res.status(400).json({
+        ok: false,
+        error: "TENANT_ID_REQUIRED",
+      });
+    }
 
-    if (!connectionResult.ok) {
-      return res.status(connectionResult.status || 500).json(connectionResult);
+    const connection = await getBookingProviderConnection(tenantId, "square");
+
+    if (!connection || connection.status !== "active") {
+      return res.status(404).json({
+        ok: false,
+        error: "SQUARE_CONNECTION_NOT_FOUND",
+      });
+    }
+
+    const secrets = await getBookingProviderSecrets(tenantId, "square");
+    const accessToken = String(secrets?.accessToken || "").trim();
+
+    const environment =
+      connection.metadata?.environment === "sandbox" ? "sandbox" : "production";
+
+    if (!accessToken) {
+      return res.status(400).json({
+        ok: false,
+        error: "SQUARE_ACCESS_TOKEN_MISSING",
+      });
     }
 
     const result = await getSquareBookableServices({
-      accessToken: connectionResult.connection.accessToken,
-      environment: connectionResult.connection.environment,
+      accessToken,
+      environment,
     });
 
     if (!result.ok) {
@@ -799,6 +825,7 @@ router.get("/tenant/services", async (req, res) => {
     });
   } catch (error) {
     console.error("[SQUARE_TENANT_SERVICES] unexpected error", error);
+
     return res.status(500).json({
       ok: false,
       error: "SQUARE_TENANT_SERVICES_FAILED",
