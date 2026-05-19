@@ -3,6 +3,9 @@ import pool from "../db";
 import { resolveVoiceScheduleValidation } from "./resolveVoiceScheduleValidation";
 import { BookingProviderOrchestrator } from "./booking/providers/orchestrator";
 import { resolveAppointmentServiceId } from "./resolveAppointmentServiceId";
+import { resolveTenantBookingProvider } from "./booking/providers/resolveTenantBookingProvider";
+import { resolveSquareServiceMappingFromDbForTenant } from "../integrations/square/resolveSquareServiceMappingFromDbForTenant";
+import type { CreateExternalBookingInput } from "./booking/providers/types";
 
 type AppointmentSettings = {
   default_duration_min: number;
@@ -41,8 +44,6 @@ function buildExtraBookingDescriptionLines(
     "customer_phone",
     "customer_email",
     "confirmation",
-
-    // Platform/internal aliases and metadata. These are not tenant/business rules.
     "step_key",
     "value",
     "name",
@@ -68,7 +69,11 @@ function buildExtraBookingDescriptionLines(
         ? String(answersBySlot[canonicalSlot] || "").trim()
         : "";
 
-      if (canonicalSlot && canonicalSlot !== cleanKey && canonicalValue === cleanValue) {
+      if (
+        canonicalSlot &&
+        canonicalSlot !== cleanKey &&
+        canonicalValue === cleanValue
+      ) {
         return false;
       }
 
@@ -89,15 +94,19 @@ function parseIsoDate(value: string | null | undefined): Date | null {
   return parsed;
 }
 
+function cleanString(value: unknown): string {
+  return String(value || "").trim();
+}
+
 export async function createAppointmentFromVoice(args: Args) {
-  const serviceName = String(args.answersBySlot.service || "").trim();
-  const datetimeText = String(args.answersBySlot.datetime || "").trim();
-  const datetimeIsoText = String(args.answersBySlot.datetime_iso || "").trim();
+  const serviceName = cleanString(args.answersBySlot.service);
+  const datetimeText = cleanString(args.answersBySlot.datetime);
+  const datetimeIsoText = cleanString(args.answersBySlot.datetime_iso);
   const customerPhone = args.answersBySlot.customer_phone || null;
-  const customerName = String(args.answersBySlot.customer_name || "").trim();
+  const customerName = cleanString(args.answersBySlot.customer_name);
   const customerEmail = args.answersBySlot.customer_email || null;
   const timeZone =
-    String(args.settings.timezone || "").trim() || "America/New_York";
+    cleanString(args.settings.timezone) || "America/New_York";
 
   if (!serviceName) {
     throw new Error("MISSING_SERVICE");
@@ -132,6 +141,45 @@ export async function createAppointmentFromVoice(args: Args) {
     }
 
     start = scheduleValidation.requestedAt;
+  }
+
+  const activeProvider = await resolveTenantBookingProvider(args.tenantId);
+
+  const resolvedServiceId = await resolveAppointmentServiceId({
+    tenantId: args.tenantId,
+    serviceName,
+  });
+
+  let providerPayload: CreateExternalBookingInput["providerPayload"] | undefined;
+
+  if (activeProvider === "square") {
+    const squareMapping = await resolveSquareServiceMappingFromDbForTenant({
+      tenantId: args.tenantId,
+      internalServiceKey: serviceName,
+    });
+
+    if (!squareMapping.ok) {
+      throw new Error(`SQUARE_SERVICE_MAPPING_FAILED:${squareMapping.error}`);
+    }
+
+    const teamMemberId = cleanString(
+      squareMapping.mapping.externalMetadata?.team_member_id
+    );
+
+    if (!teamMemberId) {
+      throw new Error(`SQUARE_SERVICE_MAPPING_MISSING_TEAM_MEMBER:${serviceName}`);
+    }
+
+    providerPayload = {
+      square: {
+        locationId: squareMapping.mapping.externalLocationId,
+        teamMemberId,
+        serviceVariationId: squareMapping.mapping.externalServiceId,
+        serviceVariationVersion:
+          squareMapping.mapping.externalServiceVersion ??
+          squareMapping.service.variationVersion,
+      },
+    };
   }
 
   const duration = args.settings.default_duration_min;
@@ -179,6 +227,7 @@ export async function createAppointmentFromVoice(args: Args) {
     timeZone,
     bufferMin: args.settings.buffer_min,
     calendarId: null,
+    providerPayload,
   });
 
   if (!externalBooking.ok) {
@@ -192,11 +241,14 @@ export async function createAppointmentFromVoice(args: Args) {
       };
 
       slotBusyError.error = "SLOT_BUSY";
-      slotBusyError.suggestedStarts = Array.isArray((externalBooking as any).suggestedStarts)
+      slotBusyError.suggestedStarts = Array.isArray(
+        (externalBooking as any).suggestedStarts
+      )
         ? (externalBooking as any).suggestedStarts
             .map((item: unknown) => String(item || "").trim())
             .filter(Boolean)
         : [];
+
       slotBusyError.busy = Array.isArray(externalBooking.busy)
         ? externalBooking.busy
         : [];
@@ -214,19 +266,16 @@ export async function createAppointmentFromVoice(args: Args) {
   }
 
   const externalCalendarEventId = externalBooking.event_id;
+
   const googleEventId =
     externalBooking.provider === "google_calendar"
       ? externalBooking.event_id
       : null;
+
   const googleEventLink =
     externalBooking.provider === "google_calendar"
       ? externalBooking.htmlLink
       : null;
-
-  const resolvedServiceId = await resolveAppointmentServiceId({
-    tenantId: args.tenantId,
-    serviceName,
-  });
 
   const { rows } = await pool.query(
     `
