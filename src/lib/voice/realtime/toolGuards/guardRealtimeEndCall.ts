@@ -26,7 +26,7 @@ export type RealtimeEndCallGuardResult =
       resetLastUserDigits: boolean;
     };
 
-function shouldBlockEndCallForPendingStep(state: CallState): boolean {
+function hasRealPendingBookingStep(state: CallState): boolean {
   const pendingBookingStepKey = clean(state.pendingBookingStepKey || "");
   const pendingSlot = clean((state as any).pendingBookingStepSlot || "");
   const pendingExpectedType = clean(
@@ -34,16 +34,27 @@ function shouldBlockEndCallForPendingStep(state: CallState): boolean {
   );
   const pendingRequired = (state as any).pendingBookingStepRequired === true;
 
-  const pendingStepExpectsUserInput =
-    Boolean(pendingBookingStepKey) &&
-    (pendingRequired ||
-      pendingExpectedType === "confirmation" ||
-      pendingExpectedType === "phone" ||
-      pendingExpectedType === "datetime" ||
-      pendingExpectedType === "number" ||
-      (pendingExpectedType === "text" && pendingSlot !== "none"));
+  if (!pendingBookingStepKey) {
+    return false;
+  }
 
-  if (pendingStepExpectsUserInput) {
+  return (
+    pendingRequired ||
+    pendingExpectedType === "confirmation" ||
+    pendingExpectedType === "phone" ||
+    pendingExpectedType === "datetime" ||
+    pendingExpectedType === "number" ||
+    (pendingExpectedType === "text" && pendingSlot !== "none")
+  );
+}
+
+function shouldBlockEndCallForPendingStep(params: {
+  state: CallState;
+  lastUserTranscript: string;
+}): boolean {
+  const { state, lastUserTranscript } = params;
+
+  if (hasRealPendingBookingStep(state)) {
     return true;
   }
 
@@ -54,6 +65,21 @@ function shouldBlockEndCallForPendingStep(state: CallState): boolean {
     return false;
   }
 
+  const currentTranscript = clean(lastUserTranscript);
+
+  /**
+   * Si ya no hay un step real pendiente y el caller dijo algo nuevo
+   * después de la pregunta final ("¿necesitas algo más?"), no bloqueamos.
+   *
+   * Esto evita que el flujo quede pegado cuando:
+   * - pendingBookingStepKey = ""
+   * - awaitingPostBookingClosure = true
+   * - postBookingClosureTranscriptSeq no fue seteado
+   * - el usuario dice "eso es todo", "gracias", etc.
+   *
+   * No dependemos de frases hardcodeadas. Solo verificamos que haya una
+   * respuesta nueva del usuario.
+   */
   const postBookingClosureTranscriptSeq =
     typeof (state as any)?.postBookingClosureTranscriptSeq === "number"
       ? (state as any).postBookingClosureTranscriptSeq
@@ -64,7 +90,11 @@ function shouldBlockEndCallForPendingStep(state: CallState): boolean {
       ? state.lastUserTranscriptSeq
       : null;
 
-  if (postBookingClosureTranscriptSeq === null || currentTranscriptSeq === null) {
+  if (postBookingClosureTranscriptSeq === null) {
+    return currentTranscript.length === 0;
+  }
+
+  if (currentTranscriptSeq === null) {
     return true;
   }
 
@@ -116,7 +146,12 @@ export function guardRealtimeEndCall(params: {
     };
   }
 
-  if (shouldBlockEndCallForPendingStep(realtimeState)) {
+  if (
+    shouldBlockEndCallForPendingStep({
+      state: realtimeState,
+      lastUserTranscript,
+    })
+  ) {
     return {
       ok: false,
       error: "END_CALL_BLOCKED_PENDING_BOOKING_STEP",

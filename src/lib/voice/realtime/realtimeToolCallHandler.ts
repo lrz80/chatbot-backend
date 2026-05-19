@@ -288,9 +288,25 @@ export async function handleRealtimeToolCall(
   });
 
   if (toolName === "submit_booking_step") {
-    effectiveToolArgs.model_value = clean(toolArgs.value || "");
-    effectiveToolArgs.transcript_value = clean(lastUserTranscript || "");
-    effectiveToolArgs.value_source = "model_with_transcript_context";
+    const modelValue = clean(toolArgs.value || "");
+    const transcriptValue = clean(lastUserTranscript || "");
+
+    effectiveToolArgs.model_value = modelValue;
+    effectiveToolArgs.transcript_value = transcriptValue;
+
+    /**
+     * For booking steps, the model is not the source of truth.
+     * The real caller transcript is the source of truth.
+     *
+     * This prevents the model from inventing or carrying over answers like:
+     * - model_value: "en el salón"
+     * - transcript_value: "Buenos días, quiero agendar una cita"
+     *
+     * If the transcript does not satisfy the current step validation,
+     * executeRealtimeTool must reject it and keep the same step pending.
+     */
+    effectiveToolArgs.value = transcriptValue;
+    effectiveToolArgs.value_source = "fresh_user_transcript";
   }
 
   if (toolName === "submit_booking_step") {
@@ -300,6 +316,7 @@ export async function handleRealtimeToolCall(
       model_value: clean(toolArgs.value || ""),
       transcript_value: clean(lastUserTranscript || ""),
       final_value: clean(effectiveToolArgs.value || ""),
+      value_source: effectiveToolArgs.value_source,
     });
   }
 
