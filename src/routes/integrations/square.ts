@@ -16,6 +16,8 @@ import { createSquareBookingFlowFromServiceNameForTenant } from "../../lib/integ
 import { saveTenantExternalServiceMapping } from "../../lib/integrations/serviceMappings/saveTenantExternalServiceMapping";
 import { getTenantExternalServiceMapping } from "../../lib/integrations/serviceMappings/getTenantExternalServiceMapping";
 import { createSquareBookingFlowFromInternalServiceForTenant } from "../../lib/integrations/square/createSquareBookingFlowFromInternalServiceForTenant";
+import { clearTenantBookingProviderCache } from "../../lib/appointments/booking/providers/resolveTenantBookingProvider";
+import { getBookingProviderConnection } from "../../lib/appointments/booking/providers/providerConnections.repo";
 
 const router = Router();
 
@@ -47,24 +49,34 @@ function getSquareConfig(environment: SquareEnvironment) {
   const isSandbox = environment === "sandbox";
 
   const appId = isSandbox
-    ? process.env.SQUARE_SANDBOX_APPLICATION_ID
-    : process.env.SQUARE_APPLICATION_ID;
+    ? process.env.SQUARE_SANDBOX_APPLICATION_ID?.trim()
+    : (
+        process.env.SQUARE_PRODUCTION_APPLICATION_ID ||
+        process.env.SQUARE_APPLICATION_ID
+      )?.trim();
 
   const appSecret = isSandbox
-    ? process.env.SQUARE_SANDBOX_APPLICATION_SECRET
-    : process.env.SQUARE_APPLICATION_SECRET;
+    ? process.env.SQUARE_SANDBOX_APPLICATION_SECRET?.trim()
+    : (
+        process.env.SQUARE_PRODUCTION_APPLICATION_SECRET ||
+        process.env.SQUARE_APPLICATION_SECRET
+      )?.trim();
 
   const redirectUri = isSandbox
-    ? process.env.SQUARE_SANDBOX_REDIRECT_URI
-    : process.env.SQUARE_REDIRECT_URI;
+    ? (
+        process.env.SQUARE_SANDBOX_REDIRECT_URI ||
+        process.env.SQUARE_REDIRECT_URI
+      )?.trim()
+    : (
+        process.env.SQUARE_PRODUCTION_REDIRECT_URI ||
+        process.env.SQUARE_REDIRECT_URI
+      )?.trim();
 
   const baseUrl = isSandbox
     ? "https://connect.squareupsandbox.com"
     : "https://connect.squareup.com";
 
-  const apiBaseUrl = isSandbox
-    ? "https://connect.squareupsandbox.com"
-    : "https://connect.squareup.com";
+  const apiBaseUrl = baseUrl;
 
   if (!appId || !appSecret || !redirectUri) {
     throw new Error(
@@ -362,21 +374,20 @@ router.post("/disconnect", async (req, res) => {
 
     await pool.query(
       `
-      UPDATE tenants
+      UPDATE booking_provider_connections
       SET
-        square_access_token = NULL,
-        square_refresh_token = NULL,
-        square_merchant_id = NULL,
-        square_location_id = NULL,
-        square_token_expires_at = NULL,
-        square_environment = NULL,
-        square_connected_at = NULL,
-        square_status = 'disconnected',
+        status = 'inactive',
+        access_token = NULL,
+        refresh_token = NULL,
+        token_expires_at = NULL,
         updated_at = NOW()
-      WHERE id = $1
+      WHERE tenant_id = $1
+        AND provider = 'square'
       `,
       [tenantId]
     );
+
+    clearTenantBookingProviderCache(tenantId);
 
     return res.status(200).json({
       ok: true,
@@ -624,22 +635,49 @@ router.get("/status", async (req, res) => {
   try {
     const tenantId = String(req.query?.tenantId || "").trim();
 
-    const result = await getSquareConnectionForTenant(tenantId);
+    if (!tenantId) {
+      return res.status(400).json({
+        ok: false,
+        error: "TENANT_ID_REQUIRED",
+      });
+    }
 
-    if (!result.ok) {
-      return res.status(result.status || 500).json(result);
+    const connection = await getBookingProviderConnection(tenantId, "square");
+
+    if (!connection) {
+      return res.status(200).json({
+        ok: true,
+        data: {
+          connected: false,
+          tenantId,
+          provider: "square",
+          merchantId: null,
+          locationId: null,
+          environment: null,
+          expiresAt: null,
+          status: "inactive",
+        },
+      });
     }
 
     return res.status(200).json({
       ok: true,
       data: {
-        connected: true,
-        tenantId: result.connection.tenantId,
-        merchantId: result.connection.merchantId,
-        locationId: result.connection.locationId,
-        environment: result.connection.environment,
-        expiresAt: result.connection.expiresAt,
-        status: result.connection.status,
+        connected: connection.status === "active",
+        tenantId: connection.tenant_id,
+        provider: "square",
+        merchantId: connection.external_account_id,
+        locationId: connection.external_location_id,
+        environment:
+          typeof connection.metadata?.environment === "string"
+            ? connection.metadata.environment
+            : null,
+        expiresAt: connection.token_expires_at,
+        status: connection.status,
+        locationName:
+          typeof connection.metadata?.location_name === "string"
+            ? connection.metadata.location_name
+            : null,
       },
     });
   } catch (error) {
