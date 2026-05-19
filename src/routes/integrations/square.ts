@@ -8,7 +8,6 @@ import { searchSquareAvailability } from "../../lib/integrations/square/searchSq
 import { createSquareBooking } from "../../lib/integrations/square/createSquareBooking";
 import { createSquareCustomer } from "../../lib/integrations/square/createSquareCustomer";
 import { getSquareBookableServices } from "../../lib/integrations/square/getSquareBookableServices";
-import { getSquareConnectionForTenant } from "../../lib/integrations/square/getSquareConnectionForTenant";
 import { createSquareCustomerForTenant } from "../../lib/integrations/square/createSquareCustomerForTenant";
 import { createSquareBookingFlowForTenant } from "../../lib/integrations/square/createSquareBookingFlowForTenant";
 import { resolveSquareServiceMappingForTenant } from "../../lib/integrations/square/resolveSquareServiceMappingForTenant";
@@ -829,6 +828,80 @@ router.get("/tenant/services", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "SQUARE_TENANT_SERVICES_FAILED",
+    });
+  }
+});
+
+router.get("/tenant/team-members", async (req, res) => {
+  try {
+    const tenantId = String(req.query?.tenantId || "").trim();
+
+    if (!tenantId) {
+      return res.status(400).json({
+        ok: false,
+        error: "TENANT_ID_REQUIRED",
+      });
+    }
+
+    const connection = await getBookingProviderConnection(tenantId, "square");
+
+    if (!connection || connection.status !== "active") {
+      return res.status(404).json({
+        ok: false,
+        error: "SQUARE_CONNECTION_NOT_FOUND",
+      });
+    }
+
+    const secrets = await getBookingProviderSecrets(tenantId, "square");
+    const accessToken = String(secrets?.accessToken || "").trim();
+
+    const environment =
+      connection.metadata?.environment === "sandbox" ? "sandbox" : "production";
+
+    if (!accessToken) {
+      return res.status(400).json({
+        ok: false,
+        error: "SQUARE_ACCESS_TOKEN_MISSING",
+      });
+    }
+
+    const baseUrl =
+      environment === "sandbox"
+        ? "https://connect.squareupsandbox.com"
+        : "https://connect.squareup.com";
+
+    const response = await fetch(
+      `${baseUrl}/v2/bookings/team-member-booking-profiles`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Square-Version": process.env.SQUARE_API_VERSION?.trim() || "2026-03-18",
+        },
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        ok: false,
+        error: "SQUARE_TEAM_MEMBERS_FAILED",
+        details: data,
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data,
+    });
+  } catch (error) {
+    console.error("[SQUARE_TENANT_TEAM_MEMBERS] unexpected error", error);
+
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_TENANT_TEAM_MEMBERS_FAILED",
     });
   }
 });
