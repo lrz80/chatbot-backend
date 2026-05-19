@@ -185,24 +185,31 @@ function resolveSquarePayload(input: {
   const locationId =
     cleanString(payload.locationId) ||
     cleanString(input.connectionLocationId) ||
-    cleanString(metadata["location_id"]);
+    cleanString(metadata["location_id"]) ||
+    cleanString(metadata["locationId"]);
 
   const customerId =
     cleanString(payload.customerId) ||
     cleanString(metadata["customer_id"]) ||
+    cleanString(metadata["customerId"]) ||
     null;
 
   const teamMemberId =
     cleanString(payload.teamMemberId) ||
-    cleanString(metadata["team_member_id"]);
+    cleanString(metadata["team_member_id"]) ||
+    cleanString(metadata["teamMemberId"]);
 
   const serviceVariationId =
     cleanString(payload.serviceVariationId) ||
-    cleanString(metadata["service_variation_id"]);
+    cleanString(metadata["service_variation_id"]) ||
+    cleanString(metadata["serviceVariationId"]) ||
+    cleanString(metadata["variationId"]);
 
   const serviceVariationVersion =
     cleanNumber(payload.serviceVariationVersion) ??
-    cleanNumber(metadata["service_variation_version"]);
+    cleanNumber(metadata["service_variation_version"]) ??
+    cleanNumber(metadata["serviceVariationVersion"]) ??
+    cleanNumber(metadata["variationVersion"]);
 
   return {
     locationId,
@@ -257,9 +264,15 @@ async function resolveSquarePayloadForInput(input: {
     return directPayload;
   }
 
-  const mappedTeamMemberId = cleanString(
-    mappingResult.mapping.externalMetadata?.team_member_id
-  );
+  const externalMetadata =
+    mappingResult.mapping.externalMetadata &&
+    typeof mappingResult.mapping.externalMetadata === "object"
+      ? (mappingResult.mapping.externalMetadata as Record<string, unknown>)
+      : {};
+
+  const mappedTeamMemberId =
+    cleanString(externalMetadata["team_member_id"]) ||
+    cleanString(externalMetadata["teamMemberId"]);
 
   return {
     locationId:
@@ -271,10 +284,16 @@ async function resolveSquarePayloadForInput(input: {
     teamMemberId: directPayload.teamMemberId || mappedTeamMemberId,
     serviceVariationId:
       directPayload.serviceVariationId ||
-      cleanString(mappingResult.mapping.externalServiceId),
+      cleanString(mappingResult.mapping.externalServiceId) ||
+      cleanString(externalMetadata["service_variation_id"]) ||
+      cleanString(externalMetadata["serviceVariationId"]) ||
+      cleanString(externalMetadata["variationId"]),
     serviceVariationVersion:
       directPayload.serviceVariationVersion ??
-      mappingResult.mapping.externalServiceVersion ??
+      cleanNumber(mappingResult.mapping.externalServiceVersion) ??
+      cleanNumber(externalMetadata["service_variation_version"]) ??
+      cleanNumber(externalMetadata["serviceVariationVersion"]) ??
+      cleanNumber(externalMetadata["variationVersion"]) ??
       cleanNumber(mappingResult.service.variationVersion),
   };
 }
