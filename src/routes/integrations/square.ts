@@ -241,6 +241,26 @@ async function fetchSquareLocations(args: {
   return Array.isArray(data.locations) ? data.locations : [];
 }
 
+function ensureMinimumSquareAvailabilityEndAt(params: {
+  startAt: string;
+  endAt: string;
+  minimumMinutes?: number;
+}): string {
+  const start = new Date(params.startAt);
+  const end = new Date(params.endAt);
+  const minimumMinutes = params.minimumMinutes ?? 60;
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return params.endAt;
+  }
+
+  const minimumEnd = new Date(start.getTime() + minimumMinutes * 60 * 1000);
+
+  return end.getTime() < minimumEnd.getTime()
+    ? minimumEnd.toISOString()
+    : end.toISOString();
+}
+
 function pickDefaultLocationId(locations: SquareLocation[]): string {
   const active = locations.find((loc) => String(loc.status || "").toUpperCase() === "ACTIVE");
   const first = active || locations[0];
@@ -1079,11 +1099,17 @@ router.post("/tenant/booking-flow-by-internal-service", async (req, res) => {
     const email = String(req.body?.customer?.email || "").trim();
     const phoneNumber = String(req.body?.customer?.phoneNumber || "").trim();
 
+    const availabilityEndAt = ensureMinimumSquareAvailabilityEndAt({
+      startAt,
+      endAt,
+      minimumMinutes: 60,
+    });
+
     const result = await createSquareBookingFlowFromInternalServiceForTenant({
       tenantId,
       internalServiceKey,
       startAt,
-      endAt,
+      endAt: availabilityEndAt,
       customer: {
         givenName,
         familyName,
