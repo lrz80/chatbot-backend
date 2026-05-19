@@ -268,6 +268,29 @@ function pickDefaultLocationId(locations: SquareLocation[]): string {
   return String(first?.id || "").trim();
 }
 
+function buildDashboardRedirectUrl(params: {
+  status: "connected" | "error" | "cancelled";
+  provider?: "square";
+  reason?: string;
+}): string {
+  const dashboardBaseUrl = (
+    process.env.APP_DASHBOARD_URL ||
+    process.env.FRONTEND_URL ||
+    "https://www.aamy.ai"
+  ).replace(/\/$/, "");
+
+  const url = new URL(`${dashboardBaseUrl}/dashboard/appointments`);
+
+  url.searchParams.set("provider", params.provider || "square");
+  url.searchParams.set("status", params.status);
+
+  if (params.reason) {
+    url.searchParams.set("reason", params.reason);
+  }
+
+  return url.toString();
+}
+
 /**
  * GET /api/integrations/square/oauth/start?tenantId=...&environment=sandbox|production
  */
@@ -328,16 +351,31 @@ router.get("/oauth/callback", async (req, res) => {
         errorDescription,
       });
 
-      return res.status(400).send("Square authorization was canceled or failed.");
+      return res.redirect(
+        buildDashboardRedirectUrl({
+          status: "cancelled",
+          reason: error || "oauth_cancelled",
+        })
+      );
     }
 
     if (!code || !state) {
-      return res.status(400).send("Missing Square OAuth parameters.");
+      return res.redirect(
+        buildDashboardRedirectUrl({
+          status: "error",
+          reason: "missing_oauth_parameters",
+        })
+      );
     }
 
     const parsedState = verifyAndParseState(state);
     if (!parsedState) {
-      return res.status(400).send("Invalid or expired OAuth state.");
+      return res.redirect(
+        buildDashboardRedirectUrl({
+          status: "error",
+          reason: "invalid_or_expired_state",
+        })
+      );
     }
 
     const { tenantId, environment } = parsedState;
@@ -366,15 +404,28 @@ router.get("/oauth/callback", async (req, res) => {
 
     if (!result.ok) {
       console.error("[SQUARE_OAUTH_CALLBACK] save failed", result);
-      return res.status(result.status || 500).send("Could not save Square connection.");
+
+      return res.redirect(
+        buildDashboardRedirectUrl({
+          status: "error",
+          reason: "save_connection_failed",
+        })
+      );
     }
 
-    const dashboardUrl = `${process.env.APP_DASHBOARD_URL || "https://aamy.ai"}/dashboard/integrations?provider=square&status=connected`;
-
-    return res.redirect(dashboardUrl);
+    return res.redirect(
+      buildDashboardRedirectUrl({
+        status: "connected",
+      })
+    );
   } catch (error) {
     console.error("[SQUARE_OAUTH_CALLBACK] unexpected error", error);
-    return res.status(500).send("Square connection failed.");
+    return res.redirect(
+      buildDashboardRedirectUrl({
+        status: "error",
+        reason: "square_connection_failed",
+      })
+    );
   }
 });
 
