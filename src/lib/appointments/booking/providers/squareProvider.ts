@@ -17,6 +17,7 @@ import type {
   SquareBookingPayload,
 } from "./types";
 import { resolveSquareServiceMappingFromDbForTenant } from "../../../integrations/square/resolveSquareServiceMappingFromDbForTenant";
+import { getTenantExternalServiceMapping } from "../../../integrations/serviceMappings/getTenantExternalServiceMapping";
 
 function resolveSquareEnvironment(value: unknown): SquareEnvironment {
   return value === "sandbox" ? "sandbox" : "production";
@@ -33,6 +34,63 @@ function cleanNumber(value: unknown): number | null {
 
   const parsed = Number(String(value || "").trim());
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeMappingKey(value: unknown): string {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function resolveSquareMappingWithFallback(params: {
+  tenantId: string;
+  internalServiceKey: string;
+}) {
+  const exactResult = await resolveSquareServiceMappingFromDbForTenant({
+    tenantId: params.tenantId,
+    internalServiceKey: params.internalServiceKey,
+  });
+
+  if (exactResult.ok) {
+    return exactResult;
+  }
+
+  console.warn("🟨 [SQUARE_PROVIDER] exact mapping lookup failed, trying normalized fallback", {
+    tenantId: params.tenantId,
+    internalServiceKey: params.internalServiceKey,
+    exactError: exactResult.error,
+    exactStatus: exactResult.status,
+  });
+
+  const candidates = [
+    params.internalServiceKey,
+    normalizeMappingKey(params.internalServiceKey),
+  ];
+
+  for (const candidate of candidates) {
+    const cleanCandidate = String(candidate || "").trim();
+    if (!cleanCandidate) continue;
+
+    const result = await resolveSquareServiceMappingFromDbForTenant({
+      tenantId: params.tenantId,
+      internalServiceKey: cleanCandidate,
+    });
+
+    if (result.ok) {
+      console.warn("🟨 [SQUARE_PROVIDER] mapping resolved with fallback key", {
+        tenantId: params.tenantId,
+        originalKey: params.internalServiceKey,
+        fallbackKey: cleanCandidate,
+      });
+
+      return result;
+    }
+  }
+
+  return exactResult;
 }
 
 function resolveSquarePayload(input: {
@@ -107,7 +165,7 @@ async function resolveSquarePayloadForInput(input: {
     return directPayload;
   }
 
-  const mappingResult = await resolveSquareServiceMappingFromDbForTenant({
+  const mappingResult = await resolveSquareMappingWithFallback({
     tenantId: input.tenantId,
     internalServiceKey: input.summary,
   });

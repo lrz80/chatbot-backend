@@ -1,9 +1,16 @@
+//src/lib/integrations/serviceMappings/getTenantExternalServiceMapping.ts
 import pool from "../../db";
+
+export type GetTenantExternalServiceMappingInput = {
+  tenantId: string;
+  provider: string;
+  internalServiceKey: string;
+};
 
 export type TenantExternalServiceMapping = {
   id: string;
   tenantId: string;
-  provider: "square";
+  provider: string;
   internalServiceKey: string;
   externalServiceId: string;
   externalServiceVersion: number | null;
@@ -14,12 +21,6 @@ export type TenantExternalServiceMapping = {
   updatedAt: string;
 };
 
-export type GetTenantExternalServiceMappingArgs = {
-  tenantId: string;
-  provider: "square";
-  internalServiceKey: string;
-};
-
 export type GetTenantExternalServiceMappingResult =
   | {
       ok: true;
@@ -28,15 +29,55 @@ export type GetTenantExternalServiceMappingResult =
   | {
       ok: false;
       error: string;
-      status?: number;
+      status: number;
+      details?: unknown;
     };
 
+function normalizeMappingKey(value: unknown): string {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeMetadata(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return {};
+}
+
+function mapRow(row: any): TenantExternalServiceMapping {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    provider: String(row.provider),
+    internalServiceKey: String(row.internal_service_key),
+    externalServiceId: String(row.external_service_id),
+    externalServiceVersion:
+      row.external_service_version == null
+        ? null
+        : Number(row.external_service_version),
+    externalLocationId: row.external_location_id
+      ? String(row.external_location_id)
+      : null,
+    externalMetadata: normalizeMetadata(row.external_metadata),
+    isActive: Boolean(row.is_active),
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
 export async function getTenantExternalServiceMapping(
-  args: GetTenantExternalServiceMappingArgs
+  input: GetTenantExternalServiceMappingInput
 ): Promise<GetTenantExternalServiceMappingResult> {
-  const tenantId = String(args.tenantId || "").trim();
-  const provider = args.provider;
-  const internalServiceKey = String(args.internalServiceKey || "").trim();
+  const tenantId = String(input.tenantId || "").trim();
+  const provider = String(input.provider || "").trim();
+  const internalServiceKey = String(input.internalServiceKey || "").trim();
 
   if (!tenantId || !provider || !internalServiceKey) {
     return {
@@ -46,7 +87,7 @@ export async function getTenantExternalServiceMapping(
     };
   }
 
-  const result = await pool.query(
+  const exactResult = await pool.query(
     `
     SELECT
       id,
@@ -70,38 +111,61 @@ export async function getTenantExternalServiceMapping(
     [tenantId, provider, internalServiceKey]
   );
 
-  const row = result.rows[0];
+  if (exactResult.rows[0]) {
+    return {
+      ok: true,
+      mapping: mapRow(exactResult.rows[0]),
+    };
+  }
 
-  if (!row) {
+  const normalizedInputKey = normalizeMappingKey(internalServiceKey);
+
+  const fallbackResult = await pool.query(
+    `
+    SELECT
+      id,
+      tenant_id,
+      provider,
+      internal_service_key,
+      external_service_id,
+      external_service_version,
+      external_location_id,
+      external_metadata,
+      is_active,
+      created_at,
+      updated_at
+    FROM tenant_external_service_mappings
+    WHERE tenant_id = $1
+      AND provider = $2
+      AND is_active = true
+    `,
+    [tenantId, provider]
+  );
+
+  const matchedRow = fallbackResult.rows.find((row: any) => {
+    return normalizeMappingKey(row.internal_service_key) === normalizedInputKey;
+  });
+
+  if (!matchedRow) {
     return {
       ok: false,
       error: "TENANT_EXTERNAL_SERVICE_MAPPING_NOT_FOUND",
       status: 404,
+      details: {
+        tenantId,
+        provider,
+        internalServiceKey,
+        normalizedInputKey,
+        availableKeys: fallbackResult.rows.map((row: any) => ({
+          internalServiceKey: String(row.internal_service_key || ""),
+          normalizedKey: normalizeMappingKey(row.internal_service_key),
+        })),
+      },
     };
   }
 
   return {
     ok: true,
-    mapping: {
-      id: String(row.id),
-      tenantId: String(row.tenant_id),
-      provider: row.provider,
-      internalServiceKey: String(row.internal_service_key),
-      externalServiceId: String(row.external_service_id),
-      externalServiceVersion:
-        row.external_service_version == null
-          ? null
-          : Number(row.external_service_version),
-      externalLocationId: row.external_location_id
-        ? String(row.external_location_id)
-        : null,
-      externalMetadata:
-        row.external_metadata && typeof row.external_metadata === "object"
-          ? row.external_metadata
-          : {},
-      isActive: Boolean(row.is_active),
-      createdAt: new Date(row.created_at).toISOString(),
-      updatedAt: new Date(row.updated_at).toISOString(),
-    },
+    mapping: mapRow(matchedRow),
   };
 }
