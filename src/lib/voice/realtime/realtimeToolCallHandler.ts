@@ -13,6 +13,7 @@ import { guardSubmitBookingStepFlowLoaded } from "./toolGuards/guardSubmitBookin
 import { handleRealtimeToolError } from "./toolErrors/handleRealtimeToolError";
 import { guardTenantReady } from "./toolGuards/guardTenantReady";
 import { handleBlockedSubmitBookingStep } from "./toolGuards/handleBlockedSubmitBookingStep";
+import { selectSubmitBookingStepValue } from "./toolArgs/selectSubmitBookingStepValue";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -291,24 +292,15 @@ export async function handleRealtimeToolCall(
     const modelValue = clean(toolArgs.value || "");
     const transcriptValue = clean(lastUserTranscript || "");
 
+    const selectedValue = selectSubmitBookingStepValue({
+      modelValue,
+      transcriptValue,
+    });
+
     effectiveToolArgs.model_value = modelValue;
     effectiveToolArgs.transcript_value = transcriptValue;
-
-    /**
-     * For submit_booking_step, prefer the structured value extracted by the
-     * realtime model when it is present.
-     *
-     * lastUserTranscript can lag behind, include previous speech, or contain
-     * noisy partial transcription. The model tool argument is the extracted
-     * value for the current pending step.
-     *
-     * Validation inside executeRealtimeTool remains the source of truth:
-     * if the extracted value does not satisfy the current step, it must reject it.
-     */
-    effectiveToolArgs.value = modelValue || transcriptValue;
-    effectiveToolArgs.value_source = modelValue
-      ? "model_extracted_value"
-      : "fresh_user_transcript";
+    effectiveToolArgs.value = selectedValue.value;
+    effectiveToolArgs.value_source = selectedValue.valueSource;
   }
 
   if (toolName === "submit_booking_step") {
