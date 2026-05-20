@@ -63,7 +63,7 @@ export type SquareSearchAvailabilityInput = {
   startAt: string;
   endAt: string;
   locationId: string;
-  teamMemberId: string;
+  teamMemberId?: string | null;
   serviceVariationId: string;
 };
 
@@ -209,11 +209,17 @@ export async function squareSearchAvailability(args: SquareSearchAvailabilityInp
   const startAt = String(args.startAt || "").trim();
   const endAt = String(args.endAt || "").trim();
 
-  if (!locationId || !teamMemberId || !serviceVariationId || !startAt || !endAt) {
+  if (!locationId || !serviceVariationId || !startAt || !endAt) {
     return {
       ok: false,
       status: 400,
       error: "SQUARE_AVAILABILITY_INPUT_MISSING",
+      details: {
+        hasLocationId: Boolean(locationId),
+        hasServiceVariationId: Boolean(serviceVariationId),
+        hasStartAt: Boolean(startAt),
+        hasEndAt: Boolean(endAt),
+      },
     };
   }
 
@@ -233,9 +239,13 @@ export async function squareSearchAvailability(args: SquareSearchAvailabilityInp
           segment_filters: [
             {
               service_variation_id: serviceVariationId,
-              team_member_id_filter: {
-                any: [teamMemberId],
-              },
+              ...(teamMemberId
+                ? {
+                    team_member_id_filter: {
+                      any: [teamMemberId],
+                    },
+                  }
+                : {}),
             },
           ],
         },

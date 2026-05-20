@@ -375,7 +375,6 @@ export class SquareProvider implements BookingProviderAdapter {
     if (
       !accessToken ||
       !squarePayload.locationId ||
-      !squarePayload.teamMemberId ||
       !squarePayload.serviceVariationId
     ) {
       console.warn("🟥 [SQUARE_PROVIDER] missing Square availability mapping", {
@@ -559,6 +558,57 @@ export class SquareProvider implements BookingProviderAdapter {
       };
     }
 
+    const availabilityEndISO = ensureMinimumSquareAvailabilityEndISO({
+      startISO: input.startISO,
+      endISO: input.endISO,
+      minimumMinutes: 60,
+    });
+
+    const exactAvailabilityResult = await squareSearchAvailability({
+      accessToken,
+      environment,
+      startAt: input.startISO,
+      endAt: availabilityEndISO,
+      locationId: squarePayload.locationId,
+      teamMemberId: squarePayload.teamMemberId || null,
+      serviceVariationId: squarePayload.serviceVariationId,
+    });
+
+    if (!exactAvailabilityResult.ok) {
+      console.error("🟥 [SQUARE_PROVIDER] exact availability fetch failed before create", {
+        tenantId: input.tenantId,
+        status: exactAvailabilityResult.status,
+        error: exactAvailabilityResult.error,
+        details: JSON.stringify(exactAvailabilityResult.details || {}, null, 2),
+        squareErrors: JSON.stringify(exactAvailabilityResult.squareErrors || [], null, 2),
+      });
+
+      return {
+        ok: false,
+        provider: this.provider,
+        error: "SLOT_BUSY",
+        busy: [],
+        suggestedStarts: [],
+      };
+    }
+
+    const requestedStartMs = new Date(input.startISO).getTime();
+
+    const exactAvailability = exactAvailabilityResult.data.availabilities?.find((slot) => {
+      const slotStartMs = new Date(String(slot.start_at || "")).getTime();
+      return Number.isFinite(slotStartMs) && slotStartMs === requestedStartMs;
+    });
+
+    const exactSegment = exactAvailability?.appointment_segments?.[0];
+
+    const resolvedTeamMemberId =
+      cleanString(exactSegment?.team_member_id) ||
+      squarePayload.teamMemberId;
+
+    const resolvedServiceVariationVersion =
+      cleanNumber(exactSegment?.service_variation_version) ??
+      squarePayload.serviceVariationVersion;
+
     const squareCustomerId = await resolveSquareCustomerIdForBooking({
       accessToken,
       environment,
@@ -575,6 +625,15 @@ export class SquareProvider implements BookingProviderAdapter {
       };
     }
 
+    if (!resolvedTeamMemberId || resolvedServiceVariationVersion == null) {
+      return {
+        ok: false,
+        provider: this.provider,
+        error: "PROVIDER_MAPPING_NOT_CONFIGURED",
+        busy: [],
+      };
+    }
+
     const createResult = await squareCreateBooking({
       accessToken,
       environment,
@@ -582,9 +641,9 @@ export class SquareProvider implements BookingProviderAdapter {
       locationId: squarePayload.locationId,
       customerId: squareCustomerId,
       startAt: input.startISO,
-      teamMemberId: squarePayload.teamMemberId,
+      teamMemberId: resolvedTeamMemberId,
       serviceVariationId: squarePayload.serviceVariationId,
-      serviceVariationVersion: squarePayload.serviceVariationVersion,
+      serviceVariationVersion: resolvedServiceVariationVersion,
     });
 
     if (!createResult.ok) {
