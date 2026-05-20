@@ -274,8 +274,8 @@ initSocket(server, WHITELIST);
 
 attachVoiceRealtimeStream(server);
 
-server.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
+server.listen(Number(PORT), "0.0.0.0", () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
 
 process.on("unhandledRejection", (reason: any) => {

@@ -1,26 +1,18 @@
-# Usa una imagen con Node y permisos correctos
-FROM node:20-alpine
+FROM node:20-slim
 
-# Crea el directorio de trabajo
 WORKDIR /app
 
-# Copia package.json y package-lock.json
 COPY package*.json ./
 
-# Instala dependencias (incluye devDependencies)
-RUN npm install
+RUN npm ci
 
-# Copia el resto del proyecto
-COPY . .
+COPY tsconfig.json ./
+COPY src ./src
 
-# Asegura que tsc tenga permisos
-RUN chmod +x ./node_modules/.bin/tsc
+RUN npm run build
 
-# Compila TypeScript
-RUN npx tsc
+ENV NODE_ENV=production
 
-# Expone el puerto (opcional: para debugging local)
-EXPOSE 3001
+EXPOSE 8080
 
-# Comando para iniciar el backend
-CMD ["node", "dist/app.js"]
+CMD ["npm", "start"]
