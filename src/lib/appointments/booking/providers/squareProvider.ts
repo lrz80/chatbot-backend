@@ -663,12 +663,39 @@ export class SquareProvider implements BookingProviderAdapter {
     });
 
     if (!createResult.ok) {
+      const detailsText = JSON.stringify(createResult.details || {}, null, 2);
+
       console.error("🟥 [SQUARE_PROVIDER] create booking failed", {
         tenantId: input.tenantId,
         status: createResult.status,
         error: createResult.error,
-        details: JSON.stringify(createResult.details || {}, null, 2),
+        details: detailsText,
+        squareErrors: JSON.stringify(createResult.squareErrors || [], null, 2),
       });
+
+      const squareErrors = Array.isArray(createResult.squareErrors)
+        ? createResult.squareErrors
+        : [];
+
+      const writeNotSupported = squareErrors.some((error) => {
+        const detail = String(error.detail || "").toLowerCase();
+        const code = String(error.code || "").toUpperCase();
+
+        return (
+          code === "FORBIDDEN" &&
+          detail.includes("subscription") &&
+          detail.includes("write operations")
+        );
+      });
+
+      if (writeNotSupported) {
+        return {
+          ok: false,
+          provider: this.provider,
+          error: "SQUARE_WRITE_OPERATIONS_NOT_SUPPORTED",
+          busy: [],
+        };
+      }
 
       return {
         ok: false,

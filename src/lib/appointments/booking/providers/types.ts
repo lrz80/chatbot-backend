@@ -56,6 +56,7 @@ export type CreateExternalBookingError =
   | "CREATE_EVENT_FAILED"
   | "PROVIDER_NOT_CONFIGURED"
   | "PROVIDER_AVAILABILITY_NOT_SUPPORTED"
+  | "SQUARE_WRITE_OPERATIONS_NOT_SUPPORTED"
   | "PROVIDER_MAPPING_NOT_CONFIGURED";
 
 export type CreateExternalBookingResult =

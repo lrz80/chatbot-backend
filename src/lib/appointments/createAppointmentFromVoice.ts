@@ -256,6 +256,10 @@ export async function createAppointmentFromVoice(args: Args) {
       throw new Error("BOOKING_PROVIDER_NOT_CONFIGURED");
     }
 
+    if (externalBooking.error === "SQUARE_WRITE_OPERATIONS_NOT_SUPPORTED") {
+      throw new Error("SQUARE_WRITE_OPERATIONS_NOT_SUPPORTED");
+    }
+
     throw new Error(
       `EXTERNAL_BOOKING_FAILED:${externalBooking.provider}:${externalBooking.error}`
     );
