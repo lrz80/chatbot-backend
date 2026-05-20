@@ -522,9 +522,29 @@ export async function createOpenAiRealtimeBridge({
       ...(response ? { response } : {}),
     };
 
-    if (source === "tool_followup:end_call") {
+    const responseInstructions =
+      typeof response?.instructions === "string" ? response.instructions : "";
+
+    const isEndCallFollowup = source === "tool_followup:end_call";
+
+    const shouldCreateEndCallGoodbye =
+      isEndCallFollowup &&
+      responseInstructions.includes("Say a short, natural goodbye") &&
+      !responseInstructions.includes("Do not end the call yet");
+
+    if (isEndCallFollowup && shouldCreateEndCallGoodbye) {
       endCallGoodbyeRequested = true;
       endCallGoodbyeResponseId = null;
+    }
+
+    if (isEndCallFollowup && !shouldCreateEndCallGoodbye) {
+      endCallGoodbyeRequested = false;
+      endCallGoodbyeResponseId = null;
+
+      console.log("[VOICE_REALTIME][END_CALL_FOLLOWUP_NOT_GOODBYE]", {
+        callSid,
+        source,
+      });
     }
 
     console.log("[VOICE_REALTIME][RESPONSE_CREATE_REQUESTED]", {
