@@ -21,6 +21,23 @@ export function resolveRealtimeToolFollowupInstructions(params: {
     ].join(" ");
   }
 
+  if (
+    toolName === "create_appointment" &&
+    toolResult?.error === "SQUARE_WRITE_OPERATIONS_NOT_SUPPORTED"
+  ) {
+    return [
+      "Use only the tool result as source of truth.",
+      "The requested appointment time was available, but the connected Square account could not complete the booking automatically.",
+      "Do not say the appointment is confirmed.",
+      "Do not say the time is unavailable.",
+      "Do not invent a booking link, payment link, policy, price, deposit, or confirmation number.",
+      "Explain briefly and naturally that the booking needs to be completed through the business official booking link if one is available.",
+      "Ask the caller whether they want to receive the official booking link by SMS.",
+      "Ask only one question and wait for the caller answer.",
+      "Do not call end_call yet.",
+    ].join(" ");
+  }
+
   return buildToolFollowupInstructions({
     toolName,
     toolResult,

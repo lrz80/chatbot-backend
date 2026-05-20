@@ -365,7 +365,7 @@ export async function handleRealtimeCreateAppointment(
     };
 
     if (err.error === "SLOT_BUSY" || err.message.startsWith("SLOT_BUSY:")) {
-        const busyRecovered = await executeCanonicalBookingSlotBusyRecovery({
+      const busyRecovered = await executeCanonicalBookingSlotBusyRecovery({
         flow: steps as any,
         state: bookingContext.state,
         tenantId,
@@ -374,48 +374,69 @@ export async function handleRealtimeCreateAppointment(
         callerE164: callerPhone,
         timeZone: clean(settingsRow.timezone) || "America/New_York",
         suggestedStarts: Array.isArray(err.suggestedStarts)
-            ? err.suggestedStarts
-            : [],
-        });
+          ? err.suggestedStarts
+          : [],
+      });
 
-        Object.assign(bookingContext.state, busyRecovered.state);
+      Object.assign(bookingContext.state, busyRecovered.state);
 
-        const bookingState = buildRealtimeBookingState({
+      const bookingState = buildRealtimeBookingState({
         steps,
         state: busyRecovered.state,
         explicitCurrentIndex: busyRecovered.datetimeStepIndex,
-        });
+      });
 
-        return {
+      return {
         ok: false,
         error: "SLOT_UNAVAILABLE",
         message: busyRecovered.prompt,
         assistant_prompt: busyRecovered.prompt,
         suggested_times: parseJsonStringArray(
-            busyRecovered.state.bookingData?.__booking_busy_suggested_starts
+          busyRecovered.state.bookingData?.__booking_busy_suggested_starts
         ),
         booking_state: bookingState,
         next_required_step: buildNextRequiredStep({
-            steps,
-            bookingState,
-            locale: bookingContext.currentLocale,
-            overridePrompt: busyRecovered.prompt,
+          steps,
+          bookingState,
+          locale: bookingContext.currentLocale,
+          overridePrompt: busyRecovered.prompt,
         }),
-        };
+      };
     }
 
-    return {
-        ok: false,
-        error: "BOOKING_FAILED",
-        message: err.message,
-        assistant_prompt: "",
-        booking_outcome: "failed",
-        booking_state: buildRealtimeBookingState({
+    if (err.message === "SQUARE_WRITE_OPERATIONS_NOT_SUPPORTED") {
+      const bookingState = buildRealtimeBookingState({
         steps,
         state: bookingContext.state,
         explicitCurrentIndex: null,
-        }),
+        finalConfirmationGranted: true,
+        readyToCreate: false,
+      });
+
+      return {
+        ok: false,
+        error: "SQUARE_WRITE_OPERATIONS_NOT_SUPPORTED",
+        booking_outcome: "requires_customer_action",
+        customer_action_required: true,
+        fallback_action: "SEND_BOOKING_LINK",
+        provider: "square",
+        booking_state: bookingState,
         next_required_step: null,
+      };
+    }
+
+    return {
+      ok: false,
+      error: "BOOKING_FAILED",
+      message: err.message,
+      assistant_prompt: "",
+      booking_outcome: "failed",
+      booking_state: buildRealtimeBookingState({
+        steps,
+        state: bookingContext.state,
+        explicitCurrentIndex: null,
+      }),
+      next_required_step: null,
     };
   }
 }
