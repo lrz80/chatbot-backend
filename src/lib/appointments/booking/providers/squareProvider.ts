@@ -525,9 +525,7 @@ export class SquareProvider implements BookingProviderAdapter {
     if (
       !accessToken ||
       !squarePayload.locationId ||
-      !squarePayload.teamMemberId ||
-      !squarePayload.serviceVariationId ||
-      squarePayload.serviceVariationVersion == null
+      !squarePayload.serviceVariationId
     ) {
       return {
         ok: false,
@@ -570,7 +568,7 @@ export class SquareProvider implements BookingProviderAdapter {
       startAt: input.startISO,
       endAt: availabilityEndISO,
       locationId: squarePayload.locationId,
-      teamMemberId: squarePayload.teamMemberId || null,
+      teamMemberId: null,
       serviceVariationId: squarePayload.serviceVariationId,
     });
 
@@ -601,9 +599,7 @@ export class SquareProvider implements BookingProviderAdapter {
 
     const exactSegment = exactAvailability?.appointment_segments?.[0];
 
-    const resolvedTeamMemberId =
-      cleanString(exactSegment?.team_member_id) ||
-      squarePayload.teamMemberId;
+    const resolvedTeamMemberId = cleanString(exactSegment?.team_member_id);
 
     const resolvedServiceVariationVersion =
       cleanNumber(exactSegment?.service_variation_version) ??
