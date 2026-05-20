@@ -193,6 +193,10 @@ function buildOpenAiSessionUpdate(params: {
         "- If the latest transcript does not directly answer the current booking question, ask the current question again naturally instead of submitting the step.",
         "- Do not pre-fill future booking steps.",
         "- Never call submit_booking_step twice from the same caller transcript.",
+        "- After send_useful_link_sms succeeds, tell the caller the official link was sent and ask if they need anything else.",
+        "- Do not call end_call in the same turn after send_useful_link_sms.",
+        "- Only call end_call after the caller clearly says they do not need anything else, says goodbye, or asks to end the call.",
+        "- Never call end_call immediately after create_appointment, send_booking_sms, or send_useful_link_sms unless the caller explicitly ends the conversation in a later caller turn.",
       ].join("\n"),
       audio: {
         input: {
@@ -301,7 +305,7 @@ function buildOpenAiSessionUpdate(params: {
           type: "function",
           name: "end_call",
           description:
-            "Request to end the call only when the conversation is complete and no required booking step or confirmation is still pending.",
+            "Request to end the call only after the caller clearly confirms they do not need anything else, says goodbye, or asks to end the call. Do not use immediately after sending an SMS, useful link, booking link, or appointment fallback message.",
           parameters: {
             type: "object",
             additionalProperties: false,

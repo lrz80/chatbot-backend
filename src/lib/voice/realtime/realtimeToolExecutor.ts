@@ -457,6 +457,25 @@ export async function executeRealtimeTool(
 
       Object.assign(bookingContext.state, smsResult.updatedState);
 
+      const updatedState: CallState = {
+        ...smsResult.updatedState,
+        awaitingPostBookingClosure: true,
+        bookingData: {
+          ...(smsResult.updatedState.bookingData || {}),
+          useful_link_sms_sent: "true",
+          useful_link_sms_followup_pending: "true",
+        },
+      };
+
+      Object.assign(bookingContext.state, updatedState);
+
+      await persistVoiceState({
+        tenantId,
+        callSid: bookingContext.callSid,
+        state: updatedState,
+        locale: bookingContext.currentLocale,
+      });
+
       return {
         ok: smsResult.sent === true,
         sent: smsResult.sent,
@@ -467,7 +486,7 @@ export async function executeRealtimeTool(
           steps: sortFlowSteps(
             (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
           ),
-          state: smsResult.updatedState,
+          state: updatedState,
           explicitCurrentIndex: null,
           finalConfirmationGranted: true,
           readyToCreate: false,
@@ -477,6 +496,20 @@ export async function executeRealtimeTool(
     }
 
     case "end_call": {
+      const hasPendingUsefulLinkFollowup =
+        params.state?.awaitingPostBookingClosure === true &&
+        clean(params.state?.bookingData?.useful_link_sms_followup_pending) === "true";
+
+      if (hasPendingUsefulLinkFollowup) {
+        return {
+          ok: false,
+          hangup: false,
+          error: "POST_SMS_FOLLOWUP_PENDING",
+          message:
+            "The caller has not answered the final follow-up question after the useful link SMS.",
+        };
+      }
+
       return {
         ok: true,
         hangup: true,
