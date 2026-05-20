@@ -439,11 +439,31 @@ export class SquareProvider implements BookingProviderAdapter {
 
     const requestedStart = new Date(input.startISO).getTime();
 
-    const availableStarts = Array.isArray(availabilityResult.data.availabilities)
+    const rawAvailabilities = Array.isArray(availabilityResult.data.availabilities)
       ? availabilityResult.data.availabilities
-          .map((availability) => cleanString(availability.start_at))
-          .filter(Boolean)
       : [];
+
+    const availableStarts = rawAvailabilities
+      .map((availability) => cleanString(availability.start_at))
+      .filter(Boolean);
+
+    console.log("🟦 [SQUARE_PROVIDER] availability response summary", {
+      tenantId: input.tenantId,
+      requestedStartISO: input.startISO,
+      requestedStartMs: requestedStart,
+      totalAvailabilities: rawAvailabilities.length,
+      availableStarts: availableStarts.slice(0, 20),
+      firstAvailabilities: rawAvailabilities.slice(0, 5).map((availability) => ({
+        startAt: availability.start_at,
+        locationId: availability.location_id,
+        segments: availability.appointment_segments?.map((segment) => ({
+          teamMemberId: segment.team_member_id,
+          serviceVariationId: segment.service_variation_id,
+          serviceVariationVersion: segment.service_variation_version,
+          durationMinutes: segment.duration_minutes,
+        })),
+      })),
+    });
 
     const exactSlotAvailable = availableStarts.some((startAt) => {
       const slotStart = new Date(startAt).getTime();

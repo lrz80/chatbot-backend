@@ -162,18 +162,9 @@ export async function createAppointmentFromVoice(args: Args) {
       throw new Error(`SQUARE_SERVICE_MAPPING_FAILED:${squareMapping.error}`);
     }
 
-    const teamMemberId = cleanString(
-      squareMapping.mapping.externalMetadata?.team_member_id
-    );
-
-    if (!teamMemberId) {
-      throw new Error(`SQUARE_SERVICE_MAPPING_MISSING_TEAM_MEMBER:${serviceName}`);
-    }
-
     providerPayload = {
       square: {
         locationId: squareMapping.mapping.externalLocationId,
-        teamMemberId,
         serviceVariationId: squareMapping.mapping.externalServiceId,
         serviceVariationVersion:
           squareMapping.mapping.externalServiceVersion ??
