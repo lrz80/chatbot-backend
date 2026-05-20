@@ -17,11 +17,19 @@ export type SquareApiSuccess<T = unknown> = {
   data: T;
 };
 
+export type SquareApiError = {
+  category?: string;
+  code?: string;
+  detail?: string;
+  field?: string;
+};
+
 export type SquareApiFailure = {
   ok: false;
   status: number;
   error: string;
   details?: unknown;
+  squareErrors?: SquareApiError[];
 };
 
 export type SquareApiResult<T = unknown> =
@@ -117,11 +125,20 @@ export async function squareRequest<T = unknown>(
     const json = text ? safeJsonParse(text) : null;
 
     if (!response.ok) {
+      const details = json ?? text;
+      const squareErrors =
+        details &&
+        typeof details === "object" &&
+        Array.isArray((details as any).errors)
+          ? ((details as any).errors as SquareApiError[])
+          : [];
+
       return {
         ok: false,
         status: response.status,
         error: "SQUARE_API_ERROR",
-        details: json ?? text,
+        details,
+        squareErrors,
       };
     }
 

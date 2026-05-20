@@ -401,6 +401,16 @@ export class SquareProvider implements BookingProviderAdapter {
       minimumMinutes: 60,
     });
 
+    console.log("🟦 [SQUARE_PROVIDER] availability request payload", {
+      tenantId: input.tenantId,
+      environment,
+      startAt: input.startISO,
+      endAt: availabilityEndISO,
+      locationId: squarePayload.locationId,
+      teamMemberId: squarePayload.teamMemberId,
+      serviceVariationId: squarePayload.serviceVariationId,
+    });
+
     const availabilityResult = await squareSearchAvailability({
       accessToken,
       environment,
@@ -416,7 +426,7 @@ export class SquareProvider implements BookingProviderAdapter {
         tenantId: input.tenantId,
         status: availabilityResult.status,
         error: availabilityResult.error,
-        details: availabilityResult.details,
+        details: JSON.stringify(availabilityResult.details || {}, null, 2),
       });
 
       return {
