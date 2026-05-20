@@ -406,7 +406,7 @@ export class SquareProvider implements BookingProviderAdapter {
       startAt: input.startISO,
       endAt: availabilityEndISO,
       locationId: squarePayload.locationId,
-      teamMemberId: squarePayload.teamMemberId,
+      teamMemberId: null,
       serviceVariationId: squarePayload.serviceVariationId,
     });
 
@@ -416,7 +416,7 @@ export class SquareProvider implements BookingProviderAdapter {
       startAt: input.startISO,
       endAt: availabilityEndISO,
       locationId: squarePayload.locationId,
-      teamMemberId: squarePayload.teamMemberId,
+      teamMemberId: null,
       serviceVariationId: squarePayload.serviceVariationId,
     });
 
