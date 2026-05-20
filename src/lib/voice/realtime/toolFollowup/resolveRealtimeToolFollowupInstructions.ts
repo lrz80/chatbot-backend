@@ -27,11 +27,12 @@ export function resolveRealtimeToolFollowupInstructions(params: {
   ) {
     return [
       "Use only the tool result as source of truth.",
-      "The requested appointment time was available, but the connected Square account could not complete the booking automatically.",
+      "The requested appointment time was available, but the appointment could not be completed automatically right now.",
+      "Do not mention Square, payment providers, API errors, subscriptions, plans, integrations, or technical reasons to the caller.",
       "Do not say the appointment is confirmed.",
       "Do not say the time is unavailable.",
       "Do not invent a booking link, payment link, policy, price, deposit, or confirmation number.",
-      "Explain briefly and naturally that the booking needs to be completed through the business official booking link if one is available.",
+      "Explain briefly and naturally that the reservation must be completed through the business official booking link.",
       "Ask the caller whether they want to receive the official booking link by SMS.",
       "If the caller says yes, call send_useful_link_sms with link_types ['booking', 'square_booking', 'appointments'].",
       "Ask only one question and wait for the caller answer.",
