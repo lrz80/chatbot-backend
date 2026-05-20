@@ -184,6 +184,10 @@ function buildOpenAiSessionUpdate(params: {
         "- If the current pending booking step asks whether the caller wants booking details by SMS, submit that configured booking step with submit_booking_step using the caller's latest answer. Do not call send_booking_sms for the SMS offer step.",
         "- Call send_booking_sms only after the server has accepted the configured SMS consent step and no booking step is pending.",
         "- Never invent SMS text or phone numbers. The server sends booking SMS from canonical booking state.",
+        "- If automatic booking cannot be completed and the tool result says fallback_action is SEND_BOOKING_LINK, ask whether the caller wants the official booking link by SMS.",
+        "- If the caller agrees to receive the official booking link, call send_useful_link_sms with link_types ['booking', 'square_booking', 'appointments'].",
+        "- Never invent useful links. The server must send useful links from tenant-configured links only.",
+        "- Do not call end_call while a booking-link SMS fallback question is waiting for the caller answer.",
         "- Never submit a booking step using inferred information that the caller did not clearly say in the latest user turn.",
         "- For submit_booking_step, the value must come from the caller's latest answer to the current question, not from assumptions or earlier context.",
         "- If the latest transcript does not directly answer the current booking question, ask the current question again naturally instead of submitting the step.",
@@ -269,6 +273,27 @@ function buildOpenAiSessionUpdate(params: {
             type: "object",
             additionalProperties: false,
             properties: {},
+            required: [],
+          },
+        },
+        {
+          type: "function",
+          name: "send_useful_link_sms",
+          description:
+            "Send an official useful link by SMS to the caller, such as a booking link, when automatic booking cannot be completed. Use this only after the caller agrees to receive the link.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              link_types: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+                description:
+                  "Useful link type priority. For booking fallback use ['booking', 'square_booking', 'appointments'].",
+              },
+            },
             required: [],
           },
         },

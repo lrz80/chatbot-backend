@@ -1,3 +1,4 @@
+//src/lib/voice/realtime/realtimeToolExecutor.ts
 import { getBookingFlow } from "../../appointments/getBookingFlow";
 import {
   resolveBookingPromptText,
@@ -25,6 +26,7 @@ import { handleRealtimeCreateAppointment } from "./handlers/handleRealtimeCreate
 import { twiml } from "twilio";
 import { parseBookingSmsPayload } from "../runtime/voiceBookingSmsHelpers";
 import { sendBookingConfirmationSms } from "../runtime/sendBookingConfirmationSms";
+import { sendUsefulLinkSms } from "../runtime/sendUsefulLinkSms";
 
 type ExecuteRealtimeToolParams = {
   tenantId: string;
@@ -267,7 +269,8 @@ export async function executeRealtimeTool(
     toolName === "get_booking_flow" ||
     toolName === "submit_booking_step" ||
     toolName === "create_appointment" ||
-    toolName === "send_booking_sms"
+    toolName === "send_booking_sms" ||
+    toolName === "send_useful_link_sms"
       ? getRealtimeBookingContext(params)
       : null;
 
@@ -417,6 +420,49 @@ export async function executeRealtimeTool(
         assistant_prompt:
           smsResult.appendedText ||
           "Tell the caller whether the booking SMS was sent, then ask if they need anything else.",
+        booking_state: buildRealtimeBookingState({
+          steps: sortFlowSteps(
+            (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
+          ),
+          state: smsResult.updatedState,
+          explicitCurrentIndex: null,
+          finalConfirmationGranted: true,
+          readyToCreate: false,
+        }),
+        next_required_step: null,
+      };
+    }
+
+    case "send_useful_link_sms": {
+      if (!bookingContext) {
+        return buildContextMissingResult();
+      }
+
+      const rawLinkTypes = Array.isArray(args?.link_types)
+        ? args.link_types
+        : [];
+
+      const linkTypes = rawLinkTypes
+        .map((item: unknown) => clean(item))
+        .filter(Boolean);
+
+      const smsResult = await sendUsefulLinkSms({
+        tenant: bookingContext.tenant,
+        callSid: bookingContext.callSid,
+        currentLocale: bookingContext.currentLocale,
+        state: bookingContext.state,
+        callerE164: callerPhone,
+        linkTypes,
+      });
+
+      Object.assign(bookingContext.state, smsResult.updatedState);
+
+      return {
+        ok: smsResult.sent === true,
+        sent: smsResult.sent,
+        error: smsResult.error,
+        link_type: smsResult.link?.tipo || null,
+        link_name: smsResult.link?.nombre || null,
         booking_state: buildRealtimeBookingState({
           steps: sortFlowSteps(
             (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]

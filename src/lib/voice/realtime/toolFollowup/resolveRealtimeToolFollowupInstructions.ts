@@ -33,8 +33,31 @@ export function resolveRealtimeToolFollowupInstructions(params: {
       "Do not invent a booking link, payment link, policy, price, deposit, or confirmation number.",
       "Explain briefly and naturally that the booking needs to be completed through the business official booking link if one is available.",
       "Ask the caller whether they want to receive the official booking link by SMS.",
+      "If the caller says yes, call send_useful_link_sms with link_types ['booking', 'square_booking', 'appointments'].",
       "Ask only one question and wait for the caller answer.",
       "Do not call end_call yet.",
+    ].join(" ");
+  }
+
+  if (toolName === "send_useful_link_sms") {
+    if (toolResult?.ok === true) {
+      return [
+        "Use only the tool result as source of truth.",
+        "Tell the caller briefly that the official link was sent by SMS.",
+        "Then ask if they need anything else.",
+        "Ask only one question and wait for the caller answer.",
+        "Do not call end_call until the caller answers this final question.",
+        "Do not invent booking confirmations, prices, deposits, policies, or appointment details.",
+      ].join(" ");
+    }
+
+    return [
+      "Use only the tool result as source of truth.",
+      "Tell the caller briefly that the official link could not be sent by SMS.",
+      "Do not invent a booking link.",
+      "Do not say the appointment is confirmed.",
+      "Ask if they would like help with anything else.",
+      "Ask only one question and wait for the caller answer.",
     ].join(" ");
   }
 
