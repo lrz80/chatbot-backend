@@ -16,7 +16,7 @@ import {
   normalizeAnswersToCanonicalSlots,
   resolveCurrentStepIndex,
   buildCanonicalCallState,
-  renderBookingStepTemplate,
+  renderBookingStepTemplateSafe,
   buildBookingPromptTemplateValues,
   type BookingFlowStepLike,
   type BookingState,
@@ -27,6 +27,7 @@ import { twiml } from "twilio";
 import { parseBookingSmsPayload } from "../runtime/voiceBookingSmsHelpers";
 import { sendBookingConfirmationSms } from "../runtime/sendBookingConfirmationSms";
 import { sendUsefulLinkSms } from "../runtime/sendUsefulLinkSms";
+import { renderSafeBookingStepTemplate } from "./bookingStep/renderSafeBookingStepTemplate";
 
 type ExecuteRealtimeToolParams = {
   tenantId: string;
@@ -204,14 +205,87 @@ function buildNextRequiredStep(params: {
   const mapped = mapStepForRealtime(step, locale);
   const templateValues = buildBookingPromptTemplateValues(bookingState);
 
-  const renderedPrompt = overridePrompt
-    ? overridePrompt
-    : renderBookingStepTemplate(mapped.prompt, templateValues);
+  const isFinalConfirmationStep =
+    mapped.slot === "confirmation" || isConfirmationLikeStep(step);
 
-  const renderedRetryPrompt = renderBookingStepTemplate(
-    mapped.retry_prompt,
-    templateValues
-  );
+  const promptRender = overridePrompt
+    ? {
+        ok: true as const,
+        text: clean(overridePrompt),
+      }
+    : renderBookingStepTemplateSafe({
+        template: mapped.prompt,
+        values: templateValues,
+        requireNonEmptyValues: isFinalConfirmationStep,
+      });
+
+  const retryPromptRender = renderBookingStepTemplateSafe({
+    template: mapped.retry_prompt || mapped.prompt,
+    values: templateValues,
+    requireNonEmptyValues: isFinalConfirmationStep,
+  });
+
+  if (!promptRender.ok && !retryPromptRender.ok) {
+    console.error("[VOICE_REALTIME][BOOKING_STEP_TEMPLATE_INVALID]", {
+      step_key: mapped.step_key,
+      slot: mapped.slot,
+      prompt_error: promptRender.error,
+      prompt_key: promptRender.key,
+      retry_prompt_error: retryPromptRender.error,
+      retry_prompt_key: retryPromptRender.key,
+    });
+
+    return {
+      step_key: mapped.step_key,
+      step_order: mapped.step_order,
+      slot: mapped.slot,
+      prompt: "",
+      expected_type: mapped.expected_type,
+      required: mapped.required,
+      retry_prompt: "",
+      validation_config: {
+        error: "BOOKING_STEP_TEMPLATE_INVALID",
+        prompt_error: promptRender.error,
+        retry_prompt_error: retryPromptRender.error,
+      },
+      prompt_translations: null,
+      retry_prompt_translations: null,
+    };
+  }
+
+  const renderedPrompt = promptRender.ok
+    ? promptRender.text
+    : retryPromptRender.text;
+
+  const renderedRetryPrompt = retryPromptRender.ok
+    ? retryPromptRender.text
+    : renderedPrompt;
+
+  if (!promptRender.ok && !retryPromptRender.ok) {
+    console.warn("[VOICE_REALTIME][BOOKING_STEP_TEMPLATE_INVALID]", {
+      step_key: mapped.step_key,
+      slot: mapped.slot,
+      prompt_error: promptRender.error,
+      retry_prompt_error: retryPromptRender.error,
+    });
+
+    return {
+      step_key: mapped.step_key,
+      step_order: mapped.step_order,
+      slot: mapped.slot,
+      prompt: "",
+      expected_type: mapped.expected_type,
+      required: mapped.required,
+      retry_prompt: "",
+      validation_config: {
+        error: "BOOKING_STEP_TEMPLATE_INVALID",
+        prompt_error: promptRender.error,
+        retry_prompt_error: retryPromptRender.error,
+      },
+      prompt_translations: null,
+      retry_prompt_translations: null,
+    };
+  }
 
   return {
     step_key: mapped.step_key,

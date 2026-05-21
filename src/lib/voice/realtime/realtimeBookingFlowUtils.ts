@@ -456,3 +456,118 @@ export function buildBookingPromptTemplateValues(
     notes: clean(slots.notes),
   };
 }
+
+export type BookingTemplateRenderResult =
+  | {
+      ok: true;
+      text: string;
+    }
+  | {
+      ok: false;
+      text: "";
+      error:
+        | "EMPTY_TEMPLATE"
+        | "MALFORMED_TEMPLATE"
+        | "UNKNOWN_TEMPLATE_KEY"
+        | "EMPTY_TEMPLATE_VALUE"
+        | "EMPTY_RENDERED_TEMPLATE";
+      key?: string;
+    };
+
+export function getSupportedBookingTemplateKeys(): string[] {
+  return Object.keys(
+    buildBookingPromptTemplateValues({
+      current_step_key: null,
+      current_step_slot: null,
+      awaiting_confirmation: false,
+      final_confirmation_granted: false,
+      ready_to_create: false,
+      collected_slots: {},
+    })
+  );
+}
+
+function hasBalancedTemplateBraces(template: string): boolean {
+  let depth = 0;
+
+  for (const char of template) {
+    if (char === "{") {
+      depth += 1;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+    }
+
+    if (depth < 0 || depth > 1) {
+      return false;
+    }
+  }
+
+  return depth === 0;
+}
+
+export function renderBookingStepTemplateSafe(params: {
+  template: string;
+  values: Record<string, string>;
+  requireNonEmptyValues?: boolean;
+}): BookingTemplateRenderResult {
+  const template = clean(params.template);
+
+  if (!template) {
+    return {
+      ok: false,
+      text: "",
+      error: "EMPTY_TEMPLATE",
+    };
+  }
+
+  if (!hasBalancedTemplateBraces(template)) {
+    return {
+      ok: false,
+      text: "",
+      error: "MALFORMED_TEMPLATE",
+    };
+  }
+
+  const supportedKeys = new Set(getSupportedBookingTemplateKeys());
+
+  const rendered = template.replace(/\{([^{}]+)\}/g, (_, rawKey: string) => {
+    const key = clean(rawKey);
+
+    if (!supportedKeys.has(key)) {
+      throw new Error(`UNKNOWN_TEMPLATE_KEY:${key}`);
+    }
+
+    const value = clean(params.values[key]);
+
+    if (params.requireNonEmptyValues === true && !value) {
+      throw new Error(`EMPTY_TEMPLATE_VALUE:${key}`);
+    }
+
+    return value;
+  });
+
+  const cleanedRendered = clean(rendered);
+
+  if (!cleanedRendered) {
+    return {
+      ok: false,
+      text: "",
+      error: "EMPTY_RENDERED_TEMPLATE",
+    };
+  }
+
+  if (/[{}]/.test(cleanedRendered)) {
+    return {
+      ok: false,
+      text: "",
+      error: "MALFORMED_TEMPLATE",
+    };
+  }
+
+  return {
+    ok: true,
+    text: cleanedRendered,
+  };
+}
