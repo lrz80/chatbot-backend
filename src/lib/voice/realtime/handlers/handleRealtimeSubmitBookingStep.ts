@@ -187,6 +187,20 @@ export async function handleRealtimeSubmitBookingStep(
     timeZone: stepTimeZone,
   });
 
+  console.log("[VOICE_REALTIME][SUBMITTED_STEP_VALUE_RESOLVED]", {
+    callSid: bookingContext.callSid,
+    step_key: currentStep.step_key,
+    expected_type: currentStep.expected_type,
+    slot: targetSlot,
+    raw_tool_value: value,
+    model_value: modelValue,
+    transcript_value: rawTranscriptValue,
+    resolved_ok: submittedStepValue.ok,
+    resolved_value: submittedStepValue.ok ? submittedStepValue.value : "",
+    resolved_source: submittedStepValue.source,
+    resolved_error: submittedStepValue.ok ? undefined : submittedStepValue.error,
+  });
+
   if (!submittedStepValue.ok) {
     const bookingState = buildRealtimeBookingState({
       steps,
