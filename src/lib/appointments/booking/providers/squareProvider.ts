@@ -319,12 +319,20 @@ function ensureMinimumSquareAvailabilityEndISO(params: {
 }
 
 function buildSquareIdempotencyKey(input: CreateExternalBookingInput): string {
+  const customerPhone = cleanString(input.customer?.phone);
+  const customerEmail = cleanString(input.customer?.email);
+  const customerName = cleanString(input.customer?.name);
+  const serviceVariationId = cleanString(input.providerPayload?.square?.serviceVariationId);
+  const teamMemberId = cleanString(input.providerPayload?.square?.teamMemberId);
+
   return [
     "aamy",
     "square",
     input.tenantId,
-    input.summary,
+    serviceVariationId || input.summary,
     input.startISO,
+    teamMemberId || "any_staff",
+    customerPhone || customerEmail || customerName || "unknown_customer",
   ]
     .map((part) => cleanString(part).replace(/\s+/g, "_"))
     .filter(Boolean)
@@ -734,6 +742,17 @@ export class SquareProvider implements BookingProviderAdapter {
         busy: [],
       };
     }
+
+    console.log("✅ [SQUARE_PROVIDER] booking created successfully", {
+      tenantId: input.tenantId,
+      squareBookingId,
+      startISO: input.startISO,
+      locationId: squarePayload.locationId,
+      teamMemberId: resolvedTeamMemberId,
+      serviceVariationId: squarePayload.serviceVariationId,
+      serviceVariationVersion: resolvedServiceVariationVersion,
+      customerId: squareCustomerId,
+    });
 
     return {
       ok: true,

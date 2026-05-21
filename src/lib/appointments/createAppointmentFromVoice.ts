@@ -275,11 +275,26 @@ export async function createAppointmentFromVoice(args: Args) {
     );
   }
 
-  const externalCalendarEventId = externalBooking.event_id;
+  const externalCalendarEventId = cleanString(externalBooking.event_id);
+
+  if (!externalCalendarEventId) {
+    console.error("🟥 [VOICE][CREATE_APPOINTMENT] Provider returned success without external event id", {
+      tenantId: args.tenantId,
+      activeProvider,
+      serviceName,
+      startISO: start.toISOString(),
+      provider: externalBooking.provider,
+      externalBooking,
+    });
+
+    throw new Error(
+      `EXTERNAL_BOOKING_NOT_CONFIRMED:${externalBooking.provider}`
+    );
+  }
 
   const googleEventId =
     externalBooking.provider === "google_calendar"
-      ? externalBooking.event_id
+      ? externalCalendarEventId
       : null;
 
   const googleEventLink =

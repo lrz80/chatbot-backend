@@ -60,47 +60,67 @@ function computeStaffMatchScore(params: {
   return Math.max(coverageInput, coverageName);
 }
 
+function getConfiguredOptions(
+  validationConfig?: Record<string, unknown> | null
+): Array<{
+  label: string;
+  value: string;
+  synonyms: string[];
+}> {
+  const rawOptions = validationConfig?.options;
+
+  if (!Array.isArray(rawOptions)) {
+    return [];
+  }
+
+  return rawOptions
+    .map((item) => {
+      const row =
+        item && typeof item === "object"
+          ? (item as Record<string, unknown>)
+          : {};
+
+      return {
+        label: clean(row.label),
+        value: clean(row.value),
+        synonyms: Array.isArray(row.synonyms)
+          ? row.synonyms.map((synonym) => clean(synonym)).filter(Boolean)
+          : [],
+      };
+    })
+    .filter((option) => {
+      return option.label || option.value || option.synonyms.length > 0;
+    });
+}
+
 function resolveConfiguredAnyOption(params: {
   inputText: string;
   validationConfig?: Record<string, unknown> | null;
-  locale?: string;
 }): boolean {
   const input = normalizeComparable(params.inputText);
   const config = params.validationConfig || {};
-
+  const allowAny = config.allow_any === true;
   const anyOptionValue = normalizeComparable(config.any_option_value);
 
-  if (anyOptionValue && input === anyOptionValue) {
-    return true;
+  if (!allowAny || !anyOptionValue || !input) {
+    return false;
   }
 
-  const labelsRaw = config.any_option_labels;
-  const labels: string[] = [];
+  const options = getConfiguredOptions(config);
 
-  if (Array.isArray(labelsRaw)) {
-    for (const item of labelsRaw) {
-      const label = clean(item);
-      if (label) labels.push(label);
+  return options.some((option) => {
+    if (normalizeComparable(option.value) !== anyOptionValue) {
+      return false;
     }
-  }
 
-  if (
-    labelsRaw &&
-    typeof labelsRaw === "object" &&
-    !Array.isArray(labelsRaw)
-  ) {
-    const labelsByLocale = labelsRaw as Record<string, unknown>;
-    const localeLabels = labelsByLocale[clean(params.locale)] || labelsByLocale.default;
+    const comparableValues = [
+      option.value,
+      option.label,
+      ...option.synonyms,
+    ].map(normalizeComparable);
 
-    if (Array.isArray(localeLabels)) {
-      for (const item of localeLabels) {
-        const label = clean(item);
-        if (label) labels.push(label);
-      }
-    }
-  }
-
-  return labels.some((label) => normalizeComparable(label) === input);
+    return comparableValues.includes(input);
+  });
 }
 
 export type ResolveSquareStaffMemberForTenantResult =
@@ -152,7 +172,6 @@ export async function resolveSquareStaffMemberForTenant(params: {
     resolveConfiguredAnyOption({
       inputText,
       validationConfig: params.validationConfig,
-      locale: params.locale,
     })
   ) {
     return {
