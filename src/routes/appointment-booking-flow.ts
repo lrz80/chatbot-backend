@@ -13,6 +13,7 @@ const VALID_EXPECTED_TYPES = new Set([
   "phone",
   "email",
   "number",
+  "staff",
 ]);
 
 function normalizeTranslationsObject(value: unknown): Record<string, string> {
