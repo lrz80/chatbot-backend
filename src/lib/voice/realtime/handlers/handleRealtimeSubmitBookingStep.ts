@@ -313,6 +313,8 @@ export async function handleRealtimeSubmitBookingStep(
       targetSlot,
       stepKey,
       resolvedInputValue,
+      rawTranscriptValue,
+      modelValue,
       rawAnswers,
       workingState,
       steps,

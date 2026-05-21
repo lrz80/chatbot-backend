@@ -528,16 +528,23 @@ export function resolveRealtimeSubmittedStepValue(params: {
   }
 
   if (expectedType === "staff") {
-    if (
-      value &&
-      isModelValueGroundedInTranscript({
-        modelValue: value,
-        rawTranscriptValue,
-      })
-    ) {
+    const transcript = clean(rawTranscriptValue);
+    const submitted = clean(value);
+
+    if (transcript) {
       return {
         ok: true,
-        value,
+        value: transcript,
+        rawTranscriptValue,
+        modelValue,
+        source: "transcript",
+      };
+    }
+
+    if (submitted) {
+      return {
+        ok: true,
+        value: submitted,
         rawTranscriptValue,
         modelValue,
         source: "model",

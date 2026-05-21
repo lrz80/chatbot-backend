@@ -3,6 +3,7 @@ import type { CallState, VoiceLocale } from "../../../types";
 import {
   clean,
   buildCanonicalCallState,
+  normalizeComparable,
   type BookingFlowStepLike,
   type BookingState,
 } from "../../realtimeBookingFlowUtils";
@@ -39,6 +40,30 @@ function getValidationConfig(
     : {};
 }
 
+function buildUniqueStaffCandidates(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+
+  for (const rawValue of values) {
+    const value = clean(rawValue);
+
+    if (!value) {
+      continue;
+    }
+
+    const comparable = normalizeComparable(value);
+
+    if (!comparable || seen.has(comparable)) {
+      continue;
+    }
+
+    seen.add(comparable);
+    candidates.push(value);
+  }
+
+  return candidates;
+}
+
 export async function handleStaffRealtimeStep(params: {
   tenantId: string;
   currentStep: BookingFlowStepLike;
@@ -47,6 +72,8 @@ export async function handleStaffRealtimeStep(params: {
   targetSlot: string;
   stepKey: string;
   resolvedInputValue: string;
+  rawTranscriptValue?: string;
+  modelValue?: string;
   rawAnswers: Record<string, string>;
   workingState: CallState;
   steps: BookingFlowStepLike[];
@@ -72,6 +99,8 @@ export async function handleStaffRealtimeStep(params: {
     targetSlot,
     stepKey,
     resolvedInputValue,
+    rawTranscriptValue,
+    modelValue,
     rawAnswers,
     workingState,
     steps,
@@ -81,77 +110,100 @@ export async function handleStaffRealtimeStep(params: {
 
   const validationConfig = getValidationConfig(currentStep);
 
-  const staffResult = await resolveSquareStaffMemberForTenant({
-    tenantId,
-    inputText: resolvedInputValue,
-    validationConfig,
-    locale: currentLocale,
-  });
+  const staffInputCandidates = buildUniqueStaffCandidates([
+    resolvedInputValue,
+    rawTranscriptValue,
+    modelValue,
+  ]);
 
-  if (!staffResult.ok) {
-    const bookingState = buildRealtimeBookingState({
-      steps,
-      state: workingState,
-      explicitCurrentIndex: currentIndex,
+  let lastStaffResult: Awaited<
+    ReturnType<typeof resolveSquareStaffMemberForTenant>
+  > | null = null;
+
+  for (const inputText of staffInputCandidates) {
+    const staffResult = await resolveSquareStaffMemberForTenant({
+      tenantId,
+      inputText,
+      validationConfig,
+      locale: currentLocale,
     });
 
+    lastStaffResult = staffResult;
+
+    if (!staffResult.ok) {
+      continue;
+    }
+
+    const nextAnswers =
+      staffResult.preference === "any"
+        ? {
+            ...rawAnswers,
+            [targetSlot]: "any_available",
+            [stepKey]: "any_available",
+            staff_member: "any_available",
+            staff_member_preference: "any",
+            staff_member_id: "",
+            staff_member_name: "",
+          }
+        : {
+            ...rawAnswers,
+            [targetSlot]: staffResult.displayName,
+            [stepKey]: staffResult.displayName,
+            staff_member: staffResult.displayName,
+            staff_member_preference: "specific",
+            staff_member_id: staffResult.teamMemberId,
+            staff_member_name: staffResult.displayName,
+          };
+
     return {
-      kind: "return",
-      result: {
-        ok: false,
-        error: staffResult.error,
-        staff_candidates: staffResult.candidates || [],
-        assistant_prompt: [
-          "Use only the tool result as source of truth.",
-          "The staff preference could not be resolved to one clear bookable staff member.",
-          "Ask the caller to choose from the available staff candidates if candidates are present.",
-          "If no candidates are present, ask the configured staff question again naturally.",
-          "Do not invent staff names.",
-        ].join(" "),
-        booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: currentLocale,
-          overridePrompt: clean(currentStep.retry_prompt || currentStep.prompt),
-        }),
-      },
+      kind: "continue",
+      workingState: buildCanonicalCallState({
+        state: {
+          ...workingState,
+          bookingData: {
+            ...(workingState.bookingData || {}),
+            ...nextAnswers,
+          },
+        },
+        answersBySlot: nextAnswers,
+        bookingStepIndex: currentIndex,
+      }),
     };
   }
 
-  const nextAnswers =
-    staffResult.preference === "any"
-      ? {
-          ...rawAnswers,
-          [targetSlot]: "any_available",
-          [stepKey]: "any_available",
-          staff_member: "any_available",
-          staff_member_preference: "any",
-          staff_member_id: "",
-          staff_member_name: "",
-        }
-      : {
-          ...rawAnswers,
-          [targetSlot]: staffResult.displayName,
-          [stepKey]: staffResult.displayName,
-          staff_member: staffResult.displayName,
-          staff_member_preference: "specific",
-          staff_member_id: staffResult.teamMemberId,
-          staff_member_name: staffResult.displayName,
-        };
+  const bookingState = buildRealtimeBookingState({
+    steps,
+    state: workingState,
+    explicitCurrentIndex: currentIndex,
+  });
 
   return {
-    kind: "continue",
-    workingState: buildCanonicalCallState({
-      state: {
-        ...workingState,
-        bookingData: {
-          ...(workingState.bookingData || {}),
-          ...nextAnswers,
-        },
-      },
-      answersBySlot: nextAnswers,
-      bookingStepIndex: currentIndex,
-    }),
+    kind: "return",
+    result: {
+      ok: false,
+      error:
+        lastStaffResult && lastStaffResult.ok === false
+          ? lastStaffResult.error
+          : "SQUARE_STAFF_NOT_FOUND",
+      staff_candidates:
+        lastStaffResult && lastStaffResult.ok === false
+          ? lastStaffResult.candidates || []
+          : [],
+      tried_staff_inputs: staffInputCandidates,
+      assistant_prompt: [
+        "Use only the tool result as source of truth.",
+        "The staff preference could not be resolved to one clear bookable staff member.",
+        "Ask the caller to choose from the available staff candidates if candidates are present.",
+        "If no candidates are present, ask the configured staff question again naturally.",
+        "Do not invent staff names.",
+      ].join(" "),
+      booking_state: bookingState,
+      next_required_step: buildNextRequiredStep({
+        steps,
+        bookingState,
+        locale: currentLocale,
+        overridePrompt: clean(currentStep.retry_prompt || currentStep.prompt),
+      }),
+    },
   };
 }
