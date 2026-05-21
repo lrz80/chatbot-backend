@@ -270,10 +270,6 @@ async function resolveSquarePayloadForInput(input: {
       ? (mappingResult.mapping.externalMetadata as Record<string, unknown>)
       : {};
 
-  const mappedTeamMemberId =
-    cleanString(externalMetadata["team_member_id"]) ||
-    cleanString(externalMetadata["teamMemberId"]);
-
   return {
     locationId:
       directPayload.locationId ||
@@ -281,7 +277,11 @@ async function resolveSquarePayloadForInput(input: {
       cleanString(input.connectionLocationId) ||
       cleanString(input.metadata?.["location_id"]),
     customerId: directPayload.customerId,
-    teamMemberId: directPayload.teamMemberId || mappedTeamMemberId,
+
+    // Staff must only come from the booking flow / provider payload.
+    // Service mappings resolve services, not staff assignment.
+    teamMemberId: directPayload.teamMemberId,
+
     serviceVariationId:
       directPayload.serviceVariationId ||
       cleanString(mappingResult.mapping.externalServiceId) ||
