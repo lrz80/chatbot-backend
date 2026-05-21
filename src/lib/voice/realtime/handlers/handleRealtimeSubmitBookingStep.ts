@@ -3,8 +3,6 @@ import type { CallState, VoiceLocale } from "../../types";
 import {
   clean,
   getStepSlot,
-  renderBookingStepTemplate,
-  buildBookingPromptTemplateValues,
   type BookingFlowStepLike,
   type BookingState,
 } from "../realtimeBookingFlowUtils";
@@ -72,44 +70,6 @@ type HandleRealtimeSubmitBookingStepParams = {
     locale: VoiceLocale;
   }) => Promise<void>;
 };
-
-function getRecordValue(
-  record: Record<string, unknown> | null | undefined,
-  key: string
-): string {
-  const value = record?.[key];
-  return typeof value === "string" ? clean(value) : "";
-}
-
-function resolveConfiguredUnavailablePrompt(params: {
-  step: BookingFlowStepLike;
-  locale: VoiceLocale;
-}): string {
-  const validationConfig =
-    params.step.validation_config &&
-    typeof params.step.validation_config === "object"
-      ? (params.step.validation_config as Record<string, unknown>)
-      : {};
-
-  const translations =
-    validationConfig.unavailable_prompt_translations &&
-    typeof validationConfig.unavailable_prompt_translations === "object"
-      ? (validationConfig.unavailable_prompt_translations as Record<string, unknown>)
-      : {};
-
-  const translatedPrompt = getRecordValue(translations, params.locale);
-
-  if (translatedPrompt) {
-    return translatedPrompt;
-  }
-
-  const baseUnavailablePrompt = getRecordValue(
-    validationConfig,
-    "unavailable_prompt"
-  );
-
-  return baseUnavailablePrompt;
-}
 
 export async function handleRealtimeSubmitBookingStep(
   params: HandleRealtimeSubmitBookingStepParams
@@ -185,6 +145,7 @@ export async function handleRealtimeSubmitBookingStep(
     rawTranscriptValue,
     modelValue,
     timeZone: stepTimeZone,
+    callerPhone,
   });
 
   console.log("[VOICE_REALTIME][SUBMITTED_STEP_VALUE_RESOLVED]", {

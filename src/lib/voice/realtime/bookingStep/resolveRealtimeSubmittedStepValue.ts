@@ -5,6 +5,23 @@ import {
   normalizeComparable,
   type BookingFlowStepLike,
 } from "../realtimeBookingFlowUtils";
+import { getStepSlot } from "../realtimeBookingFlowUtils";
+import { resolveRealtimePhoneValue } from "./resolvers/resolveRealtimePhoneValue";
+
+export type RealtimeSubmittedStepValueSource =
+  | "model"
+  | "transcript"
+  | "caller_phone"
+  | "spoken_phone";
+
+export type RealtimeSubmittedStepValueError =
+  | "EMPTY_SUBMITTED_VALUE"
+  | "INCOMPATIBLE_NUMBER_VALUE"
+  | "INCOMPATIBLE_DATETIME_VALUE"
+  | "INCOMPATIBLE_CHOICE_VALUE"
+  | "INCOMPATIBLE_TEXT_VALUE"
+  | "PHONE_REQUIRED"
+  | "INVALID_PHONE_VALUE";
 
 export type RealtimeSubmittedStepValueResult =
   | {
@@ -12,16 +29,11 @@ export type RealtimeSubmittedStepValueResult =
       value: string;
       rawTranscriptValue: string;
       modelValue: string;
-      source: "model" | "transcript";
+      source: RealtimeSubmittedStepValueSource;
     }
   | {
       ok: false;
-      error:
-        | "EMPTY_SUBMITTED_VALUE"
-        | "INCOMPATIBLE_NUMBER_VALUE"
-        | "INCOMPATIBLE_DATETIME_VALUE"
-        | "INCOMPATIBLE_CHOICE_VALUE"
-        | "INCOMPATIBLE_TEXT_VALUE";
+      error: RealtimeSubmittedStepValueError;
       value: "";
       rawTranscriptValue: string;
       modelValue: string;
@@ -481,6 +493,7 @@ export function resolveRealtimeSubmittedStepValue(params: {
   rawTranscriptValue: string;
   modelValue: string;
   timeZone: string;
+  callerPhone: string | null;
 }): RealtimeSubmittedStepValueResult {
   const { step, timeZone } = params;
 
@@ -489,6 +502,22 @@ export function resolveRealtimeSubmittedStepValue(params: {
   const value = clean(params.value || params.modelValue || "");
   const expectedType = resolveExpectedType(step);
   const validationType = resolveValidationConfigType(step);
+  const slot = getStepSlot(step);
+
+  if (slot === "customer_phone" || expectedType === "phone") {
+    const phoneResult = resolveRealtimePhoneValue({
+      value,
+      rawTranscriptValue,
+      modelValue,
+      callerPhone: params.callerPhone,
+    });
+
+    return {
+      ...phoneResult,
+      rawTranscriptValue,
+      modelValue,
+    };
+  }
 
   if (!value && !rawTranscriptValue) {
     return {
@@ -528,37 +557,11 @@ export function resolveRealtimeSubmittedStepValue(params: {
   }
 
   if (expectedType === "staff") {
-    const transcript = clean(rawTranscriptValue);
-    const submitted = clean(value);
-
-    if (transcript) {
-      return {
-        ok: true,
-        value: transcript,
-        rawTranscriptValue,
-        modelValue,
-        source: "transcript",
-      };
-    }
-
-    if (submitted) {
-      return {
-        ok: true,
-        value: submitted,
-        rawTranscriptValue,
-        modelValue,
-        source: "model",
-      };
-    }
-
-    return {
-      ok: false,
-      error: "INCOMPATIBLE_TEXT_VALUE",
-      value: "",
+    return resolveTextValue({
+      value,
       rawTranscriptValue,
       modelValue,
-      source: "none",
-    };
+    });
   }
 
   return resolveTextValue({
