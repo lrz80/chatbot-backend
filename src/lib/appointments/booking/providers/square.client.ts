@@ -67,6 +67,19 @@ export type SquareSearchAvailabilityInput = {
   serviceVariationId: string;
 };
 
+export type SquareTeamMemberBookingProfile = {
+  team_member_id?: string;
+  display_name?: string;
+  description?: string;
+  is_bookable?: boolean;
+  profile_image_url?: string;
+};
+
+export type SquareListTeamMemberBookingProfilesResponse = {
+  team_member_booking_profiles?: SquareTeamMemberBookingProfile[];
+  cursor?: string;
+};
+
 function resolveSquareBaseUrl(environment: SquareEnvironment): string {
   return environment === "sandbox"
     ? "https://connect.squareupsandbox.com"
@@ -378,5 +391,17 @@ export async function squareCreateBooking(args: SquareCreateBookingInput): Promi
       idempotency_key: idempotencyKey,
       booking,
     },
+  });
+}
+
+export async function squareListTeamMemberBookingProfiles(args: {
+  accessToken: string;
+  environment: SquareEnvironment;
+}): Promise<SquareApiResult<SquareListTeamMemberBookingProfilesResponse>> {
+  return squareRequest<SquareListTeamMemberBookingProfilesResponse>({
+    accessToken: args.accessToken,
+    environment: args.environment,
+    path: "/v2/bookings/team-member-booking-profiles",
+    method: "GET",
   });
 }

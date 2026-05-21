@@ -400,13 +400,15 @@ export class SquareProvider implements BookingProviderAdapter {
       minimumMinutes: 60,
     });
 
+    const requestedTeamMemberId = cleanString(squarePayload.teamMemberId) || null;
+
     console.log("🟦 [SQUARE_PROVIDER] availability request payload", {
       tenantId: input.tenantId,
       environment,
       startAt: input.startISO,
       endAt: availabilityEndISO,
       locationId: squarePayload.locationId,
-      teamMemberId: null,
+      teamMemberId: requestedTeamMemberId,
       serviceVariationId: squarePayload.serviceVariationId,
     });
 
@@ -416,7 +418,7 @@ export class SquareProvider implements BookingProviderAdapter {
       startAt: input.startISO,
       endAt: availabilityEndISO,
       locationId: squarePayload.locationId,
-      teamMemberId: null,
+      teamMemberId: requestedTeamMemberId,
       serviceVariationId: squarePayload.serviceVariationId,
     });
 
@@ -582,13 +584,15 @@ export class SquareProvider implements BookingProviderAdapter {
       minimumMinutes: 60,
     });
 
+    const requestedTeamMemberId = cleanString(squarePayload.teamMemberId) || null;
+
     const exactAvailabilityResult = await squareSearchAvailability({
       accessToken,
       environment,
       startAt: input.startISO,
       endAt: availabilityEndISO,
       locationId: squarePayload.locationId,
-      teamMemberId: null,
+      teamMemberId: requestedTeamMemberId,
       serviceVariationId: squarePayload.serviceVariationId,
     });
 
@@ -617,9 +621,18 @@ export class SquareProvider implements BookingProviderAdapter {
       return Number.isFinite(slotStartMs) && slotStartMs === requestedStartMs;
     });
 
-    const exactSegment = exactAvailability?.appointment_segments?.[0];
+    const exactSegment = exactAvailability?.appointment_segments?.find((segment) => {
+      const segmentTeamMemberId = cleanString(segment?.team_member_id);
 
-    const resolvedTeamMemberId = cleanString(exactSegment?.team_member_id);
+      if (!requestedTeamMemberId) {
+        return Boolean(segmentTeamMemberId);
+      }
+
+      return segmentTeamMemberId === requestedTeamMemberId;
+    });
+
+    const resolvedTeamMemberId =
+      requestedTeamMemberId || cleanString(exactSegment?.team_member_id);
 
     const resolvedServiceVariationVersion =
       cleanNumber(exactSegment?.service_variation_version) ??

@@ -20,6 +20,7 @@ import { handleDatetimeRealtimeStep } from "../bookingStep/handlers/handleDateti
 import { buildRealtimeStepRetryResult } from "../bookingStep/buildRealtimeStepRetryResult";
 import { resolveExpectedRealtimeBookingStep } from "../bookingStep/resolveExpectedRealtimeBookingStep";
 import { buildRealtimeStepWorkingState } from "../bookingStep/buildRealtimeStepWorkingState";
+import { handleStaffRealtimeStep } from "../bookingStep/handlers/handleStaffRealtimeStep";
 
 type RealtimeBookingContext = {
   tenant: any;
@@ -270,6 +271,28 @@ export async function handleRealtimeSubmitBookingStep(
     }
 
     workingState = datetimeStepResult.workingState;
+
+  } else if (stepRoute.kind === "staff") {
+    const staffStepResult = await handleStaffRealtimeStep({
+      tenantId,
+      currentStep,
+      currentIndex,
+      currentLocale: bookingContext.currentLocale,
+      targetSlot,
+      stepKey,
+      resolvedInputValue,
+      rawAnswers,
+      workingState,
+      steps,
+      buildRealtimeBookingState,
+      buildNextRequiredStep,
+    });
+
+    if (staffStepResult.kind === "return") {
+      return staffStepResult.result;
+    }
+
+    workingState = staffStepResult.workingState;
 
   } else if (stepRoute.kind === "post_booking_sms_consent") {
     return await handlePostBookingSmsConsentStep({

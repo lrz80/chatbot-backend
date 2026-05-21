@@ -16,6 +16,10 @@ export type RealtimeBookingStepRoute =
       rawSlot: string;
     }
   | {
+      kind: "staff";
+      rawSlot: string;
+    }
+  | {
       kind: "post_booking_sms_consent";
       rawSlot: string;
     }
@@ -60,6 +64,13 @@ export function routeRealtimeBookingStep(params: {
   const isServiceStep = stepKey === "service" || rawSlot === "service";
   const isDatetimeStep = stepKey === "datetime" || rawSlot === "datetime";
 
+  const isStaffStep =
+    stepKey === "staff" ||
+    stepKey === "staff_member" ||
+    rawSlot === "staff" ||
+    rawSlot === "staff_member" ||
+    expectedType === "staff";
+
   if (isServiceStep) {
     return {
       kind: "service",
@@ -70,6 +81,13 @@ export function routeRealtimeBookingStep(params: {
   if (isDatetimeStep) {
     return {
       kind: "datetime",
+      rawSlot,
+    };
+  }
+
+  if (isStaffStep) {
+    return {
+      kind: "staff",
       rawSlot,
     };
   }

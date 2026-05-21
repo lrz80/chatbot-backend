@@ -51,6 +51,11 @@ function buildExtraBookingDescriptionLines(
     "confirm",
     "customer_confirmed",
     "service_display",
+    "staff",
+    "staff_member",
+    "staff_member_id",
+    "staff_member_name",
+    "staff_member_preference",
     "datetime_reference_suggested_starts",
     "__datetime_reference_suggested_starts",
     "__booking_busy_suggested_starts",
@@ -152,6 +157,9 @@ export async function createAppointmentFromVoice(args: Args) {
 
   let providerPayload: CreateExternalBookingInput["providerPayload"] | undefined;
 
+  const requestedStaffMemberId = cleanString(args.answersBySlot.staff_member_id);
+  const requestedStaffMemberName = cleanString(args.answersBySlot.staff_member_name);
+
   if (activeProvider === "square") {
     const squareMapping = await resolveSquareServiceMappingFromDbForTenant({
       tenantId: args.tenantId,
@@ -169,6 +177,7 @@ export async function createAppointmentFromVoice(args: Args) {
         serviceVariationVersion:
           squareMapping.mapping.externalServiceVersion ??
           squareMapping.service.variationVersion,
+        teamMemberId: requestedStaffMemberId || undefined,
       },
     };
   }
@@ -208,6 +217,7 @@ export async function createAppointmentFromVoice(args: Args) {
       `Cliente: ${customerName}`,
       customerPhone ? `Teléfono: ${customerPhone}` : null,
       customerEmail ? `Email: ${customerEmail}` : null,
+      requestedStaffMemberName ? `Staff solicitado: ${requestedStaffMemberName}` : null,
       ...extraDescriptionLines,
       `Booking creado: ${bookedAtLabel}`,
     ]
