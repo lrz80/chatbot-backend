@@ -292,24 +292,26 @@ export async function handleRealtimeToolCall(
     const modelValue = clean(toolArgs.value || "");
     const transcriptValue = clean(lastUserTranscript || "");
 
-    const selectedValue = selectSubmitBookingStepValue({
-      modelValue,
-      transcriptValue,
-    });
-
     effectiveToolArgs.model_value = modelValue;
     effectiveToolArgs.transcript_value = transcriptValue;
-    effectiveToolArgs.value = selectedValue.value;
-    effectiveToolArgs.value_source = selectedValue.valueSource;
+
+    /**
+     * Do not choose between model/transcript here.
+     * This handler only passes evidence forward.
+     * The canonical resolver decides whether model_value, transcript_value,
+     * callerPhone, or an internal token is valid for the current step.
+     */
+    effectiveToolArgs.value = modelValue;
+    effectiveToolArgs.value_source = "model_raw";
   }
 
   if (toolName === "submit_booking_step") {
     console.log("[VOICE_REALTIME][SUBMIT_STEP_VALUE_SOURCE]", {
       callSid,
       step_key: effectiveToolArgs.step_key,
-      model_value: clean(toolArgs.value || ""),
-      transcript_value: clean(lastUserTranscript || ""),
-      final_value: clean(effectiveToolArgs.value || ""),
+      model_value: clean(effectiveToolArgs.model_value || ""),
+      transcript_value: clean(effectiveToolArgs.transcript_value || ""),
+      forwarded_value: clean(effectiveToolArgs.value || ""),
       value_source: effectiveToolArgs.value_source,
     });
   }
