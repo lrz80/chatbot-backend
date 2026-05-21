@@ -20,7 +20,8 @@ export type RealtimeSubmittedStepValueResult =
         | "EMPTY_SUBMITTED_VALUE"
         | "INCOMPATIBLE_NUMBER_VALUE"
         | "INCOMPATIBLE_DATETIME_VALUE"
-        | "INCOMPATIBLE_CHOICE_VALUE";
+        | "INCOMPATIBLE_CHOICE_VALUE"
+        | "INCOMPATIBLE_TEXT_VALUE";
       value: "";
       rawTranscriptValue: string;
       modelValue: string;
@@ -64,6 +65,65 @@ function resolveValidationConfigType(step: BookingFlowStepLike): string {
   return typeof validationConfig.type === "string"
     ? clean(validationConfig.type).toLowerCase()
     : "";
+}
+
+function tokenizeComparable(value: string): string[] {
+  const normalized = normalizeComparable(value);
+
+  return normalized
+    .split(" ")
+    .map((token) => clean(token))
+    .filter(Boolean);
+}
+
+/**
+ * This is the safety gate that prevents the model from submitting values
+ * that were not actually said by the caller in the current step.
+ *
+ * It allows canonical extraction only when the model value is grounded in the
+ * transcript. Example:
+ *
+ * transcript: "Mi nombre es Luis Rojas"
+ * model: "Luis Rojas"
+ *
+ * But blocks:
+ *
+ * transcript: "Hola, quiero agendar una cita"
+ * model: "Diseño de cejas"
+ */
+function isModelValueGroundedInTranscript(params: {
+  modelValue: string;
+  rawTranscriptValue: string;
+}): boolean {
+  const { modelValue, rawTranscriptValue } = params;
+
+  const normalizedModel = normalizeComparable(modelValue);
+  const normalizedTranscript = normalizeComparable(rawTranscriptValue);
+
+  if (!normalizedModel || !normalizedTranscript) {
+    return false;
+  }
+
+  if (normalizedModel === normalizedTranscript) {
+    return true;
+  }
+
+  const modelTokens = tokenizeComparable(modelValue);
+  const transcriptTokens = new Set(tokenizeComparable(rawTranscriptValue));
+
+  if (modelTokens.length === 0 || transcriptTokens.size === 0) {
+    return false;
+  }
+
+  const allModelTokensAppearInTranscript = modelTokens.every((token) =>
+    transcriptTokens.has(token)
+  );
+
+  if (allModelTokensAppearInTranscript) {
+    return true;
+  }
+
+  return false;
 }
 
 function getChoiceOptions(step: BookingFlowStepLike): Array<{
@@ -157,6 +217,43 @@ function getChoiceOptions(step: BookingFlowStepLike): Array<{
     );
 }
 
+function choiceLabelMatchesTranscript(params: {
+  labels: string[];
+  rawTranscriptValue: string;
+}): boolean {
+  const { labels, rawTranscriptValue } = params;
+
+  const normalizedTranscript = normalizeComparable(rawTranscriptValue);
+
+  if (!normalizedTranscript) {
+    return false;
+  }
+
+  for (const label of labels) {
+    const normalizedLabel = normalizeComparable(label);
+
+    if (!normalizedLabel) {
+      continue;
+    }
+
+    if (normalizedTranscript === normalizedLabel) {
+      return true;
+    }
+
+    const labelTokens = tokenizeComparable(label);
+    const transcriptTokens = new Set(tokenizeComparable(rawTranscriptValue));
+
+    if (
+      labelTokens.length > 0 &&
+      labelTokens.every((token) => transcriptTokens.has(token))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function resolveChoiceValue(params: {
   step: BookingFlowStepLike;
   value: string;
@@ -184,42 +281,37 @@ function resolveChoiceValue(params: {
   for (const option of options) {
     const normalizedOptionValue = normalizeComparable(option.value);
 
-    if (normalizedValue && normalizedValue === normalizedOptionValue) {
+    const modelMatchesOptionValue =
+      normalizedValue && normalizedValue === normalizedOptionValue;
+
+    const transcriptMatchesOptionValue =
+      normalizedTranscript && normalizedTranscript === normalizedOptionValue;
+
+    const transcriptMatchesOptionLabel = choiceLabelMatchesTranscript({
+      labels: option.labels,
+      rawTranscriptValue,
+    });
+
+    const modelIsGrounded = isModelValueGroundedInTranscript({
+      modelValue: value,
+      rawTranscriptValue,
+    });
+
+    if (
+      transcriptMatchesOptionValue ||
+      transcriptMatchesOptionLabel ||
+      (modelMatchesOptionValue && modelIsGrounded)
+    ) {
       return {
         ok: true,
         value: option.value,
         rawTranscriptValue,
         modelValue,
-        source: "model",
+        source:
+          transcriptMatchesOptionValue || transcriptMatchesOptionLabel
+            ? "transcript"
+            : "model",
       };
-    }
-
-    for (const label of option.labels) {
-      const normalizedLabel = normalizeComparable(label);
-
-      if (!normalizedLabel) continue;
-
-      const modelMatches =
-        normalizedValue &&
-        (normalizedValue === normalizedLabel ||
-          normalizedValue.includes(normalizedLabel) ||
-          normalizedLabel.includes(normalizedValue));
-
-      const transcriptMatches =
-        normalizedTranscript &&
-        (normalizedTranscript === normalizedLabel ||
-          normalizedTranscript.includes(normalizedLabel) ||
-          normalizedLabel.includes(normalizedTranscript));
-
-      if (modelMatches || transcriptMatches) {
-        return {
-          ok: true,
-          value: option.value,
-          rawTranscriptValue,
-          modelValue,
-          source: modelMatches ? "model" : "transcript",
-        };
-      }
     }
   }
 
@@ -241,13 +333,6 @@ function resolveDatetimeValue(params: {
 }): RealtimeSubmittedStepValueResult {
   const { value, rawTranscriptValue, modelValue, timeZone } = params;
 
-  const modelValueHasDateAnchor =
-    Boolean(value) &&
-    hasExplicitVoiceDateAnchor({
-      raw: value,
-      timeZone,
-    });
-
   const transcriptValueHasDateAnchor =
     Boolean(rawTranscriptValue) &&
     hasExplicitVoiceDateAnchor({
@@ -255,7 +340,31 @@ function resolveDatetimeValue(params: {
       timeZone,
     });
 
-  if (modelValueHasDateAnchor) {
+  if (!transcriptValueHasDateAnchor) {
+    return {
+      ok: false,
+      error: "INCOMPATIBLE_DATETIME_VALUE",
+      value: "",
+      rawTranscriptValue,
+      modelValue,
+      source: "none",
+    };
+  }
+
+  const modelValueHasDateAnchor =
+    Boolean(value) &&
+    hasExplicitVoiceDateAnchor({
+      raw: value,
+      timeZone,
+    });
+
+  if (
+    modelValueHasDateAnchor &&
+    isModelValueGroundedInTranscript({
+      modelValue: value,
+      rawTranscriptValue,
+    })
+  ) {
     return {
       ok: true,
       value,
@@ -265,23 +374,12 @@ function resolveDatetimeValue(params: {
     };
   }
 
-  if (transcriptValueHasDateAnchor) {
-    return {
-      ok: true,
-      value: rawTranscriptValue,
-      rawTranscriptValue,
-      modelValue,
-      source: "transcript",
-    };
-  }
-
   return {
-    ok: false,
-    error: "INCOMPATIBLE_DATETIME_VALUE",
-    value: "",
+    ok: true,
+    value: rawTranscriptValue,
     rawTranscriptValue,
     modelValue,
-    source: "none",
+    source: "transcript",
   };
 }
 
@@ -292,17 +390,17 @@ function resolveNumberValue(params: {
 }): RealtimeSubmittedStepValueResult {
   const { value, rawTranscriptValue, modelValue } = params;
 
-  /**
-   * No hardcoded language words here.
-   *
-   * For expected_type="number", the realtime model/tool must canonicalize
-   * spoken numbers into a numeric value. Example:
-   *
-   * caller says: "veinte libras"
-   * tool value should be: "20" or "20 libras"
-   *
-   * If the model cannot canonicalize to digits, we retry instead of guessing.
-   */
+  if (!rawTranscriptValue) {
+    return {
+      ok: false,
+      error: "EMPTY_SUBMITTED_VALUE",
+      value: "",
+      rawTranscriptValue,
+      modelValue,
+      source: "none",
+    };
+  }
+
   if (!hasDigit(value)) {
     return {
       ok: false,
@@ -323,6 +421,60 @@ function resolveNumberValue(params: {
   };
 }
 
+function resolveTextValue(params: {
+  value: string;
+  rawTranscriptValue: string;
+  modelValue: string;
+}): RealtimeSubmittedStepValueResult {
+  const { value, rawTranscriptValue, modelValue } = params;
+
+  if (!rawTranscriptValue && !value) {
+    return {
+      ok: false,
+      error: "EMPTY_SUBMITTED_VALUE",
+      value: "",
+      rawTranscriptValue,
+      modelValue,
+      source: "none",
+    };
+  }
+
+  if (
+    value &&
+    isModelValueGroundedInTranscript({
+      modelValue: value,
+      rawTranscriptValue,
+    })
+  ) {
+    return {
+      ok: true,
+      value,
+      rawTranscriptValue,
+      modelValue,
+      source: "model",
+    };
+  }
+
+  if (rawTranscriptValue) {
+    return {
+      ok: true,
+      value: rawTranscriptValue,
+      rawTranscriptValue,
+      modelValue,
+      source: "transcript",
+    };
+  }
+
+  return {
+    ok: false,
+    error: "INCOMPATIBLE_TEXT_VALUE",
+    value: "",
+    rawTranscriptValue,
+    modelValue,
+    source: "none",
+  };
+}
+
 export function resolveRealtimeSubmittedStepValue(params: {
   step: BookingFlowStepLike;
   value: string;
@@ -330,8 +482,9 @@ export function resolveRealtimeSubmittedStepValue(params: {
   modelValue: string;
   timeZone: string;
 }): RealtimeSubmittedStepValueResult {
-  const { step, rawTranscriptValue, timeZone } = params;
+  const { step, timeZone } = params;
 
+  const rawTranscriptValue = clean(params.rawTranscriptValue || "");
   const modelValue = clean(params.modelValue || params.value || "");
   const value = clean(params.value || params.modelValue || "");
   const expectedType = resolveExpectedType(step);
@@ -374,11 +527,9 @@ export function resolveRealtimeSubmittedStepValue(params: {
     });
   }
 
-  return {
-    ok: true,
+  return resolveTextValue({
     value,
     rawTranscriptValue,
     modelValue,
-    source: "model",
-  };
+  });
 }

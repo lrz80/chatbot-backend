@@ -203,18 +203,27 @@ export function buildNextRealtimeStateFromToolResult(
           : realtimeState.pendingActionToolName,
 
     awaitingPostBookingClosure:
-      toolName === "send_booking_sms" && toolResult?.ok === true
+      (toolName === "create_appointment" || toolName === "send_booking_sms") &&
+      toolResult?.ok === true
         ? true
-        : (realtimeState as any)?.awaitingPostBookingClosure,
+        : toolName === "end_call"
+          ? undefined
+          : (realtimeState as any)?.awaitingPostBookingClosure,
 
     postBookingClosureTranscript:
-      toolName === "send_booking_sms" && toolResult?.ok === true
+      (toolName === "create_appointment" || toolName === "send_booking_sms") &&
+      toolResult?.ok === true
         ? normalizedLastUserTranscript
-        : (realtimeState as any)?.postBookingClosureTranscript,
+        : toolName === "end_call"
+          ? undefined
+          : (realtimeState as any)?.postBookingClosureTranscript,
 
     postBookingClosureTranscriptSeq:
-      toolName === "send_booking_sms" && toolResult?.ok === true
+      (toolName === "create_appointment" || toolName === "send_booking_sms") &&
+      toolResult?.ok === true
         ? effectiveCurrentTranscriptSeq
-        : (realtimeState as any)?.postBookingClosureTranscriptSeq,
+        : toolName === "end_call"
+          ? undefined
+          : (realtimeState as any)?.postBookingClosureTranscriptSeq,
   } as CallState;
 }

@@ -58,6 +58,87 @@ function normalizeComparableValue(value: unknown): string {
     .replace(/\s+/g, " ");
 }
 
+function resolveStepSlotKey(currentStep: BookingStep): string {
+  const slot = normalizeStepValue((currentStep as any).slot);
+
+  if (slot && slot !== "none") {
+    return slot;
+  }
+
+  return "";
+}
+
+function buildBookingDataAliases(params: {
+  currentStep: BookingStep;
+  value: string;
+  isServiceStep: boolean;
+  isDatetimeStep: boolean;
+  callerE164: string | null;
+}): Record<string, string> {
+  const { currentStep, value, isServiceStep, isDatetimeStep, callerE164 } =
+    params;
+
+  const aliases: Record<string, string> = {};
+  const slotKey = resolveStepSlotKey(currentStep);
+
+  aliases[currentStep.step_key] = value;
+
+  if (slotKey) {
+    aliases[slotKey] = value;
+  }
+
+  if (isServiceStep || slotKey === "service") {
+    aliases.service = value;
+    aliases.service_display = value;
+    aliases.serviceName = value;
+    aliases.service_name = value;
+  }
+
+  if (isDatetimeStep || slotKey === "datetime") {
+    aliases.datetime = value;
+    aliases.datetime_display = value;
+    aliases.datetimeDisplay = value;
+    aliases.startText = value;
+    aliases.start_text = value;
+  }
+
+  if (slotKey === "staff_member") {
+    aliases.staff_member = value;
+    aliases.staffMember = value;
+    aliases.staffName = value;
+    aliases.staff_name = value;
+  }
+
+  if (slotKey === "customer_name") {
+    aliases.customer_name = value;
+    aliases.customerName = value;
+    aliases.name = value;
+  }
+
+  if (slotKey === "customer_phone") {
+    const phoneValue =
+      normalizeComparableValue(value) === "si" && callerE164
+        ? callerE164
+        : value;
+
+    aliases.customer_phone = phoneValue;
+    aliases.customerPhone = phoneValue;
+    aliases.phone = phoneValue;
+  }
+
+  if (slotKey === "customer_email") {
+    aliases.customer_email = value;
+    aliases.customerEmail = value;
+    aliases.email = value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(aliases)
+      .map(([key, aliasValue]) => [normalizeStepValue(key), normalizeStepValue(aliasValue)])
+      .filter(([key, aliasValue]) => key && aliasValue)
+  );
+}
+
 function getValidationConfig(currentStep: BookingStep): Record<string, any> {
   const raw = currentStep.validation_config;
 
@@ -348,21 +429,17 @@ export async function handleBookingStepAdvance(
     };
   }
 
+  const stepAliases = buildBookingDataAliases({
+    currentStep,
+    value: validation.value,
+    isServiceStep,
+    isDatetimeStep,
+    callerE164,
+  });
+
   const nextData: Record<string, string> = {
     ...(state.bookingData || {}),
-    [currentStep.step_key]: validation.value,
-    ...(isServiceStep
-      ? {
-          service_display: String(
-            state.bookingData?.service_display || validation.value || ""
-          ).trim(),
-        }
-      : {}),
-    ...(isDatetimeStep
-      ? {
-          datetime_display: validation.value,
-        }
-      : {}),
+    ...stepAliases,
   };
 
   if (isDatetimeStep) {
