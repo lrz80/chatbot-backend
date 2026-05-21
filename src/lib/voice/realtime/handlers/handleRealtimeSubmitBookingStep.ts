@@ -172,22 +172,6 @@ export async function handleRealtimeSubmitBookingStep(
     };
   }
 
-  const stepWorkingState = buildRealtimeStepWorkingState({
-    args,
-    callerPhone,
-    state: bookingContext.state,
-    steps,
-    currentIndex,
-  });
-
-  const rawAnswers = stepWorkingState.rawAnswers;
-  let workingState = stepWorkingState.workingState;
-
-  const stepRoute = routeRealtimeBookingStep({
-    currentStep,
-    workingState,
-  });
-
   const stepTimeZone =
     clean(
       bookingContext.cfg?.timezone ||
@@ -206,7 +190,7 @@ export async function handleRealtimeSubmitBookingStep(
   if (!submittedStepValue.ok) {
     const bookingState = buildRealtimeBookingState({
       steps,
-      state: workingState,
+      state: bookingContext.state,
       explicitCurrentIndex: currentIndex,
     });
 
@@ -222,6 +206,30 @@ export async function handleRealtimeSubmitBookingStep(
   }
 
   const resolvedInputValue = submittedStepValue.value;
+
+  const sanitizedArgs = {
+    ...args,
+    value: resolvedInputValue,
+    model_value: modelValue,
+    raw_transcript_value: rawTranscriptValue,
+    transcript_value: rawTranscriptValue,
+  };
+
+  const stepWorkingState = buildRealtimeStepWorkingState({
+    args: sanitizedArgs,
+    callerPhone,
+    state: bookingContext.state,
+    steps,
+    currentIndex,
+  });
+
+  const rawAnswers = stepWorkingState.rawAnswers;
+  let workingState = stepWorkingState.workingState;
+
+  const stepRoute = routeRealtimeBookingStep({
+    currentStep,
+    workingState,
+  });
 
   if (stepRoute.kind === "service") {
     const serviceStepResult = await handleBookingServiceRealtimeStep({
