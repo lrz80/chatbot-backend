@@ -261,15 +261,16 @@ export function buildAnswersBySlot(params: {
     ...extractStringRecord(state?.bookingData),
   };
 
-  for (const [rawKey, rawValue] of Object.entries(args || {})) {
-    const key = clean(rawKey);
-    if (!key) continue;
-    if (typeof rawValue === "boolean") continue;
+  const submittedStepKey = clean(args?.step_key);
+  const submittedValue = clean(args?.value);
 
-    const value = clean(rawValue);
-    if (!value) continue;
-
-    answersBySlot[key] = value;
+  /**
+   * Only the server-resolved submitted value is allowed to enter bookingData.
+   * Tool metadata such as model_value, transcript_value, raw_transcript_value,
+   * original_model_value, etc. must never become slot answers.
+   */
+  if (submittedStepKey && submittedValue) {
+    answersBySlot[submittedStepKey] = submittedValue;
   }
 
   if (!answersBySlot.customer_phone && callerPhone) {

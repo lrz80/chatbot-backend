@@ -527,6 +527,33 @@ export function resolveRealtimeSubmittedStepValue(params: {
     });
   }
 
+  if (expectedType === "staff") {
+    if (
+      value &&
+      isModelValueGroundedInTranscript({
+        modelValue: value,
+        rawTranscriptValue,
+      })
+    ) {
+      return {
+        ok: true,
+        value,
+        rawTranscriptValue,
+        modelValue,
+        source: "model",
+      };
+    }
+
+    return {
+      ok: false,
+      error: "INCOMPATIBLE_TEXT_VALUE",
+      value: "",
+      rawTranscriptValue,
+      modelValue,
+      source: "none",
+    };
+  }
+
   return resolveTextValue({
     value,
     rawTranscriptValue,

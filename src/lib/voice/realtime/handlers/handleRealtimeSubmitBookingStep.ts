@@ -209,10 +209,20 @@ export async function handleRealtimeSubmitBookingStep(
 
   const sanitizedArgs = {
     ...args,
+
+    // From this point forward, every value-like field must use the
+    // server-resolved value, not the raw model/tool value.
     value: resolvedInputValue,
-    model_value: modelValue,
+    model_value: resolvedInputValue,
+    resolved_value: resolvedInputValue,
+    submitted_value: resolvedInputValue,
+
+    // Keep transcript fields only as transcript evidence/debug context.
     raw_transcript_value: rawTranscriptValue,
     transcript_value: rawTranscriptValue,
+
+    // Preserve original model output only for debugging, never for slot filling.
+    original_model_value: modelValue,
   };
 
   const stepWorkingState = buildRealtimeStepWorkingState({
