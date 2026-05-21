@@ -85,6 +85,7 @@ export function buildNextRealtimeStateFromToolResult(
       resolvedPendingBookingStepExpectedType === "phone" ||
       resolvedPendingBookingStepExpectedType === "datetime" ||
       resolvedPendingBookingStepExpectedType === "number" ||
+      resolvedPendingBookingStepExpectedType === "staff" ||
       (resolvedPendingBookingStepExpectedType === "text" &&
         resolvedPendingBookingStepSlot !== "none"));
 
