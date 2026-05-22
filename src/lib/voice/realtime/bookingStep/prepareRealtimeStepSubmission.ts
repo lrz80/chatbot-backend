@@ -74,13 +74,26 @@ export function prepareRealtimeStepSubmission(
 
   const stepKey = clean(args.step_key);
   const value = clean(args.value);
-  const modelValue = clean(args.model_value || args.value);
 
-  const rawTranscriptValue = clean(
+  const originalModelValue = clean(args.model_value);
+  const originalTranscriptValue = clean(
     args.raw_transcript_value ||
       args.transcript_value ||
       bookingContext.userInput
   );
+
+  const candidateSource = clean(args.resolved_candidate_source);
+
+  /**
+   * Cuando handleRealtimeSubmitBookingStep está probando value_candidates,
+   * cada candidato debe validarse por sí mismo contra el resolver oficial del step.
+   *
+   * prepareRealtimeStepSubmission no debe rechazar un candidato solo porque
+   * el transcript crudo actual sea diferente. Esa comparación fue la causa de
+   * INCOMPATIBLE_TEXT_VALUE en service.
+   */
+  const modelValue = candidateSource ? value : clean(args.model_value || args.value);
+  const rawTranscriptValue = candidateSource ? value : originalTranscriptValue;
 
   if (!stepKey) {
     return {
@@ -178,7 +191,9 @@ export function prepareRealtimeStepSubmission(
     submitted_value: resolvedInputValue,
     raw_transcript_value: rawTranscriptValue,
     transcript_value: rawTranscriptValue,
-    original_model_value: modelValue,
+    original_model_value: originalModelValue || modelValue,
+    original_transcript_value: originalTranscriptValue,
+    resolved_candidate_source: candidateSource || args.resolved_candidate_source || null,
   };
 
   return {
