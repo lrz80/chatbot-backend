@@ -5,6 +5,23 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function normalizeComparableText(value: unknown): string {
+  return clean(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sameComparableText(left: unknown, right: unknown): boolean {
+  const a = normalizeComparableText(left);
+  const b = normalizeComparableText(right);
+
+  return Boolean(a && b && a === b);
+}
+
 export type SubmitBookingStepFreshnessResult =
   | {
       ok: true;
@@ -23,6 +40,7 @@ export type SubmitBookingStepFreshnessResult =
       effectiveAnchorSeq: number;
       hasNewHumanTranscript: boolean;
       isDuplicateSubmit: boolean;
+      isReusedTranscriptFromPreviousStep: boolean;
       shouldBlockStaleSubmit: false;
     }
   | {
@@ -46,6 +64,7 @@ export type SubmitBookingStepFreshnessResult =
       effectiveAnchorSeq: number;
       hasNewHumanTranscript: boolean;
       isDuplicateSubmit: boolean;
+      isReusedTranscriptFromPreviousStep: boolean;
       shouldBlockStaleSubmit: true;
     };
 
@@ -64,9 +83,7 @@ export function validateSubmitBookingStepFreshness(params: {
     realtimeState.pendingBookingStepPromptAnchorTranscript
   );
 
-  const lastSubmittedStepKey = clean(
-    realtimeState.lastSubmittedBookingStepKey
-  );
+  const lastSubmittedStepKey = clean(realtimeState.lastSubmittedBookingStepKey);
 
   const lastSubmittedTranscript = clean(
     realtimeState.lastSubmittedBookingTranscript
@@ -97,16 +114,6 @@ export function validateSubmitBookingStepFreshness(params: {
     Boolean(submittedStepKey) &&
     submittedStepKey === pendingStepKey;
 
-  /**
-   * Fuente de verdad para frescura:
-   *
-   * 1. Si existe promptAnchorSeq, usamos ese punto como referencia.
-   * 2. Si no existe anchor por algún problema de timing, usamos el último transcript ya enviado.
-   * 3. Nunca bloqueamos solo porque el texto del anchor esté vacío.
-   *
-   * Esto evita el loop donde el cliente sí respondió, pero el guard bloquea porque
-   * pendingBookingStepPromptAnchorTranscript nunca fue seteado.
-   */
   const effectiveAnchorSeq = Math.max(
     promptAnchorSeq,
     lastSubmittedTranscriptSeq
@@ -119,8 +126,23 @@ export function validateSubmitBookingStepFreshness(params: {
     Boolean(submittedStepKey) &&
     submittedStepKey === lastSubmittedStepKey &&
     Boolean(currentTranscript) &&
-    currentTranscript === lastSubmittedTranscript &&
+    sameComparableText(currentTranscript, lastSubmittedTranscript) &&
     currentTranscriptSeq <= lastSubmittedTranscriptSeq;
+
+  /**
+   * Regla raíz:
+   * Un nuevo step no puede consumir el mismo contenido humano que ya fue usado
+   * para resolver un step anterior.
+   *
+   * Esto no depende de frases, idioma, tenant, servicio, staff ni regex de negocio.
+   * Solo protege la máquina de estados.
+   */
+  const isReusedTranscriptFromPreviousStep =
+    Boolean(lastSubmittedStepKey) &&
+    Boolean(submittedStepKey) &&
+    lastSubmittedStepKey !== submittedStepKey &&
+    Boolean(currentTranscript) &&
+    sameComparableText(currentTranscript, lastSubmittedTranscript);
 
   const base = {
     submittedStepKey,
@@ -138,6 +160,7 @@ export function validateSubmitBookingStepFreshness(params: {
     effectiveAnchorSeq,
     hasNewHumanTranscript,
     isDuplicateSubmit,
+    isReusedTranscriptFromPreviousStep,
   };
 
   if (!hasPendingStepState) {
@@ -158,7 +181,11 @@ export function validateSubmitBookingStepFreshness(params: {
     };
   }
 
-  if (!hasNewHumanTranscript || isDuplicateSubmit) {
+  if (
+    !hasNewHumanTranscript ||
+    isDuplicateSubmit ||
+    isReusedTranscriptFromPreviousStep
+  ) {
     return {
       ok: false,
       error: "BOOKING_STEP_WAITING_FOR_NEW_USER_INPUT",
