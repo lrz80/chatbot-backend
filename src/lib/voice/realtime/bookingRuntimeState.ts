@@ -28,6 +28,18 @@ function pickNonEmptyString(
   return primary ?? fallback;
 }
 
+function resolveConsumedBookingSubmitValue(params: {
+  effectiveToolArgs: Record<string, any>;
+  lastUserTranscript: string;
+}): string {
+  return clean(
+    params.effectiveToolArgs?.resolved_value ||
+      params.effectiveToolArgs?.submitted_value ||
+      params.effectiveToolArgs?.value ||
+      params.lastUserTranscript
+  );
+}
+
 export function attachLatestUserTranscriptSeq(params: {
   realtimeState: CallState;
   lastUserTranscriptSeq: number;
@@ -141,14 +153,14 @@ export function clearPendingBookingStepAnchor(realtimeState: CallState): CallSta
 export function setPendingBookingStepAnchor(params: {
   realtimeState: CallState;
   nextRequiredStep: any;
-  lastUserTranscript: string;
-  lastUserTranscriptSeq: number;
+  anchorTranscript: string;
+  anchorSeq: number;
 }): CallState {
   const {
     realtimeState,
     nextRequiredStep,
-    lastUserTranscript,
-    lastUserTranscriptSeq,
+    anchorTranscript,
+    anchorSeq,
   } = params;
 
   const nextStepKey = clean(nextRequiredStep?.step_key);
@@ -165,8 +177,8 @@ export function setPendingBookingStepAnchor(params: {
         ? nextRequiredStep.required
         : realtimeState.pendingBookingStepRequired,
     pendingBookingStepPrompt: clean(nextRequiredStep?.prompt),
-    pendingBookingStepPromptAnchorTranscript: clean(lastUserTranscript),
-    pendingBookingStepPromptAnchorSeq: finiteNumber(lastUserTranscriptSeq, -1),
+    pendingBookingStepPromptAnchorTranscript: clean(anchorTranscript),
+    pendingBookingStepPromptAnchorSeq: finiteNumber(anchorSeq, -1),
   };
 }
 
@@ -213,11 +225,19 @@ export function applyBookingRuntimeStateAfterToolResult(params: {
 
   let nextState = realtimeState;
 
+  const consumedSubmitValue =
+    toolName === "submit_booking_step"
+      ? resolveConsumedBookingSubmitValue({
+          effectiveToolArgs,
+          lastUserTranscript,
+        })
+      : clean(lastUserTranscript);
+
   if (toolName === "submit_booking_step" && toolResult?.ok === true) {
     nextState = markSubmittedBookingStep({
       realtimeState: nextState,
       submittedStepKey: clean(effectiveToolArgs.step_key),
-      submittedTranscript: lastUserTranscript,
+      submittedTranscript: consumedSubmitValue,
       submittedTranscriptSeq: lastUserTranscriptSeq,
     });
   }
@@ -229,8 +249,9 @@ export function applyBookingRuntimeStateAfterToolResult(params: {
     nextState = setPendingBookingStepAnchor({
       realtimeState: nextState,
       nextRequiredStep: toolResult.next_required_step,
-      lastUserTranscript,
-      lastUserTranscriptSeq,
+      anchorTranscript:
+        toolName === "submit_booking_step" ? consumedSubmitValue : lastUserTranscript,
+      anchorSeq: lastUserTranscriptSeq,
     });
   }
 
