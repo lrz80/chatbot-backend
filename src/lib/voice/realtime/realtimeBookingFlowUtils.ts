@@ -456,13 +456,8 @@ export function buildBookingPromptTemplateValues(
     notes: clean(slots.notes),
   };
 
-  for (const [key, rawValue] of Object.entries(values)) {
-    const value = clean(rawValue);
-
-    if (!key || !value) continue;
-
-    values[key] = value;
-    values[`${key}_display`] = value;
+  for (const key of Object.keys(values)) {
+    values[`${key}_display`] = values[key] || "";
   }
 
   return values;
