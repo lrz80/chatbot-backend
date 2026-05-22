@@ -51,27 +51,21 @@ export function validateSubmitBookingStepFreshness(params: {
 }): SubmitBookingStepFreshnessResult {
   const { toolArgs, realtimeState, lastUserTranscript } = params;
 
-  const submittedStepKey = clean(toolArgs.step_key || "");
-  const pendingStepKey = clean(realtimeState.pendingBookingStepKey || "");
-  const currentTranscript = clean(lastUserTranscript || "");
+  const submittedStepKey = clean(toolArgs.step_key);
+  const pendingStepKey = clean(realtimeState.pendingBookingStepKey);
+  const currentTranscript = clean(lastUserTranscript);
 
   const promptAnchorTranscript = clean(
-    realtimeState.pendingBookingStepPromptAnchorTranscript || ""
+    realtimeState.pendingBookingStepPromptAnchorTranscript
   );
 
   const lastSubmittedStepKey = clean(
-    realtimeState.lastSubmittedBookingStepKey || ""
+    realtimeState.lastSubmittedBookingStepKey
   );
 
   const lastSubmittedTranscript = clean(
-    realtimeState.lastSubmittedBookingTranscript || ""
+    realtimeState.lastSubmittedBookingTranscript
   );
-
-  const hasPendingStepState = Boolean(pendingStepKey);
-  const hasPromptAnchorTranscript = Boolean(promptAnchorTranscript);
-
-  const isSubmittingExpectedPendingStep =
-    hasPendingStepState && submittedStepKey === pendingStepKey;
 
   const currentTranscriptSeq =
     typeof realtimeState.lastUserTranscriptSeq === "number"
@@ -88,29 +82,33 @@ export function validateSubmitBookingStepFreshness(params: {
       ? realtimeState.lastSubmittedBookingTranscriptSeq
       : -1;
 
+  const hasPendingStepState = Boolean(pendingStepKey);
+  const hasPromptAnchorTranscript =
+    Boolean(promptAnchorTranscript) && promptAnchorSeq >= 0;
+
+  const isSubmittingExpectedPendingStep =
+    hasPendingStepState &&
+    Boolean(submittedStepKey) &&
+    submittedStepKey === pendingStepKey;
+
   const hasNewHumanTranscript =
     Boolean(currentTranscript) &&
+    hasPromptAnchorTranscript &&
     currentTranscriptSeq > promptAnchorSeq;
 
   const isDuplicateSubmit =
     Boolean(submittedStepKey) &&
     submittedStepKey === lastSubmittedStepKey &&
+    Boolean(currentTranscript) &&
+    currentTranscript === lastSubmittedTranscript &&
     currentTranscriptSeq === lastSubmittedTranscriptSeq;
-
-  const isAwaitingFreshUserInput =
-    (realtimeState as any).pendingBookingStepAwaitingFreshUserInput === true;
-
-  const requiresFreshInputAfterPrompt =
-    (realtimeState as any).pendingBookingStepRequiresFreshInputAfterPrompt === true;
 
   const shouldBlockStaleSubmit =
     !hasPendingStepState ||
+    !hasPromptAnchorTranscript ||
     !isSubmittingExpectedPendingStep ||
-    (
-      isAwaitingFreshUserInput &&
-      requiresFreshInputAfterPrompt &&
-      (!hasNewHumanTranscript || isDuplicateSubmit)
-    );
+    !hasNewHumanTranscript ||
+    isDuplicateSubmit;
 
   const base = {
     submittedStepKey,
