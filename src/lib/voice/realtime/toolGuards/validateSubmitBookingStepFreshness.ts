@@ -20,13 +20,17 @@ export type SubmitBookingStepFreshnessResult =
       currentTranscriptSeq: number;
       promptAnchorSeq: number;
       lastSubmittedTranscriptSeq: number;
+      effectiveAnchorSeq: number;
       hasNewHumanTranscript: boolean;
       isDuplicateSubmit: boolean;
       shouldBlockStaleSubmit: false;
     }
   | {
       ok: false;
-      error: "BOOKING_STEP_WAITING_FOR_NEW_USER_INPUT";
+      error:
+        | "BOOKING_STEP_WAITING_FOR_PENDING_STEP"
+        | "BOOKING_STEP_UNEXPECTED_STEP"
+        | "BOOKING_STEP_WAITING_FOR_NEW_USER_INPUT";
       submittedStepKey: string;
       pendingStepKey: string;
       currentTranscript: string;
@@ -39,6 +43,7 @@ export type SubmitBookingStepFreshnessResult =
       currentTranscriptSeq: number;
       promptAnchorSeq: number;
       lastSubmittedTranscriptSeq: number;
+      effectiveAnchorSeq: number;
       hasNewHumanTranscript: boolean;
       isDuplicateSubmit: boolean;
       shouldBlockStaleSubmit: true;
@@ -83,6 +88,7 @@ export function validateSubmitBookingStepFreshness(params: {
       : -1;
 
   const hasPendingStepState = Boolean(pendingStepKey);
+
   const hasPromptAnchorTranscript =
     Boolean(promptAnchorTranscript) && promptAnchorSeq >= 0;
 
@@ -91,24 +97,30 @@ export function validateSubmitBookingStepFreshness(params: {
     Boolean(submittedStepKey) &&
     submittedStepKey === pendingStepKey;
 
+  /**
+   * Fuente de verdad para frescura:
+   *
+   * 1. Si existe promptAnchorSeq, usamos ese punto como referencia.
+   * 2. Si no existe anchor por algún problema de timing, usamos el último transcript ya enviado.
+   * 3. Nunca bloqueamos solo porque el texto del anchor esté vacío.
+   *
+   * Esto evita el loop donde el cliente sí respondió, pero el guard bloquea porque
+   * pendingBookingStepPromptAnchorTranscript nunca fue seteado.
+   */
+  const effectiveAnchorSeq = Math.max(
+    promptAnchorSeq,
+    lastSubmittedTranscriptSeq
+  );
+
   const hasNewHumanTranscript =
-    Boolean(currentTranscript) &&
-    hasPromptAnchorTranscript &&
-    currentTranscriptSeq > promptAnchorSeq;
+    Boolean(currentTranscript) && currentTranscriptSeq > effectiveAnchorSeq;
 
   const isDuplicateSubmit =
     Boolean(submittedStepKey) &&
     submittedStepKey === lastSubmittedStepKey &&
     Boolean(currentTranscript) &&
     currentTranscript === lastSubmittedTranscript &&
-    currentTranscriptSeq === lastSubmittedTranscriptSeq;
-
-  const shouldBlockStaleSubmit =
-    !hasPendingStepState ||
-    !hasPromptAnchorTranscript ||
-    !isSubmittingExpectedPendingStep ||
-    !hasNewHumanTranscript ||
-    isDuplicateSubmit;
+    currentTranscriptSeq <= lastSubmittedTranscriptSeq;
 
   const base = {
     submittedStepKey,
@@ -123,11 +135,30 @@ export function validateSubmitBookingStepFreshness(params: {
     currentTranscriptSeq,
     promptAnchorSeq,
     lastSubmittedTranscriptSeq,
+    effectiveAnchorSeq,
     hasNewHumanTranscript,
     isDuplicateSubmit,
   };
 
-  if (shouldBlockStaleSubmit) {
+  if (!hasPendingStepState) {
+    return {
+      ok: false,
+      error: "BOOKING_STEP_WAITING_FOR_PENDING_STEP",
+      ...base,
+      shouldBlockStaleSubmit: true,
+    };
+  }
+
+  if (!isSubmittingExpectedPendingStep) {
+    return {
+      ok: false,
+      error: "BOOKING_STEP_UNEXPECTED_STEP",
+      ...base,
+      shouldBlockStaleSubmit: true,
+    };
+  }
+
+  if (!hasNewHumanTranscript || isDuplicateSubmit) {
     return {
       ok: false,
       error: "BOOKING_STEP_WAITING_FOR_NEW_USER_INPUT",
