@@ -1,9 +1,5 @@
 //src/lib/voice/realtime/realtimeToolExecutor.ts
 import { getBookingFlow } from "../../appointments/getBookingFlow";
-import {
-  resolveBookingPromptText,
-  resolveBookingRetryText,
-} from "../voiceBookingHelpers";
 import { upsertVoiceCallState } from "../upsertVoiceCallState";
 import type { CallState, VoiceLocale } from "../types";
 import {
@@ -16,8 +12,6 @@ import {
   normalizeAnswersToCanonicalSlots,
   resolveCurrentStepIndex,
   buildCanonicalCallState,
-  renderBookingStepTemplateSafe,
-  buildBookingPromptTemplateValues,
   type BookingFlowStepLike,
   type BookingState,
 } from "./realtimeBookingFlowUtils";
@@ -27,7 +21,10 @@ import { twiml } from "twilio";
 import { parseBookingSmsPayload } from "../runtime/voiceBookingSmsHelpers";
 import { sendBookingConfirmationSms } from "../runtime/sendBookingConfirmationSms";
 import { sendUsefulLinkSms } from "../runtime/sendUsefulLinkSms";
-import { renderSafeBookingStepTemplate } from "./bookingStep/renderSafeBookingStepTemplate";
+import {
+  buildRealtimeNextRequiredStep,
+  type RealtimeMappedStep,
+} from "./bookingStep/buildRealtimeNextRequiredStep";
 
 type ExecuteRealtimeToolParams = {
   tenantId: string;
@@ -54,19 +51,6 @@ type RealtimeBookingContext = {
   state: CallState;
   userInput: string;
   digits: string;
-};
-
-type RealtimeMappedStep = {
-  step_key: string;
-  step_order: number;
-  slot: string;
-  prompt: string;
-  expected_type: string;
-  required: boolean;
-  retry_prompt: string;
-  validation_config: Record<string, unknown> | null;
-  prompt_translations: Record<string, unknown> | null;
-  retry_prompt_translations: Record<string, unknown> | null;
 };
 
 function getRealtimeBookingContext(
@@ -96,46 +80,6 @@ function getRealtimeBookingContext(
     state,
     userInput: clean(userInput),
     digits: clean(digits),
-  };
-}
-
-function mapStepForRealtime(
-  step: BookingFlowStepLike,
-  locale?: VoiceLocale
-): RealtimeMappedStep {
-  const resolvedPrompt = locale
-    ? resolveBookingPromptText({
-        locale,
-        prompt: step.prompt || "",
-        promptTranslations:
-          (step.prompt_translations as Record<string, string> | null) || null,
-      })
-    : step.prompt || "";
-
-  const resolvedRetryPrompt = locale
-    ? resolveBookingRetryText({
-        locale,
-        retryPrompt: step.retry_prompt || "",
-        retryPromptTranslations:
-          (step.retry_prompt_translations as Record<string, string> | null) ||
-          null,
-        fallbackPrompt: step.prompt || "",
-        fallbackPromptTranslations:
-          (step.prompt_translations as Record<string, string> | null) || null,
-      })
-    : step.retry_prompt || "";
-
-  return {
-    step_key: clean(step.step_key),
-    step_order: Number(step.step_order || 0),
-    slot: getStepSlot(step),
-    prompt: resolvedPrompt,
-    expected_type: step.expected_type || "text",
-    required: step.required === true,
-    retry_prompt: resolvedRetryPrompt,
-    validation_config: step.validation_config || null,
-    prompt_translations: step.prompt_translations || null,
-    retry_prompt_translations: step.retry_prompt_translations || null,
   };
 }
 
@@ -181,124 +125,27 @@ function buildRealtimeBookingState(params: {
   };
 }
 
-function buildNextRequiredStep(params: {
+function buildNextRequiredStepOrThrow(params: {
   steps: BookingFlowStepLike[];
   bookingState: BookingState;
   locale?: VoiceLocale;
   overridePrompt?: string;
 }): RealtimeMappedStep | null {
-  const { steps, bookingState, locale, overridePrompt } = params;
+  const nextStepResult = buildRealtimeNextRequiredStep(params);
 
-  if (!bookingState.current_step_key) {
-    return null;
+  if (!nextStepResult.ok) {
+    throw new Error(
+      [
+        "BOOKING_STEP_TEMPLATE_INVALID",
+        `step_key=${nextStepResult.step_key}`,
+        `slot=${nextStepResult.slot}`,
+        `prompt_error=${nextStepResult.prompt_error}`,
+        `retry_prompt_error=${nextStepResult.retry_prompt_error}`,
+      ].join(";")
+    );
   }
 
-  const step = steps.find(
-    (candidate) =>
-      clean(candidate.step_key) === clean(bookingState.current_step_key)
-  );
-
-  if (!step) {
-    return null;
-  }
-
-  const mapped = mapStepForRealtime(step, locale);
-  const templateValues = buildBookingPromptTemplateValues(bookingState);
-
-  const isFinalConfirmationStep =
-    mapped.slot === "confirmation" || isConfirmationLikeStep(step);
-
-  const promptRender = overridePrompt
-    ? {
-        ok: true as const,
-        text: clean(overridePrompt),
-      }
-    : renderBookingStepTemplateSafe({
-        template: mapped.prompt,
-        values: templateValues,
-        requireNonEmptyValues: isFinalConfirmationStep,
-      });
-
-  const retryPromptRender = renderBookingStepTemplateSafe({
-    template: mapped.retry_prompt || mapped.prompt,
-    values: templateValues,
-    requireNonEmptyValues: isFinalConfirmationStep,
-  });
-
-  if (!promptRender.ok && !retryPromptRender.ok) {
-    console.error("[VOICE_REALTIME][BOOKING_STEP_TEMPLATE_INVALID]", {
-      step_key: mapped.step_key,
-      slot: mapped.slot,
-      prompt_error: promptRender.error,
-      prompt_key: promptRender.key,
-      retry_prompt_error: retryPromptRender.error,
-      retry_prompt_key: retryPromptRender.key,
-    });
-
-    return {
-      step_key: mapped.step_key,
-      step_order: mapped.step_order,
-      slot: mapped.slot,
-      prompt: "",
-      expected_type: mapped.expected_type,
-      required: mapped.required,
-      retry_prompt: "",
-      validation_config: {
-        error: "BOOKING_STEP_TEMPLATE_INVALID",
-        prompt_error: promptRender.error,
-        retry_prompt_error: retryPromptRender.error,
-      },
-      prompt_translations: null,
-      retry_prompt_translations: null,
-    };
-  }
-
-  const renderedPrompt = promptRender.ok
-    ? promptRender.text
-    : retryPromptRender.text;
-
-  const renderedRetryPrompt = retryPromptRender.ok
-    ? retryPromptRender.text
-    : renderedPrompt;
-
-  if (!promptRender.ok && !retryPromptRender.ok) {
-    console.warn("[VOICE_REALTIME][BOOKING_STEP_TEMPLATE_INVALID]", {
-      step_key: mapped.step_key,
-      slot: mapped.slot,
-      prompt_error: promptRender.error,
-      retry_prompt_error: retryPromptRender.error,
-    });
-
-    return {
-      step_key: mapped.step_key,
-      step_order: mapped.step_order,
-      slot: mapped.slot,
-      prompt: "",
-      expected_type: mapped.expected_type,
-      required: mapped.required,
-      retry_prompt: "",
-      validation_config: {
-        error: "BOOKING_STEP_TEMPLATE_INVALID",
-        prompt_error: promptRender.error,
-        retry_prompt_error: retryPromptRender.error,
-      },
-      prompt_translations: null,
-      retry_prompt_translations: null,
-    };
-  }
-
-  return {
-    step_key: mapped.step_key,
-    step_order: mapped.step_order,
-    slot: mapped.slot,
-    prompt: renderedPrompt,
-    expected_type: mapped.expected_type,
-    required: mapped.required,
-    retry_prompt: renderedRetryPrompt,
-    validation_config: null,
-    prompt_translations: null,
-    retry_prompt_translations: null,
-  };
+  return nextStepResult.next_required_step;
 }
 
 async function persistVoiceState(params: {
@@ -382,14 +229,31 @@ export async function executeRealtimeTool(
         state: initialState,
       });
 
+      const nextStepResult = buildRealtimeNextRequiredStep({
+        steps,
+        bookingState,
+        locale: bookingContext.currentLocale,
+      });
+
+      if (!nextStepResult.ok) {
+        return {
+          ok: false,
+          error: nextStepResult.error,
+          step_key: nextStepResult.step_key,
+          slot: nextStepResult.slot,
+          prompt_error: nextStepResult.prompt_error,
+          retry_prompt_error: nextStepResult.retry_prompt_error,
+          message:
+            "BOOKING_FLOW_CONFIGURATION_INVALID",
+          booking_state: bookingState,
+          next_required_step: null,
+        };
+      }
+
       return {
         ok: true,
         booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: bookingContext.currentLocale,
-        }),
+        next_required_step: nextStepResult.next_required_step,
       };
     }
 
@@ -409,7 +273,7 @@ export async function executeRealtimeTool(
         bookingContext,
         steps,
         buildRealtimeBookingState,
-        buildNextRequiredStep,
+        buildNextRequiredStep: buildNextRequiredStepOrThrow,
         persistVoiceState,
       });
     }
@@ -430,7 +294,7 @@ export async function executeRealtimeTool(
         bookingContext,
         steps,
         buildRealtimeBookingState,
-        buildNextRequiredStep,
+        buildNextRequiredStep: buildNextRequiredStepOrThrow,
       });
     }
 

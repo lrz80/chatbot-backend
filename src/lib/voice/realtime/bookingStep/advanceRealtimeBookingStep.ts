@@ -7,6 +7,7 @@ import {
   type BookingFlowStepLike,
   type BookingState,
 } from "../realtimeBookingFlowUtils";
+import { buildRealtimeNextRequiredStep } from "./buildRealtimeNextRequiredStep";
 
 type RealtimeMappedStep = {
   step_key: string;
@@ -115,13 +116,27 @@ export async function advanceRealtimeBookingStep(
         explicitCurrentIndex: nextIndex,
       });
 
-  const nextRequiredStep = isFlowComplete
-    ? null
-    : buildNextRequiredStep({
+  const nextRequiredStepResult = isFlowComplete
+    ? { ok: true as const, next_required_step: null }
+    : buildRealtimeNextRequiredStep({
         steps,
         bookingState,
         locale: currentLocale,
       });
+
+  if (!nextRequiredStepResult.ok) {
+    return {
+      ok: true,
+      advancedState,
+      booking_state: bookingState,
+      next_required_step: null,
+      assistant_prompt: "",
+      action_required: null,
+      error: nextRequiredStepResult.error,
+    } as any;
+  }
+
+  const nextRequiredStep = nextRequiredStepResult.next_required_step;
 
   const nextStepKey = clean(nextRequiredStep?.step_key || "");
 
