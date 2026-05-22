@@ -9,19 +9,10 @@ import {
   type BookingFlowStepLike,
   type BookingState,
 } from "../realtimeBookingFlowUtils";
-
-type RealtimeMappedStep = {
-  step_key: string;
-  step_order: number;
-  slot: string;
-  prompt: string;
-  expected_type: string;
-  required: boolean;
-  retry_prompt: string;
-  validation_config: Record<string, unknown> | null;
-  prompt_translations: Record<string, unknown> | null;
-  retry_prompt_translations: Record<string, unknown> | null;
-};
+import {
+  buildRealtimeNextRequiredStep,
+  type RealtimeMappedStep,
+} from "./buildRealtimeNextRequiredStep";
 
 export type ResolveExpectedRealtimeBookingStepResult =
   | {
@@ -34,6 +25,63 @@ export type ResolveExpectedRealtimeBookingStepResult =
       ok: false;
       result: any;
     };
+
+function buildTemplateInvalidResult(params: {
+  bookingState: BookingState;
+  nextStepResult: Extract<
+    ReturnType<typeof buildRealtimeNextRequiredStep>,
+    { ok: false }
+  >;
+}) {
+  const { bookingState, nextStepResult } = params;
+
+  return {
+    ok: false,
+    error: nextStepResult.error,
+    step_key: nextStepResult.step_key,
+    slot: nextStepResult.slot,
+    prompt_error: nextStepResult.prompt_error,
+    retry_prompt_error: nextStepResult.retry_prompt_error,
+    message: "BOOKING_FLOW_CONFIGURATION_INVALID",
+    booking_state: bookingState,
+    next_required_step: null,
+  };
+}
+
+function resolveNextRequiredStepOrError(params: {
+  steps: BookingFlowStepLike[];
+  bookingState: BookingState;
+  locale: VoiceLocale;
+}):
+  | {
+      ok: true;
+      next_required_step: RealtimeMappedStep | null;
+    }
+  | {
+      ok: false;
+      result: any;
+    } {
+  const nextStepResult = buildRealtimeNextRequiredStep({
+    steps: params.steps,
+    bookingState: params.bookingState,
+    locale: params.locale,
+  });
+
+  if (!nextStepResult.ok) {
+    return {
+      ok: false,
+      result: buildTemplateInvalidResult({
+        bookingState: params.bookingState,
+        nextStepResult,
+      }),
+    };
+  }
+
+  return {
+    ok: true,
+    next_required_step: nextStepResult.next_required_step,
+  };
+}
 
 export function resolveExpectedRealtimeBookingStep(params: {
   stepKey: string;
@@ -48,12 +96,6 @@ export function resolveExpectedRealtimeBookingStep(params: {
     finalConfirmationGranted?: boolean;
     readyToCreate?: boolean;
   }) => BookingState;
-  buildNextRequiredStep: (params: {
-    steps: BookingFlowStepLike[];
-    bookingState: BookingState;
-    locale?: VoiceLocale;
-    overridePrompt?: string;
-  }) => RealtimeMappedStep | null;
 }): ResolveExpectedRealtimeBookingStepResult {
   const {
     stepKey,
@@ -62,7 +104,6 @@ export function resolveExpectedRealtimeBookingStep(params: {
     callerPhone,
     currentLocale,
     buildRealtimeBookingState,
-    buildNextRequiredStep,
   } = params;
 
   const providedIndex = getStepIndexByKey(steps, stepKey);
@@ -135,6 +176,19 @@ export function resolveExpectedRealtimeBookingStep(params: {
       explicitCurrentIndex: expectedIndex,
     });
 
+    const nextRequiredStepResult = resolveNextRequiredStepOrError({
+      steps,
+      bookingState,
+      locale: currentLocale,
+    });
+
+    if (!nextRequiredStepResult.ok) {
+      return {
+        ok: false,
+        result: nextRequiredStepResult.result,
+      };
+    }
+
     return {
       ok: false,
       result: {
@@ -146,11 +200,7 @@ export function resolveExpectedRealtimeBookingStep(params: {
         expected_step_key: clean(expectedStep?.step_key),
         received_step_key: stepKey,
         booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: currentLocale,
-        }),
+        next_required_step: nextRequiredStepResult.next_required_step,
       },
     };
   }

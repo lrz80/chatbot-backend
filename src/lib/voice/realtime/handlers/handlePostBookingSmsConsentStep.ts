@@ -9,19 +9,7 @@ import {
   type BookingState,
 } from "../realtimeBookingFlowUtils";
 import { resolveExpectedTypeStepValue } from "../bookingStepValueValidators";
-
-type RealtimeMappedStep = {
-  step_key: string;
-  step_order: number;
-  slot: string;
-  prompt: string;
-  expected_type: string;
-  required: boolean;
-  retry_prompt: string;
-  validation_config: Record<string, unknown> | null;
-  prompt_translations: Record<string, unknown> | null;
-  retry_prompt_translations: Record<string, unknown> | null;
-};
+import { buildRealtimeNextRequiredStep } from "../bookingStep/buildRealtimeNextRequiredStep";
 
 type RealtimeBookingContextLike = {
   callSid: string;
@@ -48,12 +36,6 @@ type HandlePostBookingSmsConsentStepParams = {
     finalConfirmationGranted?: boolean;
     readyToCreate?: boolean;
   }) => BookingState;
-  buildNextRequiredStep: (params: {
-    steps: BookingFlowStepLike[];
-    bookingState: BookingState;
-    locale?: VoiceLocale;
-    overridePrompt?: string;
-  }) => RealtimeMappedStep | null;
   persistVoiceState: (params: {
     tenantId: string;
     callSid: string;
@@ -71,87 +53,6 @@ type SmsConsentResolution =
   | {
       ok: false;
     };
-
-function getRecordText(
-  record: Record<string, unknown> | null | undefined,
-  key: string
-): string {
-  const value = record?.[key];
-  return typeof value === "string" ? clean(value) : "";
-}
-
-function getStepRecord(
-  value: unknown
-): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function resolveLocalizedStepText(params: {
-  baseText: string;
-  translations: Record<string, unknown> | null;
-  locale: VoiceLocale;
-}): string {
-  const { baseText, translations, locale } = params;
-
-  const translated =
-    getRecordText(translations, locale) ||
-    getRecordText(translations, locale.split("-")[0]);
-
-  return translated || clean(baseText);
-}
-
-function buildCurrentStepRetryPrompt(params: {
-  currentStep: BookingFlowStepLike;
-  locale: VoiceLocale;
-}): string {
-  const { currentStep, locale } = params;
-
-  return resolveLocalizedStepText({
-    baseText: clean(currentStep.retry_prompt || currentStep.prompt),
-    translations: getStepRecord(currentStep.retry_prompt_translations),
-    locale,
-  });
-}
-
-function mapCurrentStepAsNextRequiredStep(params: {
-  currentStep: BookingFlowStepLike;
-  targetSlot: string;
-  locale: VoiceLocale;
-  overridePrompt?: string;
-}): RealtimeMappedStep {
-  const { currentStep, targetSlot, locale, overridePrompt } = params;
-
-  const prompt =
-    clean(overridePrompt) ||
-    buildCurrentStepRetryPrompt({
-      currentStep,
-      locale,
-    }) ||
-    resolveLocalizedStepText({
-      baseText: clean(currentStep.prompt),
-      translations: getStepRecord(currentStep.prompt_translations),
-      locale,
-    });
-
-  return {
-    step_key: clean(currentStep.step_key),
-    step_order: Number(currentStep.step_order || 0),
-    slot: clean(targetSlot || ""),
-    prompt,
-    expected_type: clean(currentStep.expected_type),
-    required: currentStep.required !== false,
-    retry_prompt: clean(currentStep.retry_prompt || ""),
-    validation_config: getStepRecord(currentStep.validation_config),
-    prompt_translations: getStepRecord(currentStep.prompt_translations),
-    retry_prompt_translations: getStepRecord(
-      currentStep.retry_prompt_translations
-    ),
-  };
-}
 
 async function resolveSmsConsent(params: {
   currentStep: BookingFlowStepLike;
@@ -220,7 +121,6 @@ async function resolveSmsConsent(params: {
 
 async function returnSmsConsentRetry(params: {
   tenantId: string;
-  targetSlot: string;
   currentStep: BookingFlowStepLike;
   currentIndex: number;
   workingState: CallState;
@@ -231,7 +131,6 @@ async function returnSmsConsentRetry(params: {
 }): Promise<any> {
   const {
     tenantId,
-    targetSlot,
     currentStep,
     currentIndex,
     workingState,
@@ -241,16 +140,44 @@ async function returnSmsConsentRetry(params: {
     persistVoiceState,
   } = params;
 
-  const retryPrompt = buildCurrentStepRetryPrompt({
-    currentStep,
-    locale: bookingContext.currentLocale,
-  });
-
-  const retryState: CallState = {
+  const draftRetryState: CallState = {
     ...workingState,
     bookingStepIndex: currentIndex,
     pendingBookingStepKey: clean(currentStep.step_key),
     pendingBookingStepRequired: currentStep.required !== false,
+  };
+
+  const bookingState = buildRealtimeBookingState({
+    steps,
+    state: draftRetryState,
+    explicitCurrentIndex: currentIndex,
+  });
+
+  const nextStepResult = buildRealtimeNextRequiredStep({
+    steps,
+    bookingState,
+    locale: bookingContext.currentLocale,
+  });
+
+  if (!nextStepResult.ok) {
+    return {
+      ok: false,
+      error: nextStepResult.error,
+      step_key: nextStepResult.step_key,
+      slot: nextStepResult.slot,
+      prompt_error: nextStepResult.prompt_error,
+      retry_prompt_error: nextStepResult.retry_prompt_error,
+      message: "BOOKING_FLOW_CONFIGURATION_INVALID",
+      booking_state: bookingState,
+      next_required_step: null,
+    };
+  }
+
+  const baseNextStep = nextStepResult.next_required_step;
+  const retryPrompt = clean(baseNextStep?.retry_prompt || baseNextStep?.prompt || "");
+
+  const retryState: CallState = {
+    ...draftRetryState,
     pendingBookingStepPrompt: retryPrompt,
   };
 
@@ -263,25 +190,27 @@ async function returnSmsConsentRetry(params: {
     locale: bookingContext.currentLocale,
   });
 
-  const bookingState = buildRealtimeBookingState({
+  const persistedBookingState = buildRealtimeBookingState({
     steps,
     state: retryState,
     explicitCurrentIndex: currentIndex,
   });
 
+  const nextRequiredStep = baseNextStep
+    ? {
+        ...baseNextStep,
+        prompt: retryPrompt,
+        retry_prompt: retryPrompt,
+      }
+    : null;
+
   return {
     ok: false,
     error: "UNRESOLVED_BOOKING_SMS_CONSENT",
-    message:
-      "The caller's SMS consent answer could not be resolved from the configured booking step.",
+    message: retryPrompt,
     assistant_prompt: retryPrompt,
-    booking_state: bookingState,
-    next_required_step: mapCurrentStepAsNextRequiredStep({
-      currentStep,
-      targetSlot,
-      locale: bookingContext.currentLocale,
-      overridePrompt: retryPrompt,
-    }),
+    booking_state: persistedBookingState,
+    next_required_step: nextRequiredStep,
   };
 }
 
@@ -316,7 +245,6 @@ export async function handlePostBookingSmsConsentStep(
   if (!consentResolution.ok) {
     return await returnSmsConsentRetry({
       tenantId,
-      targetSlot,
       currentStep,
       currentIndex,
       workingState,

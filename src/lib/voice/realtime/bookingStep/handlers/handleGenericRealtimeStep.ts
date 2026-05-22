@@ -9,20 +9,7 @@ import {
   type BookingState,
 } from "../../realtimeBookingFlowUtils";
 import { resolveExpectedTypeStepValue } from "../../bookingStepValueValidators";
-import { buildInvalidExpectedTypeResult } from "../../handlers/bookingStepToolResults";
-
-type RealtimeMappedStep = {
-  step_key: string;
-  step_order: number;
-  slot: string;
-  prompt: string;
-  expected_type: string;
-  required: boolean;
-  retry_prompt: string;
-  validation_config: Record<string, unknown> | null;
-  prompt_translations: Record<string, unknown> | null;
-  retry_prompt_translations: Record<string, unknown> | null;
-};
+import { buildRealtimeNextRequiredStep } from "../buildRealtimeNextRequiredStep";
 
 export type HandleGenericRealtimeStepResult =
   | {
@@ -33,6 +20,76 @@ export type HandleGenericRealtimeStepResult =
       kind: "continue";
       workingState: CallState;
     };
+
+function buildGenericStepRetryResult(params: {
+  error: string;
+  steps: BookingFlowStepLike[];
+  workingState: CallState;
+  currentIndex: number;
+  currentLocale: VoiceLocale;
+  buildRealtimeBookingState: (params: {
+    steps: BookingFlowStepLike[];
+    state: CallState;
+    explicitCurrentIndex?: number | null;
+    finalConfirmationGranted?: boolean;
+    readyToCreate?: boolean;
+  }) => BookingState;
+  overridePrompt?: string;
+}) {
+  const {
+    error,
+    steps,
+    workingState,
+    currentIndex,
+    currentLocale,
+    buildRealtimeBookingState,
+    overridePrompt,
+  } = params;
+
+  const bookingState = buildRealtimeBookingState({
+    steps,
+    state: workingState,
+    explicitCurrentIndex: currentIndex,
+  });
+
+  const nextStepResult = buildRealtimeNextRequiredStep({
+    steps,
+    bookingState,
+    locale: currentLocale,
+    overridePrompt: clean(overridePrompt),
+  });
+
+  if (!nextStepResult.ok) {
+    return {
+      ok: false,
+      error: nextStepResult.error,
+      step_key: nextStepResult.step_key,
+      slot: nextStepResult.slot,
+      prompt_error: nextStepResult.prompt_error,
+      retry_prompt_error: nextStepResult.retry_prompt_error,
+      message: "BOOKING_FLOW_CONFIGURATION_INVALID",
+      booking_state: bookingState,
+      next_required_step: null,
+    };
+  }
+
+  const nextRequiredStep = nextStepResult.next_required_step;
+  const prompt = clean(
+    nextRequiredStep?.prompt ||
+      nextRequiredStep?.retry_prompt ||
+      overridePrompt ||
+      ""
+  );
+
+  return {
+    ok: false,
+    error,
+    message: prompt,
+    assistant_prompt: prompt,
+    booking_state: bookingState,
+    next_required_step: nextRequiredStep,
+  };
+}
 
 export function handleGenericRealtimeStep(params: {
   currentStep: BookingFlowStepLike;
@@ -53,12 +110,6 @@ export function handleGenericRealtimeStep(params: {
     finalConfirmationGranted?: boolean;
     readyToCreate?: boolean;
   }) => BookingState;
-  buildNextRequiredStep: (params: {
-    steps: BookingFlowStepLike[];
-    bookingState: BookingState;
-    locale?: VoiceLocale;
-    overridePrompt?: string;
-  }) => RealtimeMappedStep | null;
 }): HandleGenericRealtimeStepResult {
   const {
     currentStep,
@@ -68,12 +119,10 @@ export function handleGenericRealtimeStep(params: {
     stepKey,
     resolvedInputValue,
     modelValue,
-    callerPhone,
     rawAnswers,
     workingState,
     steps,
     buildRealtimeBookingState,
-    buildNextRequiredStep,
   } = params;
 
   const expectedTypeResult = resolveExpectedTypeStepValue({
@@ -85,20 +134,19 @@ export function handleGenericRealtimeStep(params: {
   if (!expectedTypeResult.ok) {
     return {
       kind: "return",
-      result: buildInvalidExpectedTypeResult({
+      result: buildGenericStepRetryResult({
+        error: expectedTypeResult.error,
         steps,
         workingState,
         currentIndex,
         currentLocale,
         buildRealtimeBookingState,
-        buildNextRequiredStep,
-        error: expectedTypeResult.error,
-        message: clean(currentStep.retry_prompt || currentStep.prompt),
+        overridePrompt: clean(currentStep.retry_prompt || currentStep.prompt),
       }),
     };
   }
 
-  let resolvedStepValue = expectedTypeResult.value;
+  const resolvedStepValue = expectedTypeResult.value;
 
   const optionCandidates = extractStepOptionCandidates(currentStep);
   const hasConfiguredOptions = optionCandidates.length > 0;
@@ -111,48 +159,18 @@ export function handleGenericRealtimeStep(params: {
     );
 
     if (!resolvedToConfiguredOption) {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: workingState,
-        explicitCurrentIndex: currentIndex,
-      });
-
       return {
         kind: "return",
-        result: {
-          ok: false,
+        result: buildGenericStepRetryResult({
           error: "UNRESOLVED_STEP_OPTION",
-          message:
-            "The requested value could not be resolved to a configured canonical option.",
-          booking_state: bookingState,
-          next_required_step: buildNextRequiredStep({
-            steps,
-            bookingState,
-            locale: currentLocale,
-          }),
-        },
+          steps,
+          workingState,
+          currentIndex,
+          currentLocale,
+          buildRealtimeBookingState,
+          overridePrompt: clean(currentStep.retry_prompt || currentStep.prompt),
+        }),
       };
-    }
-  }
-
-  const validationMode = clean(currentStep.validation_config?.mode);
-  const useInboundCaller =
-    currentStep.validation_config?.use_inbound_caller === true;
-
-  if (
-    targetSlot === "customer_phone" &&
-    validationMode === "confirm_or_replace" &&
-    useInboundCaller
-  ) {
-    const existingPhone =
-      clean(rawAnswers.customer_phone) || clean(callerPhone);
-
-    const digitsOnly = clean(resolvedInputValue).replace(/\D+/g, "");
-
-    if (digitsOnly.length >= 7) {
-      resolvedStepValue = clean(resolvedInputValue);
-    } else if (existingPhone) {
-      resolvedStepValue = existingPhone;
     }
   }
 

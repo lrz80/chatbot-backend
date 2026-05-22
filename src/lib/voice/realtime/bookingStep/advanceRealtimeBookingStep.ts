@@ -7,20 +7,10 @@ import {
   type BookingFlowStepLike,
   type BookingState,
 } from "../realtimeBookingFlowUtils";
-import { buildRealtimeNextRequiredStep } from "./buildRealtimeNextRequiredStep";
-
-type RealtimeMappedStep = {
-  step_key: string;
-  step_order: number;
-  slot: string;
-  prompt: string;
-  expected_type: string;
-  required: boolean;
-  retry_prompt: string;
-  validation_config: Record<string, unknown> | null;
-  prompt_translations: Record<string, unknown> | null;
-  retry_prompt_translations: Record<string, unknown> | null;
-};
+import {
+  buildRealtimeNextRequiredStep,
+  type RealtimeMappedStep,
+} from "./buildRealtimeNextRequiredStep";
 
 type AdvanceRealtimeBookingStepParams = {
   tenantId: string;
@@ -38,12 +28,6 @@ type AdvanceRealtimeBookingStepParams = {
     finalConfirmationGranted?: boolean;
     readyToCreate?: boolean;
   }) => BookingState;
-  buildNextRequiredStep: (params: {
-    steps: BookingFlowStepLike[];
-    bookingState: BookingState;
-    locale?: VoiceLocale;
-    overridePrompt?: string;
-  }) => RealtimeMappedStep | null;
   persistVoiceState: (params: {
     tenantId: string;
     callSid: string;
@@ -52,16 +36,32 @@ type AdvanceRealtimeBookingStepParams = {
   }) => Promise<void>;
 };
 
+export type AdvanceRealtimeBookingStepResult =
+  | {
+      ok: true;
+      advancedState: CallState;
+      booking_state: BookingState;
+      next_required_step: RealtimeMappedStep | null;
+      assistant_prompt: string;
+      action_required: "awaiting_confirmation" | null;
+    }
+  | {
+      ok: false;
+      error: "BOOKING_STEP_TEMPLATE_INVALID";
+      advancedState: CallState;
+      booking_state: BookingState;
+      next_required_step: null;
+      assistant_prompt: "";
+      action_required: null;
+      step_key: string;
+      slot: string;
+      prompt_error: string;
+      retry_prompt_error: string;
+    };
+
 export async function advanceRealtimeBookingStep(
   params: AdvanceRealtimeBookingStepParams
-): Promise<{
-  ok: true;
-  advancedState: CallState;
-  booking_state: BookingState;
-  next_required_step: RealtimeMappedStep | null;
-  assistant_prompt: string;
-  action_required: "awaiting_confirmation" | null;
-}> {
+): Promise<AdvanceRealtimeBookingStepResult> {
   const {
     tenantId,
     callerPhone,
@@ -71,7 +71,6 @@ export async function advanceRealtimeBookingStep(
     currentIndex,
     workingState,
     buildRealtimeBookingState,
-    buildNextRequiredStep,
     persistVoiceState,
   } = params;
 
@@ -81,13 +80,6 @@ export async function advanceRealtimeBookingStep(
     ...workingState,
     bookingStepIndex: typeof nextIndex === "number" ? nextIndex : undefined,
   };
-
-  await persistVoiceState({
-    tenantId,
-    callSid,
-    state: advancedState,
-    locale: currentLocale,
-  });
 
   const isFlowComplete = nextIndex === null;
 
@@ -117,7 +109,10 @@ export async function advanceRealtimeBookingStep(
       });
 
   const nextRequiredStepResult = isFlowComplete
-    ? { ok: true as const, next_required_step: null }
+    ? {
+        ok: true as const,
+        next_required_step: null,
+      }
     : buildRealtimeNextRequiredStep({
         steps,
         bookingState,
@@ -126,18 +121,28 @@ export async function advanceRealtimeBookingStep(
 
   if (!nextRequiredStepResult.ok) {
     return {
-      ok: true,
+      ok: false,
+      error: nextRequiredStepResult.error,
       advancedState,
       booking_state: bookingState,
       next_required_step: null,
       assistant_prompt: "",
       action_required: null,
-      error: nextRequiredStepResult.error,
-    } as any;
+      step_key: nextRequiredStepResult.step_key,
+      slot: nextRequiredStepResult.slot,
+      prompt_error: String(nextRequiredStepResult.prompt_error),
+      retry_prompt_error: String(nextRequiredStepResult.retry_prompt_error),
+    };
   }
 
-  const nextRequiredStep = nextRequiredStepResult.next_required_step;
+  await persistVoiceState({
+    tenantId,
+    callSid,
+    state: advancedState,
+    locale: currentLocale,
+  });
 
+  const nextRequiredStep = nextRequiredStepResult.next_required_step;
   const nextStepKey = clean(nextRequiredStep?.step_key || "");
 
   return {

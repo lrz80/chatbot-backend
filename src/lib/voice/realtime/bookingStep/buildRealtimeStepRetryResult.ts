@@ -5,19 +5,10 @@ import {
   type BookingFlowStepLike,
   type BookingState,
 } from "../realtimeBookingFlowUtils";
-
-type RealtimeMappedStep = {
-  step_key: string;
-  step_order: number;
-  slot: string;
-  prompt: string;
-  expected_type: string;
-  required: boolean;
-  retry_prompt: string;
-  validation_config: Record<string, unknown> | null;
-  prompt_translations: Record<string, unknown> | null;
-  retry_prompt_translations: Record<string, unknown> | null;
-};
+import {
+  buildRealtimeNextRequiredStep,
+  type RealtimeMappedStep,
+} from "./buildRealtimeNextRequiredStep";
 
 type BuildRealtimeStepRetryResultParams = {
   error: string;
@@ -26,34 +17,69 @@ type BuildRealtimeStepRetryResultParams = {
   currentLocale: VoiceLocale;
   steps: BookingFlowStepLike[];
   bookingState: BookingState;
-  buildNextRequiredStep: (params: {
-    steps: BookingFlowStepLike[];
-    bookingState: BookingState;
-    locale?: VoiceLocale;
-    overridePrompt?: string;
-  }) => RealtimeMappedStep | null;
 };
+
+export type BuildRealtimeStepRetryResult =
+  | {
+      ok: false;
+      error: string;
+      message: string;
+      assistant_prompt: string;
+      booking_state: BookingState;
+      next_required_step: RealtimeMappedStep | null;
+    }
+  | {
+      ok: false;
+      error: "BOOKING_STEP_TEMPLATE_INVALID";
+      message: "BOOKING_FLOW_CONFIGURATION_INVALID";
+      assistant_prompt: "";
+      booking_state: BookingState;
+      next_required_step: null;
+      step_key: string;
+      slot: string;
+      prompt_error: string;
+      retry_prompt_error: string;
+    };
 
 export function buildRealtimeStepRetryResult(
   params: BuildRealtimeStepRetryResultParams
-): {
-  ok: false;
-  error: string;
-  message: string;
-  assistant_prompt: string;
-  booking_state: BookingState;
-  next_required_step: RealtimeMappedStep | null;
-} {
-  const {
-    error,
-    currentStep,
-    currentLocale,
+): BuildRealtimeStepRetryResult {
+  const { error, currentLocale, steps, bookingState } = params;
+
+  const nextStepResult = buildRealtimeNextRequiredStep({
     steps,
     bookingState,
-    buildNextRequiredStep,
-  } = params;
+    locale: currentLocale,
+  });
 
-  const retryPrompt = clean(currentStep.retry_prompt || currentStep.prompt);
+  if (!nextStepResult.ok) {
+    return {
+      ok: false,
+      error: nextStepResult.error,
+      message: "BOOKING_FLOW_CONFIGURATION_INVALID",
+      assistant_prompt: "",
+      booking_state: bookingState,
+      next_required_step: null,
+      step_key: nextStepResult.step_key,
+      slot: nextStepResult.slot,
+      prompt_error: String(nextStepResult.prompt_error),
+      retry_prompt_error: String(nextStepResult.retry_prompt_error),
+    };
+  }
+
+  const nextRequiredStep = nextStepResult.next_required_step;
+
+  const retryPrompt = clean(
+    nextRequiredStep?.retry_prompt || nextRequiredStep?.prompt || ""
+  );
+
+  const retryStep = nextRequiredStep
+    ? {
+        ...nextRequiredStep,
+        prompt: retryPrompt,
+        retry_prompt: retryPrompt,
+      }
+    : null;
 
   return {
     ok: false,
@@ -61,11 +87,6 @@ export function buildRealtimeStepRetryResult(
     message: retryPrompt,
     assistant_prompt: retryPrompt,
     booking_state: bookingState,
-    next_required_step: buildNextRequiredStep({
-      steps,
-      bookingState,
-      locale: currentLocale,
-      overridePrompt: retryPrompt,
-    }),
+    next_required_step: retryStep,
   };
 }

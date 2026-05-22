@@ -273,7 +273,6 @@ export async function executeRealtimeTool(
         bookingContext,
         steps,
         buildRealtimeBookingState,
-        buildNextRequiredStep: buildNextRequiredStepOrThrow,
         persistVoiceState,
       });
     }

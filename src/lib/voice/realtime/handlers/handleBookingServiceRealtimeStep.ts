@@ -1,25 +1,12 @@
-//src/lib/voice/realtime/handlers/handleBookingServiceRealtimeStep.ts
+// src/lib/voice/realtime/handlers/handleBookingServiceRealtimeStep.ts
 import type { CallState, VoiceLocale } from "../../types";
 import { executeCanonicalBookingServiceStep } from "../../booking/handleBookingServiceStep";
 import {
-  clean,
   buildCanonicalCallState,
   type BookingFlowStepLike,
   type BookingState,
 } from "../realtimeBookingFlowUtils";
-
-type RealtimeMappedStep = {
-  step_key: string;
-  step_order: number;
-  slot: string;
-  prompt: string;
-  expected_type: string;
-  required: boolean;
-  retry_prompt: string;
-  validation_config: Record<string, unknown> | null;
-  prompt_translations: Record<string, unknown> | null;
-  retry_prompt_translations: Record<string, unknown> | null;
-};
+import { buildRealtimeNextRequiredStep } from "../bookingStep/buildRealtimeNextRequiredStep";
 
 type HandleBookingServiceRealtimeStepParams = {
   callerPhone: string | null;
@@ -40,12 +27,6 @@ type HandleBookingServiceRealtimeStepParams = {
     finalConfirmationGranted?: boolean;
     readyToCreate?: boolean;
   }) => BookingState;
-  buildNextRequiredStep: (params: {
-    steps: BookingFlowStepLike[];
-    bookingState: BookingState;
-    locale?: VoiceLocale;
-    overridePrompt?: string;
-  }) => RealtimeMappedStep | null;
 };
 
 type HandleBookingServiceRealtimeStepResult =
@@ -74,7 +55,6 @@ export async function handleBookingServiceRealtimeStep(
     rawConfig,
     steps,
     buildRealtimeBookingState,
-    buildNextRequiredStep,
   } = params;
 
   const serviceResult = await executeCanonicalBookingServiceStep({
@@ -93,6 +73,30 @@ export async function handleBookingServiceRealtimeStep(
       explicitCurrentIndex: currentIndex,
     });
 
+    const nextStepResult = buildRealtimeNextRequiredStep({
+      steps,
+      bookingState,
+      locale: currentLocale,
+      overridePrompt: serviceResult.prompt,
+    });
+
+    if (!nextStepResult.ok) {
+      return {
+        kind: "return",
+        result: {
+          ok: false,
+          error: nextStepResult.error,
+          step_key: nextStepResult.step_key,
+          slot: nextStepResult.slot,
+          prompt_error: nextStepResult.prompt_error,
+          retry_prompt_error: nextStepResult.retry_prompt_error,
+          message: "BOOKING_FLOW_CONFIGURATION_INVALID",
+          booking_state: bookingState,
+          next_required_step: null,
+        },
+      };
+    }
+
     return {
       kind: "return",
       result: {
@@ -104,12 +108,7 @@ export async function handleBookingServiceRealtimeStep(
         message: serviceResult.prompt,
         assistant_prompt: serviceResult.prompt,
         booking_state: bookingState,
-        next_required_step: buildNextRequiredStep({
-          steps,
-          bookingState,
-          locale: currentLocale,
-          overridePrompt: serviceResult.prompt,
-        }),
+        next_required_step: nextStepResult.next_required_step,
         service_options:
           serviceResult.kind === "ambiguous" ? serviceResult.options : [],
       },

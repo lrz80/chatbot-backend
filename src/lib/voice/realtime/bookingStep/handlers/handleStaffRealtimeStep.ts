@@ -8,19 +8,7 @@ import {
   type BookingState,
 } from "../../realtimeBookingFlowUtils";
 import { resolveSquareStaffMemberForTenant } from "../../../../integrations/square/resolveSquareStaffMemberForTenant";
-
-type RealtimeMappedStep = {
-  step_key: string;
-  step_order: number;
-  slot: string;
-  prompt: string;
-  expected_type: string;
-  required: boolean;
-  retry_prompt: string;
-  validation_config: Record<string, unknown> | null;
-  prompt_translations: Record<string, unknown> | null;
-  retry_prompt_translations: Record<string, unknown> | null;
-};
+import { buildRealtimeNextRequiredStep } from "../buildRealtimeNextRequiredStep";
 
 export type HandleStaffRealtimeStepResult =
   | {
@@ -84,12 +72,6 @@ export async function handleStaffRealtimeStep(params: {
     finalConfirmationGranted?: boolean;
     readyToCreate?: boolean;
   }) => BookingState;
-  buildNextRequiredStep: (params: {
-    steps: BookingFlowStepLike[];
-    bookingState: BookingState;
-    locale?: VoiceLocale;
-    overridePrompt?: string;
-  }) => RealtimeMappedStep | null;
 }): Promise<HandleStaffRealtimeStepResult> {
   const {
     tenantId,
@@ -105,7 +87,6 @@ export async function handleStaffRealtimeStep(params: {
     workingState,
     steps,
     buildRealtimeBookingState,
-    buildNextRequiredStep,
   } = params;
 
   const validationConfig = getValidationConfig(currentStep);
@@ -177,6 +158,40 @@ export async function handleStaffRealtimeStep(params: {
     explicitCurrentIndex: currentIndex,
   });
 
+  const retryPrompt = clean(currentStep.retry_prompt || currentStep.prompt);
+
+  const nextStepResult = buildRealtimeNextRequiredStep({
+    steps,
+    bookingState,
+    locale: currentLocale,
+    overridePrompt: retryPrompt,
+  });
+
+  if (!nextStepResult.ok) {
+    return {
+      kind: "return",
+      result: {
+        ok: false,
+        error: nextStepResult.error,
+        step_key: nextStepResult.step_key,
+        slot: nextStepResult.slot,
+        prompt_error: nextStepResult.prompt_error,
+        retry_prompt_error: nextStepResult.retry_prompt_error,
+        message: "BOOKING_FLOW_CONFIGURATION_INVALID",
+        booking_state: bookingState,
+        next_required_step: null,
+      },
+    };
+  }
+
+  const nextRequiredStep = nextStepResult.next_required_step
+    ? {
+        ...nextStepResult.next_required_step,
+        prompt: retryPrompt,
+        retry_prompt: retryPrompt,
+      }
+    : null;
+
   return {
     kind: "return",
     result: {
@@ -190,20 +205,10 @@ export async function handleStaffRealtimeStep(params: {
           ? lastStaffResult.candidates || []
           : [],
       tried_staff_inputs: staffInputCandidates,
-      assistant_prompt: [
-        "Use only the tool result as source of truth.",
-        "The staff preference could not be resolved to one clear bookable staff member.",
-        "Ask the caller to choose from the available staff candidates if candidates are present.",
-        "If no candidates are present, ask the configured staff question again naturally.",
-        "Do not invent staff names.",
-      ].join(" "),
+      message: retryPrompt,
+      assistant_prompt: retryPrompt,
       booking_state: bookingState,
-      next_required_step: buildNextRequiredStep({
-        steps,
-        bookingState,
-        locale: currentLocale,
-        overridePrompt: clean(currentStep.retry_prompt || currentStep.prompt),
-      }),
+      next_required_step: nextRequiredStep,
     },
   };
 }
