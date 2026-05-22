@@ -14,6 +14,7 @@ import { handleRealtimeToolError } from "./toolErrors/handleRealtimeToolError";
 import { guardTenantReady } from "./toolGuards/guardTenantReady";
 import { handleBlockedSubmitBookingStep } from "./toolGuards/handleBlockedSubmitBookingStep";
 import { applyBookingRuntimeStateAfterToolResult } from "./bookingRuntimeState";
+import { selectSubmitBookingStepValue } from "./toolArgs/selectSubmitBookingStepValue";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -289,20 +290,19 @@ export async function handleRealtimeToolCall(
   });
 
   if (toolName === "submit_booking_step") {
-    const modelValue = clean(toolArgs.value || "");
-    const transcriptValue = clean(lastUserTranscript || "");
+    const valueSelection = selectSubmitBookingStepValue({
+      modelValue: toolArgs.value,
+      transcriptValue: lastUserTranscript,
+    });
 
-    effectiveToolArgs.model_value = modelValue;
-    effectiveToolArgs.transcript_value = transcriptValue;
+    effectiveToolArgs.value = valueSelection.value;
+    effectiveToolArgs.value_source = valueSelection.valueSource;
 
-    /**
-     * Do not choose between model/transcript here.
-     * This handler only passes evidence forward.
-     * The canonical resolver decides whether model_value, transcript_value,
-     * callerPhone, or an internal token is valid for the current step.
-     */
-    effectiveToolArgs.value = modelValue;
-    effectiveToolArgs.value_source = "model_raw";
+    effectiveToolArgs.model_value = valueSelection.modelValue;
+    effectiveToolArgs.transcript_value = valueSelection.transcriptValue;
+
+    effectiveToolArgs.has_transcript = valueSelection.hasTranscript;
+    effectiveToolArgs.model_matches_transcript = valueSelection.modelMatchesTranscript;
   }
 
   if (toolName === "submit_booking_step") {
@@ -313,6 +313,12 @@ export async function handleRealtimeToolCall(
       transcript_value: clean(effectiveToolArgs.transcript_value || ""),
       forwarded_value: clean(effectiveToolArgs.value || ""),
       value_source: effectiveToolArgs.value_source,
+      has_transcript: Boolean(effectiveToolArgs.has_transcript),
+      model_matches_transcript: Boolean(effectiveToolArgs.model_matches_transcript),
+      lastUserTranscriptSeq:
+        typeof realtimeState.lastUserTranscriptSeq === "number"
+          ? realtimeState.lastUserTranscriptSeq
+          : null,
     });
   }
 
