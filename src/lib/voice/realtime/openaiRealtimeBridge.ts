@@ -464,6 +464,21 @@ export async function createOpenAiRealtimeBridge({
 
         bookingFlowLoaded = toolCallResult.bookingFlowLoaded;
 
+        console.log("[VOICE_REALTIME][BRIDGE_STATE_AFTER_TOOL]", {
+          callSid,
+          toolName: event?.name || "",
+          bookingFlowLoaded,
+          pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
+          pendingBookingStepPromptAnchorTranscript:
+            realtimeState.pendingBookingStepPromptAnchorTranscript || "",
+          pendingBookingStepPromptAnchorSeq:
+            typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
+              ? realtimeState.pendingBookingStepPromptAnchorSeq
+              : null,
+          lastUserTranscript,
+          lastUserTranscriptSeq,
+        });
+
         if (toolCallResult.hangupRequestedByTool) {
           hangupRequestedByTool = true;
         }
