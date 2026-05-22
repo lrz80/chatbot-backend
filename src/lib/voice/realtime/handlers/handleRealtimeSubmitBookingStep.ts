@@ -42,6 +42,89 @@ type HandleRealtimeSubmitBookingStepParams = {
   }) => Promise<void>;
 };
 
+type SubmitValueCandidate = {
+  source: string;
+  value: string;
+};
+
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function buildSubmitValueCandidates(args: Record<string, any>): SubmitValueCandidate[] {
+  const rawCandidates = Array.isArray(args.value_candidates)
+    ? args.value_candidates
+    : [];
+
+  const candidatesFromArgs = rawCandidates
+    .map((candidate: any) => {
+      const source = clean(candidate?.source) || "unknown";
+      const value = clean(candidate?.value);
+
+      if (!value) return null;
+
+      return {
+        source,
+        value,
+      };
+    })
+    .filter(Boolean) as SubmitValueCandidate[];
+
+  const legacyValue = clean(args.value);
+
+  const candidates: SubmitValueCandidate[] =
+    candidatesFromArgs.length > 0
+      ? candidatesFromArgs
+      : legacyValue
+      ? [
+          {
+            source: "legacy",
+            value: legacyValue,
+          },
+        ]
+      : [];
+
+  const seen = new Set<string>();
+
+  return candidates.filter((candidate) => {
+    const key = `${candidate.source}:${candidate.value}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildArgsForCandidate(params: {
+  args: Record<string, any>;
+  candidate: SubmitValueCandidate;
+}): Record<string, any> {
+  return {
+    ...params.args,
+    value: params.candidate.value,
+    resolved_candidate_source: params.candidate.source,
+  };
+}
+
+function shouldTryNextCandidate(result: any): boolean {
+  if (!result) return true;
+
+  /**
+   * If the route explicitly succeeded, stop.
+   */
+  if (result.ok === true) return false;
+
+  /**
+   * If the route failed while resolving/validating the submitted value,
+   * another candidate may still resolve through the official step resolver.
+   *
+   * This is not semantic hardcode. It does not inspect phrases, languages,
+   * tenants, services, staff names, or business rules.
+   */
+  if (result.ok === false) return true;
+
+  return false;
+}
+
 export async function handleRealtimeSubmitBookingStep(
   params: HandleRealtimeSubmitBookingStepParams
 ): Promise<any> {
@@ -55,7 +138,9 @@ export async function handleRealtimeSubmitBookingStep(
     persistVoiceState,
   } = params;
 
-  const prepared = prepareRealtimeStepSubmission({
+  const candidates = buildSubmitValueCandidates(args);
+
+  const fallbackPrepared = prepareRealtimeStepSubmission({
     callerPhone,
     args,
     bookingContext,
@@ -63,86 +148,176 @@ export async function handleRealtimeSubmitBookingStep(
     buildRealtimeBookingState,
   });
 
-  if (!prepared.ok) {
+  if (!fallbackPrepared.ok) {
     if (
-      prepared.result?.ok === false &&
-      prepared.result?.currentStep &&
-      typeof prepared.result?.currentIndex === "number"
+      fallbackPrepared.result?.ok === false &&
+      fallbackPrepared.result?.currentStep &&
+      typeof fallbackPrepared.result?.currentIndex === "number"
     ) {
       const bookingState = buildRealtimeBookingState({
         steps,
         state: bookingContext.state,
-        explicitCurrentIndex: prepared.result.currentIndex,
+        explicitCurrentIndex: fallbackPrepared.result.currentIndex,
       });
 
       return buildRealtimeStepRetryResult({
-        error: prepared.result.error,
-        currentStep: prepared.result.currentStep,
-        currentIndex: prepared.result.currentIndex,
+        error: fallbackPrepared.result.error,
+        currentStep: fallbackPrepared.result.currentStep,
+        currentIndex: fallbackPrepared.result.currentIndex,
         currentLocale: bookingContext.currentLocale,
         steps,
         bookingState,
       });
     }
 
-    return prepared.result;
+    return fallbackPrepared.result;
   }
 
-  const routeResult = await executeRealtimeStepRoute({
-    tenantId,
-    callerPhone,
-    bookingContext,
-    steps,
-    currentStep: prepared.currentStep,
-    currentIndex: prepared.currentIndex,
-    targetSlot: prepared.targetSlot,
-    stepKey: prepared.stepKey,
-    resolvedInputValue: prepared.resolvedInputValue,
-    rawTranscriptValue: prepared.rawTranscriptValue,
-    modelValue: prepared.modelValue,
-    sanitizedArgs: prepared.sanitizedArgs,
-    buildRealtimeBookingState,
-    persistVoiceState,
-  });
+  const candidatesToTry =
+    candidates.length > 0
+      ? candidates
+      : [
+          {
+            source: "prepared",
+            value: fallbackPrepared.resolvedInputValue,
+          },
+        ];
 
-  if (routeResult.kind === "return") {
-    return routeResult.result;
-  }
+  let lastReturnResult: any = null;
 
-  const advanced = await advanceRealtimeBookingStep({
-    tenantId,
-    callerPhone,
-    callSid: bookingContext.callSid,
-    currentLocale: bookingContext.currentLocale,
-    steps,
-    currentIndex: prepared.currentIndex,
-    workingState: routeResult.workingState,
-    bookingContextState: bookingContext.state,
-    buildRealtimeBookingState,
-    persistVoiceState,
-  });
+  for (const candidate of candidatesToTry) {
+    const candidateArgs = buildArgsForCandidate({
+      args,
+      candidate,
+    });
 
-  if (!advanced.ok) {
+    const prepared = prepareRealtimeStepSubmission({
+      callerPhone,
+      args: candidateArgs,
+      bookingContext,
+      steps,
+      buildRealtimeBookingState,
+    });
+
+    if (!prepared.ok) {
+      lastReturnResult = prepared.result;
+      continue;
+    }
+
+    const routeResult = await executeRealtimeStepRoute({
+      tenantId,
+      callerPhone,
+      bookingContext,
+      steps,
+      currentStep: prepared.currentStep,
+      currentIndex: prepared.currentIndex,
+      targetSlot: prepared.targetSlot,
+      stepKey: prepared.stepKey,
+      resolvedInputValue: prepared.resolvedInputValue,
+      rawTranscriptValue: prepared.rawTranscriptValue,
+      modelValue: prepared.modelValue,
+      sanitizedArgs: {
+        ...prepared.sanitizedArgs,
+        resolved_candidate_source: candidate.source,
+        value_candidates: candidatesToTry,
+      },
+      buildRealtimeBookingState,
+      persistVoiceState,
+    });
+
+    if (routeResult.kind === "return") {
+      lastReturnResult = routeResult.result;
+
+      if (shouldTryNextCandidate(routeResult.result)) {
+        continue;
+      }
+
+      return routeResult.result;
+    }
+
+    const advanced = await advanceRealtimeBookingStep({
+      tenantId,
+      callerPhone,
+      callSid: bookingContext.callSid,
+      currentLocale: bookingContext.currentLocale,
+      steps,
+      currentIndex: prepared.currentIndex,
+      workingState: routeResult.workingState,
+      bookingContextState: bookingContext.state,
+      buildRealtimeBookingState,
+      persistVoiceState,
+    });
+
+    if (!advanced.ok) {
+      return {
+        ok: false,
+        error: advanced.error,
+        step_key: advanced.step_key,
+        slot: advanced.slot,
+        prompt_error: advanced.prompt_error,
+        retry_prompt_error: advanced.retry_prompt_error,
+        message: "BOOKING_FLOW_CONFIGURATION_INVALID",
+        booking_state: advanced.booking_state,
+        next_required_step: null,
+      };
+    }
+
+    Object.assign(bookingContext.state, advanced.advancedState);
+
     return {
-      ok: false,
-      error: advanced.error,
-      step_key: advanced.step_key,
-      slot: advanced.slot,
-      prompt_error: advanced.prompt_error,
-      retry_prompt_error: advanced.retry_prompt_error,
-      message: "BOOKING_FLOW_CONFIGURATION_INVALID",
+      ok: true,
       booking_state: advanced.booking_state,
-      next_required_step: null,
+      next_required_step: advanced.next_required_step,
+      assistant_prompt: advanced.assistant_prompt,
+      action_required: advanced.action_required,
+      resolved_candidate_source: candidate.source,
     };
   }
 
-  Object.assign(bookingContext.state, advanced.advancedState);
+  if (
+    lastReturnResult?.ok === false &&
+    lastReturnResult?.currentStep &&
+    typeof lastReturnResult?.currentIndex === "number"
+  ) {
+    const bookingState = buildRealtimeBookingState({
+      steps,
+      state: bookingContext.state,
+      explicitCurrentIndex: lastReturnResult.currentIndex,
+    });
 
-  return {
-    ok: true,
-    booking_state: advanced.booking_state,
-    next_required_step: advanced.next_required_step,
-    assistant_prompt: advanced.assistant_prompt,
-    action_required: advanced.action_required,
-  };
+    return buildRealtimeStepRetryResult({
+      error: lastReturnResult.error,
+      currentStep: lastReturnResult.currentStep,
+      currentIndex: lastReturnResult.currentIndex,
+      currentLocale: bookingContext.currentLocale,
+      steps,
+      bookingState,
+    });
+  }
+
+  return (
+    lastReturnResult || {
+      ok: false,
+      error: "UNRESOLVED_BOOKING_STEP_VALUE",
+      message:
+        "None of the submitted value candidates could be resolved by the configured booking step.",
+      booking_state: buildRealtimeBookingState({
+        steps,
+        state: bookingContext.state,
+        explicitCurrentIndex: fallbackPrepared.currentIndex,
+      }),
+      next_required_step: buildRealtimeStepRetryResult({
+        error: "UNRESOLVED_BOOKING_STEP_VALUE",
+        currentStep: fallbackPrepared.currentStep,
+        currentIndex: fallbackPrepared.currentIndex,
+        currentLocale: bookingContext.currentLocale,
+        steps,
+        bookingState: buildRealtimeBookingState({
+          steps,
+          state: bookingContext.state,
+          explicitCurrentIndex: fallbackPrepared.currentIndex,
+        }),
+      }).next_required_step,
+    }
+  );
 }

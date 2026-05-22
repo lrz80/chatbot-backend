@@ -14,7 +14,6 @@ import { handleRealtimeToolError } from "./toolErrors/handleRealtimeToolError";
 import { guardTenantReady } from "./toolGuards/guardTenantReady";
 import { handleBlockedSubmitBookingStep } from "./toolGuards/handleBlockedSubmitBookingStep";
 import { applyBookingRuntimeStateAfterToolResult } from "./bookingRuntimeState";
-import { selectSubmitBookingStepValue } from "./toolArgs/selectSubmitBookingStepValue";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -290,19 +289,28 @@ export async function handleRealtimeToolCall(
   });
 
   if (toolName === "submit_booking_step") {
-    const valueSelection = selectSubmitBookingStepValue({
-      modelValue: toolArgs.value,
-      transcriptValue: lastUserTranscript,
-    });
+    const modelValue = clean(toolArgs.value);
+    const transcriptValue = clean(lastUserTranscript);
 
-    effectiveToolArgs.value = valueSelection.value;
-    effectiveToolArgs.value_source = valueSelection.valueSource;
+    const candidates = [
+      modelValue
+        ? {
+            source: "model",
+            value: modelValue,
+          }
+        : null,
+      transcriptValue
+        ? {
+            source: "transcript",
+            value: transcriptValue,
+          }
+        : null,
+    ].filter(Boolean);
 
-    effectiveToolArgs.model_value = valueSelection.modelValue;
-    effectiveToolArgs.transcript_value = valueSelection.transcriptValue;
-
-    effectiveToolArgs.has_transcript = valueSelection.hasTranscript;
-    effectiveToolArgs.model_matches_transcript = valueSelection.modelMatchesTranscript;
+    effectiveToolArgs.value = modelValue || transcriptValue;
+    effectiveToolArgs.model_value = modelValue;
+    effectiveToolArgs.transcript_value = transcriptValue;
+    effectiveToolArgs.value_candidates = candidates;
   }
 
   if (toolName === "submit_booking_step") {
@@ -312,9 +320,7 @@ export async function handleRealtimeToolCall(
       model_value: clean(effectiveToolArgs.model_value || ""),
       transcript_value: clean(effectiveToolArgs.transcript_value || ""),
       forwarded_value: clean(effectiveToolArgs.value || ""),
-      value_source: effectiveToolArgs.value_source,
-      has_transcript: Boolean(effectiveToolArgs.has_transcript),
-      model_matches_transcript: Boolean(effectiveToolArgs.model_matches_transcript),
+      value_candidates: effectiveToolArgs.value_candidates || [],
       lastUserTranscriptSeq:
         typeof realtimeState.lastUserTranscriptSeq === "number"
           ? realtimeState.lastUserTranscriptSeq
