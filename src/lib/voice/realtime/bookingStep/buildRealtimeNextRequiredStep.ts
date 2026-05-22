@@ -91,6 +91,44 @@ function mapStepForRealtime(
   };
 }
 
+function buildDisplayTemplateAliases(
+  values: Record<string, unknown>
+): Record<string, string> {
+  const output: Record<string, string> = {};
+
+  for (const [key, rawValue] of Object.entries(values || {})) {
+    const value = clean(rawValue);
+
+    if (!key || !value) continue;
+
+    output[key] = value;
+    output[`${key}_display`] = value;
+  }
+
+  return output;
+}
+
+function buildRealtimeTemplateValues(
+  bookingState: BookingState
+): Record<string, string> {
+  const baseValues = buildBookingPromptTemplateValues(bookingState);
+  const displayValues = buildDisplayTemplateAliases(baseValues);
+
+  const datetimeValue =
+    clean(displayValues.datetime) ||
+    clean(displayValues.appointment_datetime) ||
+    clean(displayValues.start_time) ||
+    clean(displayValues.startTime);
+
+  if (datetimeValue) {
+    displayValues.datetime = displayValues.datetime || datetimeValue;
+    displayValues.datetime_display =
+      displayValues.datetime_display || datetimeValue;
+  }
+
+  return displayValues;
+}
+
 export function buildRealtimeNextRequiredStep(params: {
   steps: BookingFlowStepLike[];
   bookingState: BookingState;
@@ -119,7 +157,7 @@ export function buildRealtimeNextRequiredStep(params: {
   }
 
   const mapped = mapStepForRealtime(step, locale);
-  const templateValues = buildBookingPromptTemplateValues(bookingState);
+  const templateValues = buildRealtimeTemplateValues(bookingState);
 
   const requiresStrictTemplate =
     mapped.slot === "confirmation" ||
