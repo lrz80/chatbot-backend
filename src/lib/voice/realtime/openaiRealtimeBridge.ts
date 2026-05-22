@@ -9,6 +9,10 @@ import type { CallState } from "../types";
 import { handleRealtimeTranscriptEvent } from "./realtimeTranscriptHandler";
 import { handleRealtimeToolCall } from "./realtimeToolCallHandler";
 import { buildOpenAiRealtimeSessionUpdate } from "./buildOpenAiRealtimeSessionUpdate";
+import {
+  attachLatestUserTranscriptSeq,
+  mergeTranscriptStatePreservingBookingRuntime,
+} from "./bookingRuntimeState";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -456,7 +460,11 @@ export async function createOpenAiRealtimeBridge({
           return;
         }
 
-        realtimeState = toolCallResult.realtimeState;
+        realtimeState = attachLatestUserTranscriptSeq({
+          realtimeState: toolCallResult.realtimeState,
+          lastUserTranscriptSeq,
+        });
+
         bookingFlowLoaded = toolCallResult.bookingFlowLoaded;
 
         if (toolCallResult.hangupRequestedByTool) {
@@ -671,69 +679,11 @@ export async function createOpenAiRealtimeBridge({
           const currentToolState = realtimeState;
           const transcriptState = transcriptResult.realtimeState;
 
-          realtimeState = {
-            ...transcriptState,
-
+          realtimeState = mergeTranscriptStatePreservingBookingRuntime({
+            currentToolState,
+            transcriptState,
             lastUserTranscriptSeq,
-
-            /**
-             * Transcript/language refresh must not overwrite booking runtime state.
-             * Tool calls are the source of truth for booking progress.
-             */
-            bookingStepIndex:
-              typeof currentToolState.bookingStepIndex === "number"
-                ? currentToolState.bookingStepIndex
-                : transcriptState.bookingStepIndex,
-
-            bookingData:
-              Object.keys(currentToolState.bookingData || {}).length > 0
-                ? currentToolState.bookingData
-                : transcriptState.bookingData,
-
-            pendingBookingStepKey:
-              currentToolState.pendingBookingStepKey ??
-              transcriptState.pendingBookingStepKey,
-
-            pendingBookingStepRequired:
-              currentToolState.pendingBookingStepRequired ??
-              transcriptState.pendingBookingStepRequired,
-
-            pendingBookingStepPrompt:
-              currentToolState.pendingBookingStepPrompt ??
-              transcriptState.pendingBookingStepPrompt,
-
-            pendingBookingStepPromptAnchorTranscript:
-              currentToolState.pendingBookingStepPromptAnchorTranscript ??
-              transcriptState.pendingBookingStepPromptAnchorTranscript,
-
-            lastSubmittedBookingStepKey:
-              currentToolState.lastSubmittedBookingStepKey ??
-              transcriptState.lastSubmittedBookingStepKey,
-
-            lastSubmittedBookingTranscript:
-              currentToolState.lastSubmittedBookingTranscript ??
-              transcriptState.lastSubmittedBookingTranscript,
-
-            pendingActionGranted:
-              currentToolState.pendingActionGranted ??
-              transcriptState.pendingActionGranted,
-
-            pendingActionAnswered:
-              currentToolState.pendingActionAnswered ??
-              transcriptState.pendingActionAnswered,
-
-            pendingActionToolName:
-              currentToolState.pendingActionToolName ??
-              transcriptState.pendingActionToolName,
-
-            awaitingPostBookingClosure:
-              currentToolState.awaitingPostBookingClosure ??
-              transcriptState.awaitingPostBookingClosure,
-
-            postBookingClosureTranscript:
-              currentToolState.postBookingClosureTranscript ??
-              transcriptState.postBookingClosureTranscript,
-          };
+          });
 
           realtimeTenant = transcriptResult.realtimeTenant ?? realtimeTenant;
           realtimeCfg = transcriptResult.realtimeCfg ?? realtimeCfg;

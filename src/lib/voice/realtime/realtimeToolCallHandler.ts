@@ -13,7 +13,7 @@ import { guardSubmitBookingStepFlowLoaded } from "./toolGuards/guardSubmitBookin
 import { handleRealtimeToolError } from "./toolErrors/handleRealtimeToolError";
 import { guardTenantReady } from "./toolGuards/guardTenantReady";
 import { handleBlockedSubmitBookingStep } from "./toolGuards/handleBlockedSubmitBookingStep";
-import { selectSubmitBookingStepValue } from "./toolArgs/selectSubmitBookingStepValue";
+import { applyBookingRuntimeStateAfterToolResult } from "./bookingRuntimeState";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -335,12 +335,20 @@ export async function handleRealtimeToolCall(
     const nextBookingFlowLoaded =
       toolName === "get_booking_flow" && toolResult?.ok ? true : bookingFlowLoaded;
 
-    const nextRealtimeState = buildNextRealtimeStateFromToolResult({
+    const baseNextRealtimeState = buildNextRealtimeStateFromToolResult({
       realtimeState,
       toolName,
       toolResult,
       effectiveToolArgs,
       currentLocale,
+      lastUserTranscript,
+    });
+
+    const nextRealtimeState = applyBookingRuntimeStateAfterToolResult({
+      realtimeState: baseNextRealtimeState,
+      toolName,
+      toolResult,
+      effectiveToolArgs,
       lastUserTranscript,
     });
 
