@@ -108,50 +108,42 @@ export function guardRealtimeEndCall(params: {
 }): RealtimeEndCallGuardResult {
   const { callSid, realtimeState, lastUserTranscript } = params;
 
-  const awaitingPostBookingClosure =
-    (realtimeState as any)?.awaitingPostBookingClosure === true;
-
-  const postBookingClosureTranscript = clean(
-    (realtimeState as any)?.postBookingClosureTranscript || ""
-  );
-
-  const currentTranscript = clean(lastUserTranscript || "");
-
-  const isImmediatePostSmsHangup =
-    awaitingPostBookingClosure &&
-    postBookingClosureTranscript &&
-    postBookingClosureTranscript === currentTranscript;
-
-  if (isImmediatePostSmsHangup) {
-    return {
-      ok: false,
-      error: "POST_BOOKING_CLOSURE_ANSWER_REQUIRED",
-      message:
-        "The caller has not answered whether they need anything else after the booking SMS.",
-      logEvent: "END_CALL_BLOCKED_WAITING_POST_SMS_REPLY",
-      logPayload: {
-        callSid,
-        postBookingClosureTranscript,
-        currentTranscript,
-      },
-      responseSource: "tool_guard:end_call_waiting_post_sms_reply",
-      responseInstructions: [
-        "Use only the tool result as source of truth.",
-        "Do not end the call yet.",
-        "The booking SMS was sent, but the caller has not answered whether they need anything else.",
-        "Ask briefly if the caller needs anything else.",
-        "Ask only one question and wait for the caller answer.",
-      ].join(" "),
-      resetLastUserDigits: true,
-    };
-  }
-
   if (
     shouldBlockEndCallForPendingStep({
       state: realtimeState,
       lastUserTranscript,
     })
   ) {
+    const awaitingPostBookingClosure =
+      (realtimeState as any)?.awaitingPostBookingClosure === true;
+
+    if (awaitingPostBookingClosure) {
+      return {
+        ok: false,
+        error: "POST_BOOKING_CLOSURE_ANSWER_REQUIRED",
+        message:
+          "The caller has not answered whether they need anything else after the booking.",
+        logEvent: "END_CALL_BLOCKED_WAITING_POST_SMS_REPLY",
+        logPayload: {
+          callSid,
+          awaitingPostBookingClosure: true,
+          currentTranscript: clean(lastUserTranscript || ""),
+          lastUserTranscriptSeq: realtimeState.lastUserTranscriptSeq,
+          postBookingClosureTranscriptSeq:
+            (realtimeState as any)?.postBookingClosureTranscriptSeq,
+        },
+        responseSource: "tool_guard:end_call_waiting_post_sms_reply",
+        responseInstructions: [
+          "Use only the tool result as source of truth.",
+          "Do not end the call yet.",
+          "The caller has not answered whether they need anything else.",
+          "Ask briefly if the caller needs anything else.",
+          "Ask only one question and wait for the caller answer.",
+        ].join(" "),
+        resetLastUserDigits: true,
+      };
+    }
+
     return {
       ok: false,
       error: "END_CALL_BLOCKED_PENDING_BOOKING_STEP",
@@ -161,8 +153,7 @@ export function guardRealtimeEndCall(params: {
       logPayload: {
         callSid,
         pendingBookingStepKey: clean(realtimeState.pendingBookingStepKey || ""),
-        awaitingPostBookingClosure:
-          (realtimeState as any)?.awaitingPostBookingClosure === true,
+        awaitingPostBookingClosure: false,
         lastUserTranscript: clean(lastUserTranscript || ""),
         lastUserTranscriptSeq: realtimeState.lastUserTranscriptSeq,
         postBookingClosureTranscriptSeq:
