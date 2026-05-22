@@ -6,13 +6,10 @@ import { buildRealtimeVoiceSession } from "./buildRealtimeVoiceSession";
 import { resolveVoiceRequestContext } from "../runtime/resolveVoiceRequestContext";
 import type { CallState } from "../types";
 
-import { handleRealtimeTranscriptEvent } from "./realtimeTranscriptHandler";
 import { handleRealtimeToolCall } from "./realtimeToolCallHandler";
 import { buildOpenAiRealtimeSessionUpdate } from "./buildOpenAiRealtimeSessionUpdate";
-import {
-  attachLatestUserTranscriptSeq,
-  mergeTranscriptStatePreservingBookingRuntime,
-} from "./bookingRuntimeState";
+import { attachLatestUserTranscriptSeq } from "./bookingRuntimeState";
+import { handleUserTranscriptCompleted } from "./realtimeTranscriptRuntime";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -644,15 +641,20 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
-    if (
-      event.type === "response.audio_transcript.done" ||
-      event.type === "conversation.item.input_audio_transcription.completed"
-    ) {
+    if (event.type === "response.audio_transcript.done") {
+      /**
+       * Assistant transcript.
+       * Never use this as caller input.
+       */
+      return;
+    }
+
+    if (event.type === "conversation.item.input_audio_transcription.completed") {
       if (callEnding) {
         return;
       }
 
-      handleRealtimeTranscriptEvent({
+      handleUserTranscriptCompleted({
         event,
         callSid,
         didNumber,
@@ -662,36 +664,25 @@ export async function createOpenAiRealtimeBridge({
         realtimeTenant,
         realtimeCfg,
         localeLocked,
+        lastUserTranscriptSeq,
         refreshRealtimeVoiceContext,
         refreshRealtimeSession,
         openAiSocket,
+        tenantId,
       })
-        .then((transcriptResult) => {
-          if (!transcriptResult.consumed) {
+        .then((runtimeResult) => {
+          if (!runtimeResult.consumed) {
             return;
           }
 
-          lastUserTranscript = transcriptResult.transcript;
-          lastUserTranscriptSeq += 1;
-
-          currentLocale = transcriptResult.currentLocale;
-
-          const currentToolState = realtimeState;
-          const transcriptState = transcriptResult.realtimeState;
-
-          realtimeState = mergeTranscriptStatePreservingBookingRuntime({
-            currentToolState,
-            transcriptState,
-            lastUserTranscriptSeq,
-          });
-
-          realtimeTenant = transcriptResult.realtimeTenant ?? realtimeTenant;
-          realtimeCfg = transcriptResult.realtimeCfg ?? realtimeCfg;
-          localeLocked = transcriptResult.localeLocked;
-
-          if (typeof transcriptResult.tenantId !== "undefined") {
-            tenantId = transcriptResult.tenantId ?? tenantId;
-          }
+          lastUserTranscript = runtimeResult.lastUserTranscript;
+          lastUserTranscriptSeq = runtimeResult.lastUserTranscriptSeq;
+          currentLocale = runtimeResult.currentLocale;
+          realtimeState = runtimeResult.realtimeState;
+          realtimeTenant = runtimeResult.realtimeTenant;
+          realtimeCfg = runtimeResult.realtimeCfg;
+          localeLocked = runtimeResult.localeLocked;
+          tenantId = runtimeResult.tenantId;
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {
