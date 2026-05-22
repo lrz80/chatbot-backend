@@ -8,8 +8,11 @@ import type { CallState } from "../types";
 
 import { handleRealtimeToolCall } from "./realtimeToolCallHandler";
 import { buildOpenAiRealtimeSessionUpdate } from "./buildOpenAiRealtimeSessionUpdate";
-import { attachLatestUserTranscriptSeq } from "./bookingRuntimeState";
 import { handleUserTranscriptCompleted } from "./realtimeTranscriptRuntime";
+import {
+  attachLatestUserTranscriptSeq,
+  mergeTranscriptStatePreservingBookingRuntime,
+} from "./bookingRuntimeState";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -693,7 +696,15 @@ export async function createOpenAiRealtimeBridge({
           lastUserTranscript = runtimeResult.lastUserTranscript;
           lastUserTranscriptSeq = runtimeResult.lastUserTranscriptSeq;
           currentLocale = runtimeResult.currentLocale;
-          realtimeState = runtimeResult.realtimeState;
+          
+          const latestToolState = realtimeState;
+
+          realtimeState = mergeTranscriptStatePreservingBookingRuntime({
+            currentToolState: latestToolState,
+            transcriptState: runtimeResult.realtimeState,
+            lastUserTranscriptSeq: runtimeResult.lastUserTranscriptSeq,
+          });
+
           realtimeTenant = runtimeResult.realtimeTenant;
           realtimeCfg = runtimeResult.realtimeCfg;
           localeLocked = runtimeResult.localeLocked;

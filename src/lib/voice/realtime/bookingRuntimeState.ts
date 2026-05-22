@@ -15,6 +15,19 @@ function pickDefined<T>(primary: T | undefined, fallback: T | undefined): T | un
   return typeof primary !== "undefined" ? primary : fallback;
 }
 
+function pickNonEmptyString(
+  primary: string | undefined,
+  fallback: string | undefined
+): string | undefined {
+  const primaryClean = clean(primary);
+  if (primaryClean) return primaryClean;
+
+  const fallbackClean = clean(fallback);
+  if (fallbackClean) return fallbackClean;
+
+  return primary ?? fallback;
+}
+
 export function attachLatestUserTranscriptSeq(params: {
   realtimeState: CallState;
   lastUserTranscriptSeq: number;
@@ -47,7 +60,7 @@ export function mergeTranscriptStatePreservingBookingRuntime(params: {
         ? currentToolState.bookingData
         : transcriptState.bookingData,
 
-    pendingBookingStepKey: pickDefined(
+    pendingBookingStepKey: pickNonEmptyString(
       currentToolState.pendingBookingStepKey,
       transcriptState.pendingBookingStepKey
     ),
@@ -57,7 +70,7 @@ export function mergeTranscriptStatePreservingBookingRuntime(params: {
       transcriptState.pendingBookingStepRequired
     ),
 
-    pendingBookingStepPrompt: pickDefined(
+    pendingBookingStepPrompt: pickNonEmptyString(
       currentToolState.pendingBookingStepPrompt,
       transcriptState.pendingBookingStepPrompt
     ),
