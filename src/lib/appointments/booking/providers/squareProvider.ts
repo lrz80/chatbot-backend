@@ -6,6 +6,7 @@ import {
 import {
   squareCreateBooking,
   squareCreateCustomer,
+  squareRetrieveBooking,
   squareSearchAvailability,
   type SquareEnvironment,
 } from "./square.client";
@@ -338,6 +339,176 @@ function buildSquareIdempotencyKey(input: CreateExternalBookingInput): string {
     .filter(Boolean)
     .join(":")
     .slice(0, 128);
+}
+
+function toTimeMs(value: unknown): number | null {
+  const ms = new Date(String(value || "").trim()).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function sameInstant(left: unknown, right: unknown): boolean {
+  const leftMs = toTimeMs(left);
+  const rightMs = toTimeMs(right);
+
+  return leftMs !== null && rightMs !== null && leftMs === rightMs;
+}
+
+async function verifySquareCreatedBooking(params: {
+  tenantId: string;
+  accessToken: string;
+  environment: SquareEnvironment;
+  squareBookingId: string;
+  expectedLocationId: string;
+  expectedCustomerId: string;
+  expectedStartAt: string;
+  expectedTeamMemberId: string;
+  expectedServiceVariationId: string;
+  expectedServiceVariationVersion: number;
+}): Promise<
+  | {
+      ok: true;
+      status: string;
+    }
+  | {
+      ok: false;
+      reason: string;
+      details?: Record<string, unknown>;
+    }
+> {
+  const retrieveResult = await squareRetrieveBooking({
+    accessToken: params.accessToken,
+    environment: params.environment,
+    bookingId: params.squareBookingId,
+  });
+
+  if (!retrieveResult.ok) {
+    return {
+      ok: false,
+      reason: "SQUARE_BOOKING_RETRIEVE_FAILED",
+      details: {
+        status: retrieveResult.status,
+        error: retrieveResult.error,
+        details: retrieveResult.details,
+        squareErrors: retrieveResult.squareErrors,
+      },
+    };
+  }
+
+  const booking = retrieveResult.data.booking;
+
+  if (!booking) {
+    return {
+      ok: false,
+      reason: "SQUARE_BOOKING_NOT_RETURNED",
+      details: {
+        squareBookingId: params.squareBookingId,
+        data: retrieveResult.data,
+      },
+    };
+  }
+
+  const retrievedBookingId = cleanString(booking.id);
+  const retrievedLocationId = cleanString(booking.location_id);
+  const retrievedCustomerId = cleanString(booking.customer_id);
+  const retrievedStartAt = cleanString(booking.start_at);
+  const retrievedStatus = cleanString(booking.status);
+
+  if (retrievedBookingId !== params.squareBookingId) {
+    return {
+      ok: false,
+      reason: "SQUARE_BOOKING_ID_MISMATCH",
+      details: {
+        expected: params.squareBookingId,
+        received: retrievedBookingId,
+      },
+    };
+  }
+
+  if (retrievedLocationId !== params.expectedLocationId) {
+    return {
+      ok: false,
+      reason: "SQUARE_BOOKING_LOCATION_MISMATCH",
+      details: {
+        expected: params.expectedLocationId,
+        received: retrievedLocationId,
+      },
+    };
+  }
+
+  if (retrievedCustomerId !== params.expectedCustomerId) {
+    return {
+      ok: false,
+      reason: "SQUARE_BOOKING_CUSTOMER_MISMATCH",
+      details: {
+        expected: params.expectedCustomerId,
+        received: retrievedCustomerId,
+      },
+    };
+  }
+
+  if (!sameInstant(retrievedStartAt, params.expectedStartAt)) {
+    return {
+      ok: false,
+      reason: "SQUARE_BOOKING_START_TIME_MISMATCH",
+      details: {
+        expected: params.expectedStartAt,
+        received: retrievedStartAt,
+      },
+    };
+  }
+
+  const normalizedStatus = retrievedStatus.toUpperCase();
+
+  if (
+    normalizedStatus === "CANCELED" ||
+    normalizedStatus === "CANCELLED" ||
+    normalizedStatus === "DECLINED"
+  ) {
+    return {
+      ok: false,
+      reason: "SQUARE_BOOKING_NOT_ACTIVE",
+      details: {
+        status: retrievedStatus,
+      },
+    };
+  }
+
+  const segments = Array.isArray(booking.appointment_segments)
+    ? booking.appointment_segments
+    : [];
+
+  const matchingSegment = segments.find((segment) => {
+    const teamMemberId = cleanString(segment.team_member_id);
+    const serviceVariationId = cleanString(segment.service_variation_id);
+    const serviceVariationVersion = cleanNumber(
+      segment.service_variation_version
+    );
+
+    return (
+      teamMemberId === params.expectedTeamMemberId &&
+      serviceVariationId === params.expectedServiceVariationId &&
+      serviceVariationVersion === params.expectedServiceVariationVersion
+    );
+  });
+
+  if (!matchingSegment) {
+    return {
+      ok: false,
+      reason: "SQUARE_BOOKING_SEGMENT_MISMATCH",
+      details: {
+        expectedTeamMemberId: params.expectedTeamMemberId,
+        expectedServiceVariationId: params.expectedServiceVariationId,
+        expectedServiceVariationVersion:
+          params.expectedServiceVariationVersion,
+        receivedSegments: segments,
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    status: retrievedStatus,
+  };
 }
 
 export class SquareProvider implements BookingProviderAdapter {
@@ -743,9 +914,39 @@ export class SquareProvider implements BookingProviderAdapter {
       };
     }
 
-    console.log("✅ [SQUARE_PROVIDER] booking created successfully", {
+    const verification = await verifySquareCreatedBooking({
+      tenantId: input.tenantId,
+      accessToken,
+      environment,
+      squareBookingId,
+      expectedLocationId: squarePayload.locationId,
+      expectedCustomerId: squareCustomerId,
+      expectedStartAt: input.startISO,
+      expectedTeamMemberId: resolvedTeamMemberId,
+      expectedServiceVariationId: squarePayload.serviceVariationId,
+      expectedServiceVariationVersion: resolvedServiceVariationVersion,
+    });
+
+    if (!verification.ok) {
+      console.error("🟥 [SQUARE_PROVIDER] booking verification failed after create", {
+        tenantId: input.tenantId,
+        squareBookingId,
+        reason: verification.reason,
+        details: JSON.stringify(verification.details || {}, null, 2),
+      });
+
+      return {
+        ok: false,
+        provider: this.provider,
+        error: "CREATE_EVENT_FAILED",
+        busy: [],
+      };
+    }
+
+    console.log("✅ [SQUARE_PROVIDER] booking created and verified successfully", {
       tenantId: input.tenantId,
       squareBookingId,
+      squareStatus: verification.status,
       startISO: input.startISO,
       locationId: squarePayload.locationId,
       teamMemberId: resolvedTeamMemberId,

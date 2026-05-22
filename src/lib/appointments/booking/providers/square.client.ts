@@ -48,6 +48,12 @@ export type SquareCreateBookingInput = {
   serviceVariationVersion: number;
 };
 
+export type SquareRetrieveBookingInput = {
+  accessToken: string;
+  environment: SquareEnvironment;
+  bookingId: string;
+};
+
 export type SquareCreateCustomerInput = {
   accessToken: string;
   environment: SquareEnvironment;
@@ -391,6 +397,40 @@ export async function squareCreateBooking(args: SquareCreateBookingInput): Promi
       idempotency_key: idempotencyKey,
       booking,
     },
+  });
+}
+
+export async function squareRetrieveBooking(args: SquareRetrieveBookingInput): Promise<
+  SquareApiResult<{
+    booking?: {
+      id?: string;
+      location_id?: string;
+      customer_id?: string;
+      start_at?: string;
+      status?: string;
+      appointment_segments?: Array<{
+        team_member_id?: string;
+        service_variation_id?: string;
+        service_variation_version?: number;
+      }>;
+    };
+  }>
+> {
+  const bookingId = String(args.bookingId || "").trim();
+
+  if (!bookingId) {
+    return {
+      ok: false,
+      status: 400,
+      error: "SQUARE_BOOKING_ID_MISSING",
+    };
+  }
+
+  return squareRequest({
+    accessToken: args.accessToken,
+    environment: args.environment,
+    path: `/v2/bookings/${encodeURIComponent(bookingId)}`,
+    method: "GET",
   });
 }
 
