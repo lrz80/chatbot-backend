@@ -442,7 +442,7 @@ export function buildBookingPromptTemplateValues(
 ): Record<string, string> {
   const slots = bookingState.collected_slots || {};
 
-  return {
+  const values: Record<string, string> = {
     appointment_type: clean(slots.appointment_type),
     service: clean(slots.service),
     datetime: clean(slots.datetime),
@@ -455,6 +455,17 @@ export function buildBookingPromptTemplateValues(
     location_detail: clean(slots.location_detail),
     notes: clean(slots.notes),
   };
+
+  for (const [key, rawValue] of Object.entries(values)) {
+    const value = clean(rawValue);
+
+    if (!key || !value) continue;
+
+    values[key] = value;
+    values[`${key}_display`] = value;
+  }
+
+  return values;
 }
 
 export type BookingTemplateRenderResult =

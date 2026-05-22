@@ -22,6 +22,81 @@ function sameComparableText(left: unknown, right: unknown): boolean {
   return Boolean(a && b && a === b);
 }
 
+function comparableTokens(value: unknown): string[] {
+  return normalizeComparableText(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  const left = normalizeComparableText(a);
+  const right = normalizeComparableText(b);
+
+  if (!left) return right.length;
+  if (!right) return left.length;
+
+  const matrix: number[][] = [];
+
+  for (let i = 0; i <= left.length; i += 1) {
+    matrix[i] = [i];
+  }
+
+  for (let j = 1; j <= right.length; j += 1) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= left.length; i += 1) {
+    for (let j = 1; j <= right.length; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+
+  return matrix[left.length][right.length];
+}
+
+function textSimilarityRatio(a: unknown, b: unknown): number {
+  const left = normalizeComparableText(a);
+  const right = normalizeComparableText(b);
+
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+
+  const maxLength = Math.max(left.length, right.length);
+  if (maxLength === 0) return 0;
+
+  const distance = levenshteinDistance(left, right);
+
+  return 1 - distance / maxLength;
+}
+
+function tokenOverlapRatio(a: unknown, b: unknown): number {
+  const leftTokens = comparableTokens(a);
+  const rightTokens = comparableTokens(b);
+
+  if (leftTokens.length === 0 || rightTokens.length === 0) return 0;
+
+  const rightSet = new Set(rightTokens);
+  const shared = leftTokens.filter((token) => rightSet.has(token));
+
+  return shared.length / Math.min(leftTokens.length, rightTokens.length);
+}
+
+function isSameOrNearSameHumanAnswer(a: unknown, b: unknown): boolean {
+  if (sameComparableText(a, b)) return true;
+
+  const textRatio = textSimilarityRatio(a, b);
+  const overlapRatio = tokenOverlapRatio(a, b);
+
+  return textRatio >= 0.82 || overlapRatio >= 0.75;
+}
+
 export type SubmitBookingStepFreshnessResult =
   | {
       ok: true;
@@ -142,7 +217,7 @@ export function validateSubmitBookingStepFreshness(params: {
     Boolean(submittedStepKey) &&
     lastSubmittedStepKey !== submittedStepKey &&
     Boolean(currentTranscript) &&
-    sameComparableText(currentTranscript, lastSubmittedTranscript);
+    isSameOrNearSameHumanAnswer(currentTranscript, lastSubmittedTranscript);
 
   const base = {
     submittedStepKey,
