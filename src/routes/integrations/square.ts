@@ -21,6 +21,7 @@ import {
   getBookingProviderSecrets,
 } from "../../lib/appointments/booking/providers/providerConnections.repo";
 import { syncSquareServiceMappingsForTenant } from "../../lib/integrations/square/syncSquareServiceMappingsForTenant";
+import { getTenantInternalBookingServices } from "../../lib/appointments/serviceBookingRules.repo";
 
 const router = Router();
 
@@ -909,28 +910,6 @@ router.post("/tenant/service-mappings/sync", async (req, res) => {
   try {
     const tenantId = String(req.body?.tenantId || "").trim();
 
-    const rawInternalServices = Array.isArray(req.body?.internalServices)
-      ? req.body.internalServices
-      : [];
-
-    const internalServices: Array<{
-      internalServiceKey: string;
-      internalServiceName: string | null;
-    }> = rawInternalServices
-      .map((item: any) => ({
-        internalServiceKey: String(item?.internalServiceKey || "").trim(),
-        internalServiceName:
-          String(item?.internalServiceName || "").trim() || null,
-      }))
-      .filter(
-        (
-          item: {
-            internalServiceKey: string;
-            internalServiceName: string | null;
-          }
-        ) => Boolean(item.internalServiceKey)
-      );
-
     if (!tenantId) {
       return res.status(400).json({
         ok: false,
@@ -938,10 +917,16 @@ router.post("/tenant/service-mappings/sync", async (req, res) => {
       });
     }
 
+    const internalServices = await getTenantInternalBookingServices(tenantId);
+
     if (internalServices.length === 0) {
       return res.status(400).json({
         ok: false,
-        error: "INTERNAL_SERVICES_REQUIRED",
+        error: "NO_INTERNAL_BOOKING_SERVICES_FOUND",
+        details: {
+          tenantId,
+          source: "appointment_service_rules",
+        },
       });
     }
 
@@ -958,6 +943,8 @@ router.post("/tenant/service-mappings/sync", async (req, res) => {
     return res.status(200).json({
       ok: true,
       data: {
+        source: "appointment_service_rules",
+        internalServicesCount: internalServices.length,
         synced: result.synced,
         skipped: result.skipped,
         squareServicesCount: result.squareServicesCount,

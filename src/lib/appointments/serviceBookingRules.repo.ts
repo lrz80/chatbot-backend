@@ -109,3 +109,39 @@ export async function replaceAppointmentServiceRules(params: {
 
   return getAppointmentServiceRules(params.tenantId);
 }
+
+export type TenantInternalBookingService = {
+  internalServiceKey: string;
+  internalServiceName: string;
+};
+
+export async function getTenantInternalBookingServices(
+  tenantId: string
+): Promise<TenantInternalBookingService[]> {
+  const cleanTenantId = String(tenantId || "").trim();
+
+  if (!cleanTenantId) {
+    return [];
+  }
+
+  const { rows } = await pool.query(
+    `
+    SELECT DISTINCT
+      service_name
+    FROM appointment_service_rules
+    WHERE tenant_id = $1
+      AND trim(service_name) <> ''
+    ORDER BY lower(service_name) ASC
+    `,
+    [cleanTenantId]
+  );
+
+  return rows.map((row: any) => {
+    const serviceName = String(row.service_name || "").trim();
+
+    return {
+      internalServiceKey: serviceName,
+      internalServiceName: serviceName,
+    };
+  });
+}
