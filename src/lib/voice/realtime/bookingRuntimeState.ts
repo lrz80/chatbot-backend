@@ -246,12 +246,18 @@ export function applyBookingRuntimeStateAfterToolResult(params: {
     (toolName === "get_booking_flow" || toolName === "submit_booking_step") &&
     toolResult?.next_required_step
   ) {
+    const shouldWaitForAssistantToAskNextStep =
+      toolName === "submit_booking_step" && toolResult?.ok === true;
+
     nextState = setPendingBookingStepAnchor({
       realtimeState: nextState,
       nextRequiredStep: toolResult.next_required_step,
-      anchorTranscript:
-        toolName === "submit_booking_step" ? consumedSubmitValue : lastUserTranscript,
-      anchorSeq: lastUserTranscriptSeq,
+      anchorTranscript: shouldWaitForAssistantToAskNextStep
+        ? ""
+        : lastUserTranscript,
+      anchorSeq: shouldWaitForAssistantToAskNextStep
+        ? -1
+        : lastUserTranscriptSeq,
     });
   }
 
