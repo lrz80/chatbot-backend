@@ -103,6 +103,7 @@ export type SubmitBookingStepFreshnessResult =
       submittedStepKey: string;
       pendingStepKey: string;
       currentTranscript: string;
+      submittedValue: string;
       promptAnchorTranscript: string;
       lastSubmittedStepKey: string;
       lastSubmittedTranscript: string;
@@ -116,6 +117,7 @@ export type SubmitBookingStepFreshnessResult =
       hasNewHumanTranscript: boolean;
       isDuplicateSubmit: boolean;
       isReusedTranscriptFromPreviousStep: boolean;
+      canAcceptModelValueDuringTranscriptRace: boolean;
       shouldBlockStaleSubmit: false;
     }
   | {
@@ -127,6 +129,7 @@ export type SubmitBookingStepFreshnessResult =
       submittedStepKey: string;
       pendingStepKey: string;
       currentTranscript: string;
+      submittedValue: string;
       promptAnchorTranscript: string;
       lastSubmittedStepKey: string;
       lastSubmittedTranscript: string;
@@ -140,6 +143,7 @@ export type SubmitBookingStepFreshnessResult =
       hasNewHumanTranscript: boolean;
       isDuplicateSubmit: boolean;
       isReusedTranscriptFromPreviousStep: boolean;
+      canAcceptModelValueDuringTranscriptRace: boolean;
       shouldBlockStaleSubmit: true;
     };
 
@@ -153,6 +157,7 @@ export function validateSubmitBookingStepFreshness(params: {
   const submittedStepKey = clean(toolArgs.step_key);
   const pendingStepKey = clean(realtimeState.pendingBookingStepKey);
   const currentTranscript = clean(lastUserTranscript);
+  const submittedValue = clean(toolArgs.value);
 
   const promptAnchorTranscript = clean(
     realtimeState.pendingBookingStepPromptAnchorTranscript
@@ -204,14 +209,6 @@ export function validateSubmitBookingStepFreshness(params: {
     sameComparableText(currentTranscript, lastSubmittedTranscript) &&
     currentTranscriptSeq <= lastSubmittedTranscriptSeq;
 
-  /**
-   * Regla raíz:
-   * Un nuevo step no puede consumir el mismo contenido humano que ya fue usado
-   * para resolver un step anterior.
-   *
-   * Esto no depende de frases, idioma, tenant, servicio, staff ni regex de negocio.
-   * Solo protege la máquina de estados.
-   */
   const isReusedTranscriptFromPreviousStep =
     Boolean(lastSubmittedStepKey) &&
     Boolean(submittedStepKey) &&
@@ -219,10 +216,35 @@ export function validateSubmitBookingStepFreshness(params: {
     Boolean(currentTranscript) &&
     isSameOrNearSameHumanAnswer(currentTranscript, lastSubmittedTranscript);
 
+  const submittedValueDiffersFromCurrentTranscript =
+    Boolean(submittedValue) &&
+    !sameComparableText(submittedValue, currentTranscript);
+
+  const submittedValueDiffersFromLastSubmitted =
+    Boolean(submittedValue) &&
+    !sameComparableText(submittedValue, lastSubmittedTranscript);
+
+  /**
+   * Realtime puede disparar submit_booking_step antes de que el transcript nuevo
+   * quede asentado en el runtime. En ese caso, si el modelo envía un value concreto
+   * y diferente al transcript viejo, no debemos bloquearlo como stale.
+   *
+   * Esto no hardcodea servicios ni tenants. Solo resuelve una carrera de eventos.
+   */
+  const canAcceptModelValueDuringTranscriptRace =
+    isSubmittingExpectedPendingStep &&
+    !hasNewHumanTranscript &&
+    Boolean(submittedValue) &&
+    submittedValueDiffersFromCurrentTranscript &&
+    submittedValueDiffersFromLastSubmitted &&
+    !isDuplicateSubmit &&
+    !isReusedTranscriptFromPreviousStep;
+
   const base = {
     submittedStepKey,
     pendingStepKey,
     currentTranscript,
+    submittedValue,
     promptAnchorTranscript,
     lastSubmittedStepKey,
     lastSubmittedTranscript,
@@ -236,6 +258,7 @@ export function validateSubmitBookingStepFreshness(params: {
     hasNewHumanTranscript,
     isDuplicateSubmit,
     isReusedTranscriptFromPreviousStep,
+    canAcceptModelValueDuringTranscriptRace,
   };
 
   if (!hasPendingStepState) {
@@ -257,7 +280,7 @@ export function validateSubmitBookingStepFreshness(params: {
   }
 
   if (
-    !hasNewHumanTranscript ||
+    (!hasNewHumanTranscript && !canAcceptModelValueDuringTranscriptRace) ||
     isDuplicateSubmit ||
     isReusedTranscriptFromPreviousStep
   ) {

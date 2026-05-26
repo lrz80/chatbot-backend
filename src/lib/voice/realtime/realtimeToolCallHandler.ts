@@ -53,6 +53,49 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function resolveSubmitBookingStepForwardedValue(params: {
+  stepKey: string;
+  modelValue: unknown;
+  transcriptValue: unknown;
+  currentTranscriptSeq: number;
+  promptAnchorSeq: number;
+}): string {
+  const stepKey = clean(params.stepKey);
+  const modelValue = clean(params.modelValue);
+  const transcriptValue = clean(params.transcriptValue);
+
+  const transcriptIsAfterPrompt =
+    Number.isFinite(params.currentTranscriptSeq) &&
+    Number.isFinite(params.promptAnchorSeq) &&
+    params.currentTranscriptSeq > params.promptAnchorSeq;
+
+  if (!modelValue && !transcriptValue) {
+    return "";
+  }
+
+  if (stepKey === "service") {
+    if (modelValue) {
+      return modelValue;
+    }
+
+    if (transcriptIsAfterPrompt) {
+      return transcriptValue;
+    }
+
+    return "";
+  }
+
+  if (transcriptIsAfterPrompt && transcriptValue) {
+    return transcriptValue;
+  }
+
+  if (modelValue) {
+    return modelValue;
+  }
+
+  return transcriptValue;
+}
+
 function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
   if (socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify(payload));
@@ -280,6 +323,12 @@ export async function handleRealtimeToolCall(
   }
 
   if (toolName === "submit_booking_step") {
+    const freshness = validateSubmitBookingStepFreshness({
+      toolArgs,
+      realtimeState,
+      lastUserTranscript,
+    });
+
     const turnGate = canSubmitBookingStepNow({
       realtimeState,
       submittedStepKey: clean(toolArgs.step_key),
@@ -289,7 +338,12 @@ export async function handleRealtimeToolCall(
           : -1,
     });
 
-    if (!turnGate.ok) {
+    const canBypassTurnGateForTranscriptRace =
+      !turnGate.ok &&
+      turnGate.reason === "NO_NEW_USER_ANSWER" &&
+      freshness.canAcceptModelValueDuringTranscriptRace;
+
+    if (!turnGate.ok && !canBypassTurnGateForTranscriptRace) {
       const blockedResult: RealtimeToolResult = {
         ok: false,
         error: "BOOKING_STEP_NOT_READY_FOR_SUBMIT",
@@ -329,15 +383,21 @@ export async function handleRealtimeToolCall(
         },
       });
 
-      requestRealtimeResponse(
-        {
-          instructions: buildSubmitBookingStepNotReadyInstructions({
-            realtimeState,
-            reason: turnGate.reason || "UNKNOWN",
-          }),
-        },
-        "tool_guard:submit_booking_step_turn_state"
-      );
+      /**
+       * If the issue is simply that there is no new transcript yet, do not create
+       * another assistant response and do not interrupt active audio.
+       */
+      if (turnGate.reason !== "NO_NEW_USER_ANSWER") {
+        requestRealtimeResponse(
+          {
+            instructions: buildSubmitBookingStepNotReadyInstructions({
+              realtimeState,
+              reason: turnGate.reason || "UNKNOWN",
+            }),
+          },
+          "tool_guard:submit_booking_step_turn_state"
+        );
+      }
 
       return {
         consumed: true,
@@ -350,13 +410,7 @@ export async function handleRealtimeToolCall(
       };
     }
 
-    const freshness = validateSubmitBookingStepFreshness({
-      toolArgs,
-      realtimeState,
-      lastUserTranscript,
-    });
-
-    if (!freshness.ok) {
+    if (!freshness.ok && !freshness.canAcceptModelValueDuringTranscriptRace) {
       return handleBlockedSubmitBookingStep({
         callSid,
         callId,
@@ -380,6 +434,24 @@ export async function handleRealtimeToolCall(
     const modelValue = clean(toolArgs.value);
     const transcriptValue = clean(lastUserTranscript);
 
+    const currentTranscriptSeq =
+      typeof realtimeState.lastUserTranscriptSeq === "number"
+        ? realtimeState.lastUserTranscriptSeq
+        : -1;
+
+    const promptAnchorSeq =
+      typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
+        ? realtimeState.pendingBookingStepPromptAnchorSeq
+        : -1;
+
+    const forwardedValue = resolveSubmitBookingStepForwardedValue({
+      stepKey: clean(effectiveToolArgs.step_key || toolArgs.step_key),
+      modelValue,
+      transcriptValue,
+      currentTranscriptSeq,
+      promptAnchorSeq,
+    });
+
     const candidates = [
       transcriptValue
         ? {
@@ -395,14 +467,7 @@ export async function handleRealtimeToolCall(
         : null,
     ].filter(Boolean);
 
-    /**
-     * The transcript is the primary human input.
-     * The model value is only a candidate/normalization hint.
-     *
-     * Do not prefer modelValue here, because Realtime can infer or invent
-     * slot values that the caller did not actually say.
-     */
-    effectiveToolArgs.value = transcriptValue || modelValue;
+    effectiveToolArgs.value = forwardedValue;
     effectiveToolArgs.model_value = modelValue;
     effectiveToolArgs.transcript_value = transcriptValue;
     effectiveToolArgs.value_candidates = candidates;

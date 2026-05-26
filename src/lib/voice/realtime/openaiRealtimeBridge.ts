@@ -380,8 +380,7 @@ export async function createOpenAiRealtimeBridge({
       !responseInstructions.includes("Do not end the call yet");
 
     const shouldInterruptActiveResponse =
-      source.startsWith("tool_followup:") ||
-      source.startsWith("tool_guard:");
+      source.startsWith("tool_followup:");
 
     if (isEndCallFollowup && shouldCreateEndCallGoodbye) {
       endCallGoodbyeRequested = true;
@@ -470,6 +469,13 @@ export async function createOpenAiRealtimeBridge({
     return (
       event?.type === "error" &&
       event?.error?.code === "conversation_already_has_active_response"
+    );
+  }
+
+  function isResponseCancelNotActiveError(event: any): boolean {
+    return (
+      event?.type === "error" &&
+      event?.error?.code === "response_cancel_not_active"
     );
   }
 
@@ -678,6 +684,20 @@ export async function createOpenAiRealtimeBridge({
         return;
       }
 
+      if (isResponseCancelNotActiveError(event)) {
+        console.warn("[VOICE_REALTIME][RESPONSE_CANCEL_NOT_ACTIVE_IGNORED]", {
+          callSid,
+          activeResponseId,
+          pendingResponseSource,
+        });
+
+        activeResponseId = null;
+        activeResponseSource = null;
+        flushPendingRealtimeResponse();
+
+        return;
+      }
+
       console.error("[VOICE_REALTIME][OPENAI_ERROR]", JSON.stringify(event));
       return;
     }
@@ -803,7 +823,6 @@ export async function createOpenAiRealtimeBridge({
         endCallGoodbyeRequested,
         endCallGoodbyeResponseId,
         callEnding,
-        flushPendingRealtimeResponse,
         onEndCallGoodbyeCompleted: () => {
           if (!pendingResponseCreate && !activeResponseId) {
             hangupRequestedByTool = false;
@@ -830,6 +849,10 @@ export async function createOpenAiRealtimeBridge({
       realtimeState = responseDoneResult.realtimeState;
       activeResponseId = responseDoneResult.activeResponseId;
       activeResponseSource = null;
+
+      if (responseDoneResult.shouldFlushPendingResponse) {
+        flushPendingRealtimeResponse();
+      }
 
       return;
     }

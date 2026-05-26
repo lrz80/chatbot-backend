@@ -18,7 +18,6 @@ type HandleRealtimeResponseDoneParams = {
   endCallGoodbyeRequested: boolean;
   endCallGoodbyeResponseId: string | null;
   callEnding: boolean;
-  flushPendingRealtimeResponse: () => void;
   onEndCallGoodbyeCompleted: () => void;
 };
 
@@ -26,6 +25,7 @@ type HandleRealtimeResponseDoneResult = {
   realtimeState: CallState;
   activeResponseId: string | null;
   handled: boolean;
+  shouldFlushPendingResponse: boolean;
 };
 
 function isBookingQuestionResponseSource(source: string | null): boolean {
@@ -38,7 +38,8 @@ function isBookingQuestionResponseSource(source: string | null): boolean {
 export function handleRealtimeResponseDone(
   params: HandleRealtimeResponseDoneParams
 ): HandleRealtimeResponseDoneResult {
-  const completedResponseId = params.event?.response?.id || params.activeResponseId;
+  const completedResponseId =
+    params.event?.response?.id || params.activeResponseId;
 
   let nextRealtimeState = params.realtimeState;
 
@@ -49,9 +50,8 @@ export function handleRealtimeResponseDone(
     completedResponseId === params.endCallGoodbyeResponseId;
 
   /**
-   * Important:
-   * Open the booking turn BEFORE flushing any queued response.
-   * Otherwise the state can stay stuck in waiting_assistant_prompt forever.
+   * Open the booking turn before the bridge flushes queued responses.
+   * This keeps the booking state correct before the next response.create.
    */
   if (
     !completedEndCallGoodbye &&
@@ -79,18 +79,6 @@ export function handleRealtimeResponseDone(
     });
   }
 
-  const hadPendingResponse = Boolean(params.pendingResponseCreate);
-
-  if (hadPendingResponse) {
-    params.flushPendingRealtimeResponse();
-
-    return {
-      realtimeState: nextRealtimeState,
-      activeResponseId: null,
-      handled: true,
-    };
-  }
-
   if (completedEndCallGoodbye) {
     params.onEndCallGoodbyeCompleted();
   }
@@ -99,5 +87,6 @@ export function handleRealtimeResponseDone(
     realtimeState: nextRealtimeState,
     activeResponseId: null,
     handled: true,
+    shouldFlushPendingResponse: Boolean(params.pendingResponseCreate),
   };
 }
