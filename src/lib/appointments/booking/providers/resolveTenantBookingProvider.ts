@@ -3,8 +3,8 @@ import { getBookingProviderConnection } from "./providerConnections.repo";
 import type { BookingProvider } from "./types";
 
 const SUPPORTED_ACTIVE_PROVIDERS: BookingProvider[] = [
-  "google_calendar",
   "square",
+  "google_calendar",
   "moego",
 ];
 
