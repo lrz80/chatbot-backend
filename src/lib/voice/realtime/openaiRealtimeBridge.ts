@@ -333,7 +333,12 @@ export async function createOpenAiRealtimeBridge({
   let realtimeToolQueue: Promise<void> = Promise.resolve();
 
   let activeResponseId: string | null = null;
+  let activeResponseSource: string | null = null;
+
   let pendingResponseCreate: Record<string, unknown> | null = null;
+  let pendingResponseSource: string | null = null;
+
+  let awaitingResponseSource: string | null = null;
 
   let assistantSpeaking = false;
   let lastAssistantAudioDoneAtMs = 0;
@@ -401,6 +406,7 @@ export async function createOpenAiRealtimeBridge({
 
     if (activeResponseId) {
       pendingResponseCreate = event;
+      pendingResponseSource = source;
 
       console.warn("[VOICE_REALTIME][RESPONSE_CREATE_QUEUED]", {
         callSid,
@@ -411,6 +417,7 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
+    awaitingResponseSource = source;
     sendJson(openAiSocket, event);
   }
 
@@ -420,10 +427,15 @@ export async function createOpenAiRealtimeBridge({
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
 
     const event = pendingResponseCreate;
+    const source = pendingResponseSource;
+
     pendingResponseCreate = null;
+    pendingResponseSource = null;
+    awaitingResponseSource = source;
 
     console.log("[VOICE_REALTIME][RESPONSE_CREATE_FLUSHED]", {
       callSid,
+      source,
     });
 
     sendJson(openAiSocket, event);
@@ -608,6 +620,15 @@ export async function createOpenAiRealtimeBridge({
 
     if (event.type === "response.created") {
       activeResponseId = event.response?.id || null;
+      activeResponseSource = awaitingResponseSource;
+      awaitingResponseSource = null;
+      assistantSpeaking = true;
+
+      console.log("[VOICE_REALTIME][RESPONSE_CREATED]", {
+        callSid,
+        activeResponseId,
+        activeResponseSource,
+      });
       assistantSpeaking = true;
 
       if (endCallGoodbyeRequested && !endCallGoodbyeResponseId) {
@@ -742,6 +763,8 @@ export async function createOpenAiRealtimeBridge({
       assistantSpeaking = false;
       lastAssistantAudioDoneAtMs = Date.now();
 
+      const completedResponseSource = activeResponseSource;
+
       const responseDoneResult = handleRealtimeResponseDone({
         event,
         callSid,
@@ -749,6 +772,7 @@ export async function createOpenAiRealtimeBridge({
         lastUserTranscript,
         lastUserTranscriptSeq,
         activeResponseId,
+        completedResponseSource,
         pendingResponseCreate,
         hangupRequestedByTool,
         endCallGoodbyeRequested,
@@ -780,6 +804,7 @@ export async function createOpenAiRealtimeBridge({
 
       realtimeState = responseDoneResult.realtimeState;
       activeResponseId = responseDoneResult.activeResponseId;
+      activeResponseSource = null;
 
       return;
     }

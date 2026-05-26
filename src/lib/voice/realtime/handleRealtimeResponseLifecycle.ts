@@ -12,6 +12,7 @@ type HandleRealtimeResponseDoneParams = {
   lastUserTranscript: string;
   lastUserTranscriptSeq: number;
   activeResponseId: string | null;
+  completedResponseSource: string | null;
   pendingResponseCreate: Record<string, unknown> | null;
   hangupRequestedByTool: boolean;
   endCallGoodbyeRequested: boolean;
@@ -26,6 +27,13 @@ type HandleRealtimeResponseDoneResult = {
   activeResponseId: string | null;
   handled: boolean;
 };
+
+function isBookingQuestionResponseSource(source: string | null): boolean {
+  return (
+    source === "tool_followup:get_booking_flow" ||
+    source === "tool_followup:submit_booking_step"
+  );
+}
 
 export function handleRealtimeResponseDone(
   params: HandleRealtimeResponseDoneParams
@@ -48,6 +56,7 @@ export function handleRealtimeResponseDone(
   if (
     !completedEndCallGoodbye &&
     !params.callEnding &&
+    isBookingQuestionResponseSource(params.completedResponseSource) &&
     getBookingTurnStatus(nextRealtimeState) === "waiting_assistant_prompt"
   ) {
     nextRealtimeState = markBookingWaitingForUserAnswer({
@@ -66,6 +75,7 @@ export function handleRealtimeResponseDone(
           : null,
       lastUserTranscript: params.lastUserTranscript,
       lastUserTranscriptSeq: params.lastUserTranscriptSeq,
+      completedResponseSource: params.completedResponseSource,
     });
   }
 
