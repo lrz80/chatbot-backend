@@ -379,6 +379,10 @@ export async function createOpenAiRealtimeBridge({
       responseInstructions.includes("Say a short, natural goodbye") &&
       !responseInstructions.includes("Do not end the call yet");
 
+    const shouldInterruptActiveResponse =
+      source.startsWith("tool_followup:") ||
+      source.startsWith("tool_guard:");
+
     if (isEndCallFollowup && shouldCreateEndCallGoodbye) {
       endCallGoodbyeRequested = true;
       endCallGoodbyeResponseId = null;
@@ -412,7 +416,28 @@ export async function createOpenAiRealtimeBridge({
         callSid,
         source,
         activeResponseId,
+        shouldInterruptActiveResponse,
       });
+
+      if (shouldInterruptActiveResponse && openAiSocket.readyState === WebSocket.OPEN) {
+        console.warn("[VOICE_REALTIME][ACTIVE_RESPONSE_CANCEL_REQUESTED]", {
+          callSid,
+          activeResponseId,
+          activeResponseSource,
+          pendingResponseSource: source,
+        });
+
+        sendJson(openAiSocket, {
+          type: "response.cancel",
+        });
+
+        if (streamSid && twilioSocket.readyState === WebSocket.OPEN) {
+          sendJson(twilioSocket, {
+            event: "clear",
+            streamSid,
+          });
+        }
+      }
 
       return;
     }
