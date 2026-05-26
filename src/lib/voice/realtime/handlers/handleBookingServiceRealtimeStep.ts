@@ -149,14 +149,6 @@ function scoreCandidate(input: string, candidate: string): number {
     return 1;
   }
 
-  if (normalizedCandidate.includes(normalizedInput)) {
-    return 0.92;
-  }
-
-  if (normalizedInput.includes(normalizedCandidate)) {
-    return 0.86;
-  }
-
   const inputTokens = uniqueStrings(normalizedInput.split(" "));
   const candidateTokens = uniqueStrings(normalizedCandidate.split(" "));
 
@@ -165,17 +157,44 @@ function scoreCandidate(input: string, candidate: string): number {
   }
 
   const candidateTokenSet = new Set(candidateTokens);
+  const inputTokenSet = new Set(inputTokens);
 
   const matchedInputTokens = inputTokens.filter((token) =>
     candidateTokenSet.has(token)
   );
 
+  const matchedCandidateTokens = candidateTokens.filter((token) =>
+    inputTokenSet.has(token)
+  );
+
   const inputCoverage = matchedInputTokens.length / inputTokens.length;
+  const candidateCoverage =
+    matchedCandidateTokens.length / candidateTokens.length;
 
   const union = new Set([...inputTokens, ...candidateTokens]);
   const jaccard = matchedInputTokens.length / Math.max(union.size, 1);
 
-  return inputCoverage * 0.75 + jaccard * 0.25;
+  const containsFullInput = normalizedCandidate.includes(normalizedInput);
+  const containsFullCandidate = normalizedInput.includes(normalizedCandidate);
+
+  if (containsFullInput && inputTokens.length >= 2) {
+    return 0.96;
+  }
+
+  if (containsFullCandidate && candidateTokens.length >= 2) {
+    return 0.94;
+  }
+
+  const hasStrongEvidence =
+    matchedInputTokens.length >= 2 ||
+    inputCoverage >= 0.8 ||
+    candidateCoverage >= 0.8;
+
+  if (!hasStrongEvidence) {
+    return 0;
+  }
+
+  return inputCoverage * 0.5 + candidateCoverage * 0.35 + jaccard * 0.15;
 }
 
 function resolveSquareServiceFromInput(params: {
@@ -204,13 +223,13 @@ function resolveSquareServiceFromInput(params: {
 
   const best = scored[0];
 
-  if (!best || best.score < 0.58) {
+  if (!best || best.score < 0.74) {
     return { kind: "none" };
   }
 
-  const closeMatches = scored.filter((item) => best.score - item.score < 0.08);
+  const closeMatches = scored.filter((item) => best.score - item.score < 0.12);
 
-  if (closeMatches.length > 1 && best.score < 0.92) {
+  if (closeMatches.length > 1) {
     return {
       kind: "ambiguous",
       options: closeMatches.slice(0, 5).map((item) => item.serviceName),
