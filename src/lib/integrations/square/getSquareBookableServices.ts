@@ -42,6 +42,8 @@ export type SquareBookableService = {
   itemName: string;
   variationId: string;
   variationName: string;
+  serviceName: string;
+  searchText: string;
   variationVersion: number;
   durationMinutes: number | null;
   availableForBooking: boolean;
@@ -73,6 +75,39 @@ function getSquareApiBaseUrl(environment: SquareEnvironment): string {
 function toMinutesFromMs(value?: number): number | null {
   if (!Number.isFinite(value)) return null;
   return Math.round((value as number) / 60_000);
+}
+
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function buildSquareServiceName(params: {
+  itemName: string;
+  variationName: string;
+}): string {
+  const itemName = clean(params.itemName);
+  const variationName = clean(params.variationName);
+
+  if (!variationName) {
+    return itemName;
+  }
+
+  if (variationName.toLowerCase() === itemName.toLowerCase()) {
+    return itemName;
+  }
+
+  return `${itemName} ${variationName}`.trim();
+}
+
+function buildSquareServiceSearchText(params: {
+  itemName: string;
+  variationName: string;
+  serviceName: string;
+}): string {
+  return [params.serviceName, params.itemName, params.variationName]
+    .map(clean)
+    .filter(Boolean)
+    .join(" | ");
 }
 
 export async function getSquareBookableServices(
@@ -139,12 +174,23 @@ export async function getSquareBookableServices(
       const itemId = String(variationData?.item_id || "").trim();
       const item = itemMap.get(itemId);
 
-      const itemName = String(item?.item_data?.name || "").trim();
-      const variationName = String(variationData?.name || "").trim();
-      const variationId = String(variation.id || "").trim();
+      const itemName = clean(item?.item_data?.name);
+      const variationName = clean(variationData?.name);
+      const variationId = clean(variation.id);
       const variationVersion = Number(variation.version || 0);
       const availableForBooking = Boolean(variationData?.available_for_booking);
       const durationMinutes = toMinutesFromMs(variationData?.service_duration);
+
+      const serviceName = buildSquareServiceName({
+        itemName,
+        variationName,
+      });
+
+      const searchText = buildSquareServiceSearchText({
+        itemName,
+        variationName,
+        serviceName,
+      });
 
       if (!itemId || !variationId || !itemName) continue;
 
@@ -153,6 +199,8 @@ export async function getSquareBookableServices(
         itemName,
         variationId,
         variationName,
+        serviceName,
+        searchText,
         variationVersion,
         durationMinutes,
         availableForBooking,

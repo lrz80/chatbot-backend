@@ -99,6 +99,7 @@ export async function executeRealtimeStepRoute(
 
   if (stepRoute.kind === "service") {
     const serviceStepResult = await handleBookingServiceRealtimeStep({
+      tenantId,
       callerPhone,
       currentStep,
       currentIndex,
