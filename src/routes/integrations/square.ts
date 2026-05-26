@@ -20,6 +20,7 @@ import {
   getBookingProviderConnection,
   getBookingProviderSecrets,
 } from "../../lib/appointments/booking/providers/providerConnections.repo";
+import { syncSquareServiceMappingsForTenant } from "../../lib/integrations/square/syncSquareServiceMappingsForTenant";
 
 const router = Router();
 
@@ -900,6 +901,75 @@ router.get("/tenant/services", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "SQUARE_TENANT_SERVICES_FAILED",
+    });
+  }
+});
+
+router.post("/tenant/service-mappings/sync", async (req, res) => {
+  try {
+    const tenantId = String(req.body?.tenantId || "").trim();
+
+    const rawInternalServices = Array.isArray(req.body?.internalServices)
+      ? req.body.internalServices
+      : [];
+
+    const internalServices: Array<{
+      internalServiceKey: string;
+      internalServiceName: string | null;
+    }> = rawInternalServices
+      .map((item: any) => ({
+        internalServiceKey: String(item?.internalServiceKey || "").trim(),
+        internalServiceName:
+          String(item?.internalServiceName || "").trim() || null,
+      }))
+      .filter(
+        (
+          item: {
+            internalServiceKey: string;
+            internalServiceName: string | null;
+          }
+        ) => Boolean(item.internalServiceKey)
+      );
+
+    if (!tenantId) {
+      return res.status(400).json({
+        ok: false,
+        error: "TENANT_ID_REQUIRED",
+      });
+    }
+
+    if (internalServices.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "INTERNAL_SERVICES_REQUIRED",
+      });
+    }
+
+    const result = await syncSquareServiceMappingsForTenant({
+      tenantId,
+      internalServices,
+      autoConfirmExactMatches: true,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        synced: result.synced,
+        skipped: result.skipped,
+        squareServicesCount: result.squareServicesCount,
+        errors: [],
+      },
+    });
+  } catch (error) {
+    console.error("[SQUARE_TENANT_SERVICE_MAPPINGS_SYNC] unexpected error", error);
+
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_TENANT_SERVICE_MAPPINGS_SYNC_FAILED",
     });
   }
 });
