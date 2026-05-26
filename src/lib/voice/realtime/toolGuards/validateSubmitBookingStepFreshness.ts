@@ -231,9 +231,21 @@ export function validateSubmitBookingStepFreshness(params: {
    *
    * Esto no hardcodea servicios ni tenants. Solo resuelve una carrera de eventos.
    */
+  const hasAcceptedTranscriptContext =
+    Boolean(currentTranscript) && currentTranscriptSeq >= 0;
+
+  /**
+   * Only allow model-value race recovery if there is already some accepted
+   * human transcript context in the runtime.
+   *
+   * If the latest transcript was ignored by anti-echo / assistant-speaking guard,
+   * currentTranscript can be empty or stale. In that case the model value may come
+   * from ignored audio and must not be accepted.
+   */
   const canAcceptModelValueDuringTranscriptRace =
     isSubmittingExpectedPendingStep &&
     !hasNewHumanTranscript &&
+    hasAcceptedTranscriptContext &&
     Boolean(submittedValue) &&
     submittedValueDiffersFromCurrentTranscript &&
     submittedValueDiffersFromLastSubmitted &&

@@ -401,6 +401,73 @@ export async function handleRealtimeToolCall(
       turnGate.reason === "NO_NEW_USER_ANSWER" &&
       freshness.canAcceptModelValueDuringTranscriptRace;
 
+    const submittedStepKey = clean(toolArgs.step_key);
+    const modelValue = clean(toolArgs.value);
+    const currentTranscript = clean(lastUserTranscript);
+
+    const hasNoAcceptedHumanTranscript =
+      !currentTranscript ||
+      (typeof realtimeState.lastUserTranscriptSeq === "number" &&
+        typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number" &&
+        realtimeState.lastUserTranscriptSeq <= realtimeState.pendingBookingStepPromptAnchorSeq);
+
+    const isModelOnlySubmitWithoutAcceptedHumanInput =
+      submittedStepKey === "service" &&
+      Boolean(modelValue) &&
+      hasNoAcceptedHumanTranscript &&
+      !freshness.hasNewHumanTranscript &&
+      !freshness.canAcceptModelValueDuringTranscriptRace;
+
+    if (isModelOnlySubmitWithoutAcceptedHumanInput) {
+      const blockedResult: RealtimeToolResult = {
+        ok: false,
+        error: "BOOKING_STEP_WAITING_FOR_NEW_USER_INPUT",
+        message: "Ignored model-only submit without accepted human transcript.",
+        next_required_step: realtimeState.pendingBookingStepKey
+          ? {
+              step_key: realtimeState.pendingBookingStepKey,
+              prompt: realtimeState.pendingBookingStepPrompt || "",
+              required: realtimeState.pendingBookingStepRequired ?? true,
+            }
+          : undefined,
+      };
+
+      console.warn("[VOICE_REALTIME][BOOKING_SUBMIT_BLOCKED_MODEL_ONLY_WITHOUT_ACCEPTED_TRANSCRIPT]", {
+        callSid,
+        submittedStepKey,
+        modelValue,
+        currentTranscript,
+        bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
+        lastUserTranscriptSeq:
+          typeof realtimeState.lastUserTranscriptSeq === "number"
+            ? realtimeState.lastUserTranscriptSeq
+            : null,
+        pendingBookingStepPromptAnchorSeq:
+          typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
+            ? realtimeState.pendingBookingStepPromptAnchorSeq
+            : null,
+      });
+
+      sendJson(openAiSocket, {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify(blockedResult),
+        },
+      });
+
+      return {
+        consumed: true,
+        result: blockedResult,
+        realtimeState,
+        bookingFlowLoaded,
+        hangupRequestedByTool: false,
+        callEnding,
+        resetLastUserDigits: false,
+      };
+    }
+
     if (!turnGate.ok && !canBypassTurnGateForTranscriptRace) {
       const blockedResult: RealtimeToolResult = {
         ok: false,
