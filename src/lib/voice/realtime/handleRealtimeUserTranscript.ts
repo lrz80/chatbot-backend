@@ -11,7 +11,6 @@ export type HandleRealtimeUserTranscriptResult = {
   ignoredReason?:
     | "CALL_ENDING"
     | "EMPTY_TRANSCRIPT"
-    | "ASSISTANT_SPEAKING"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO"
     | "RUNTIME_NOT_CONSUMED";
   lastUserTranscript: string;
@@ -56,7 +55,6 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   reason?:
     | "CALL_ENDING"
     | "EMPTY_TRANSCRIPT"
-    | "ASSISTANT_SPEAKING"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO";
   msSinceAssistantAudioDone: number | null;
 } {
@@ -72,14 +70,6 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     return {
       ignore: true,
       reason: "EMPTY_TRANSCRIPT",
-      msSinceAssistantAudioDone: null,
-    };
-  }
-
-  if (params.assistantSpeaking) {
-    return {
-      ignore: true,
-      reason: "ASSISTANT_SPEAKING",
       msSinceAssistantAudioDone: null,
     };
   }

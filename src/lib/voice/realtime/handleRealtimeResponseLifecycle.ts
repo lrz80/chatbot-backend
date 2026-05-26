@@ -34,24 +34,17 @@ export function handleRealtimeResponseDone(
 
   let nextRealtimeState = params.realtimeState;
 
-  const hadPendingResponse = Boolean(params.pendingResponseCreate);
-
-  if (hadPendingResponse) {
-    params.flushPendingRealtimeResponse();
-
-    return {
-      realtimeState: nextRealtimeState,
-      activeResponseId: null,
-      handled: true,
-    };
-  }
-
   const completedEndCallGoodbye =
     params.hangupRequestedByTool &&
     params.endCallGoodbyeRequested &&
     params.endCallGoodbyeResponseId &&
     completedResponseId === params.endCallGoodbyeResponseId;
 
+  /**
+   * Important:
+   * Open the booking turn BEFORE flushing any queued response.
+   * Otherwise the state can stay stuck in waiting_assistant_prompt forever.
+   */
   if (
     !completedEndCallGoodbye &&
     !params.callEnding &&
@@ -74,6 +67,18 @@ export function handleRealtimeResponseDone(
       lastUserTranscript: params.lastUserTranscript,
       lastUserTranscriptSeq: params.lastUserTranscriptSeq,
     });
+  }
+
+  const hadPendingResponse = Boolean(params.pendingResponseCreate);
+
+  if (hadPendingResponse) {
+    params.flushPendingRealtimeResponse();
+
+    return {
+      realtimeState: nextRealtimeState,
+      activeResponseId: null,
+      handled: true,
+    };
   }
 
   if (completedEndCallGoodbye) {
