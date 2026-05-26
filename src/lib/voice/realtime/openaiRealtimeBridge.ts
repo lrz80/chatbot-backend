@@ -10,6 +10,7 @@ import { handleRealtimeToolCall } from "./realtimeToolCallHandler";
 import { buildOpenAiRealtimeSessionUpdate } from "./buildOpenAiRealtimeSessionUpdate";
 import {
   attachLatestUserTranscriptSeq,
+  mergeTranscriptStatePreservingBookingRuntime,
 } from "./bookingRuntimeState";
 import { handleRealtimeUserTranscript } from "./handleRealtimeUserTranscript";
 import { handleRealtimeResponseDone } from "./handleRealtimeResponseLifecycle";
@@ -696,11 +697,36 @@ export async function createOpenAiRealtimeBridge({
           lastUserTranscript = transcriptResult.lastUserTranscript;
           lastUserTranscriptSeq = transcriptResult.lastUserTranscriptSeq;
           currentLocale = transcriptResult.currentLocale;
-          realtimeState = transcriptResult.realtimeState;
+
+          /**
+           * Important:
+           * Merge against the live bridge state at assignment time.
+           * Do not trust the realtimeState snapshot that was passed when the async
+           * transcript handler started, because tool calls may have updated booking
+           * state while transcription was being processed.
+           */
+          realtimeState = mergeTranscriptStatePreservingBookingRuntime({
+            currentToolState: realtimeState,
+            transcriptState: transcriptResult.realtimeState,
+            lastUserTranscriptSeq: transcriptResult.lastUserTranscriptSeq,
+          });
+
           realtimeTenant = transcriptResult.realtimeTenant;
           realtimeCfg = transcriptResult.realtimeCfg;
           localeLocked = transcriptResult.localeLocked;
           tenantId = transcriptResult.tenantId;
+
+          console.log("[VOICE_REALTIME][BRIDGE_STATE_AFTER_TRANSCRIPT]", {
+            callSid,
+            bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
+            pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
+            pendingBookingStepPromptAnchorSeq:
+              typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
+                ? realtimeState.pendingBookingStepPromptAnchorSeq
+                : null,
+            lastUserTranscript,
+            lastUserTranscriptSeq,
+          });
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {

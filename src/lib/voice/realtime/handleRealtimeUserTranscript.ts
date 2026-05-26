@@ -2,7 +2,6 @@
 import WebSocket from "ws";
 import type { CallState } from "../types";
 import { handleUserTranscriptCompleted } from "./realtimeTranscriptRuntime";
-import { mergeTranscriptStatePreservingBookingRuntime } from "./bookingRuntimeState";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -210,33 +209,25 @@ export async function handleRealtimeUserTranscript(params: {
     };
   }
 
-  const latestToolState = params.realtimeState;
-
-  const nextRealtimeState = mergeTranscriptStatePreservingBookingRuntime({
-    currentToolState: latestToolState,
-    transcriptState: runtimeResult.realtimeState,
-    lastUserTranscriptSeq: runtimeResult.lastUserTranscriptSeq,
-  });
-
   console.log("[VOICE_REALTIME][USER_TRANSCRIPT_ACCEPTED]", {
     callSid: params.callSid,
     transcript: runtimeResult.lastUserTranscript,
     lastUserTranscriptSeq: runtimeResult.lastUserTranscriptSeq,
     currentLocale: runtimeResult.currentLocale,
-    bookingTurnStatus: (nextRealtimeState as any).bookingTurnStatus || "",
-    pendingBookingStepKey: nextRealtimeState.pendingBookingStepKey || "",
+    bookingTurnStatus: (runtimeResult.realtimeState as any).bookingTurnStatus || "",
+    pendingBookingStepKey: runtimeResult.realtimeState.pendingBookingStepKey || "",
     pendingBookingStepPromptAnchorSeq:
-      typeof nextRealtimeState.pendingBookingStepPromptAnchorSeq === "number"
-        ? nextRealtimeState.pendingBookingStepPromptAnchorSeq
+      typeof runtimeResult.realtimeState.pendingBookingStepPromptAnchorSeq === "number"
+        ? runtimeResult.realtimeState.pendingBookingStepPromptAnchorSeq
         : null,
-  });
+    });
 
   return {
     consumed: true,
     lastUserTranscript: runtimeResult.lastUserTranscript,
     lastUserTranscriptSeq: runtimeResult.lastUserTranscriptSeq,
     currentLocale: runtimeResult.currentLocale,
-    realtimeState: nextRealtimeState,
+    realtimeState: runtimeResult.realtimeState,
     realtimeTenant: runtimeResult.realtimeTenant,
     realtimeCfg: runtimeResult.realtimeCfg,
     localeLocked: runtimeResult.localeLocked,
