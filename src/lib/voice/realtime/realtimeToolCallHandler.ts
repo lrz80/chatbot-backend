@@ -267,6 +267,64 @@ export async function handleRealtimeToolCall(
 
   const resolvedTenantId: string = tenantId;
   
+  const unsafeToolRequiresRecentUserInput =
+    toolName === "send_useful_link_sms" ||
+    toolName === "send_booking_sms" ||
+    toolName === "submit_booking_step";
+
+  const hasRecentUserInputAfterBookingPrompt =
+    typeof realtimeState.lastUserTranscriptSeq === "number" &&
+    typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number" &&
+    realtimeState.lastUserTranscriptSeq > realtimeState.pendingBookingStepPromptAnchorSeq;
+
+  const isWaitingForAssistantPrompt =
+    (realtimeState as any).bookingTurnStatus === "waiting_assistant_prompt";
+
+  if (
+    unsafeToolRequiresRecentUserInput &&
+    isWaitingForAssistantPrompt &&
+    toolName !== "submit_booking_step"
+  ) {
+    const blockedResult: RealtimeToolResult = {
+      ok: false,
+      error: "TOOL_BLOCKED_WHILE_ASSISTANT_PROMPT_NOT_COMPLETED",
+    };
+
+    console.warn("[VOICE_REALTIME][TOOL_BLOCKED_WHILE_ASSISTANT_PROMPT_NOT_COMPLETED]", {
+      callSid,
+      toolName,
+      bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
+      lastUserTranscript,
+      lastUserTranscriptSeq:
+        typeof realtimeState.lastUserTranscriptSeq === "number"
+          ? realtimeState.lastUserTranscriptSeq
+          : null,
+      pendingBookingStepPromptAnchorSeq:
+        typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
+          ? realtimeState.pendingBookingStepPromptAnchorSeq
+          : null,
+    });
+
+    sendJson(openAiSocket, {
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify(blockedResult),
+      },
+    });
+
+    return {
+      consumed: true,
+      result: blockedResult,
+      realtimeState,
+      bookingFlowLoaded,
+      hangupRequestedByTool: false,
+      callEnding,
+      resetLastUserDigits: false,
+    };
+  }
+
   const sendBookingSmsGuard = await guardSendBookingSms({
     toolName,
     toolArgs,
@@ -387,7 +445,11 @@ export async function handleRealtimeToolCall(
        * If the issue is simply that there is no new transcript yet, do not create
        * another assistant response and do not interrupt active audio.
        */
-      if (turnGate.reason !== "NO_NEW_USER_ANSWER") {
+      const shouldSilentlyIgnoreBlockedSubmit =
+        turnGate.reason === "NO_NEW_USER_ANSWER" ||
+        turnGate.reason === "ASSISTANT_PROMPT_NOT_COMPLETED";
+
+      if (!shouldSilentlyIgnoreBlockedSubmit) {
         requestRealtimeResponse(
           {
             instructions: buildSubmitBookingStepNotReadyInstructions({
@@ -452,8 +514,17 @@ export async function handleRealtimeToolCall(
       promptAnchorSeq,
     });
 
+    const isServiceStep =
+      clean(effectiveToolArgs.step_key || toolArgs.step_key) === "service";
+
     const candidates = [
-      transcriptValue
+      isServiceStep && transcriptValue && forwardedValue === transcriptValue
+        ? {
+            source: "transcript",
+            value: transcriptValue,
+          }
+        : null,
+      !isServiceStep && transcriptValue
         ? {
             source: "transcript",
             value: transcriptValue,

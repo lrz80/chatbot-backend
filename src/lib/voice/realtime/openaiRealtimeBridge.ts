@@ -753,7 +753,7 @@ export async function createOpenAiRealtimeBridge({
         callEnding,
         assistantSpeaking,
         lastAssistantAudioDoneAtMs,
-        minMsAfterAssistantAudio: 900,
+        minMsAfterAssistantAudio: 1600,
       })
         .then((transcriptResult) => {
           if (!transcriptResult.consumed) {
