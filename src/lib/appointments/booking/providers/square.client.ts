@@ -86,6 +86,71 @@ export type SquareListTeamMemberBookingProfilesResponse = {
   cursor?: string;
 };
 
+export type SquareLocation = {
+  id?: string;
+  name?: string;
+  status?: string;
+  timezone?: string;
+  merchant_id?: string;
+  business_name?: string;
+  phone_number?: string;
+  currency?: string;
+  country?: string;
+};
+
+export type SquareListLocationsResponse = {
+  locations?: SquareLocation[];
+};
+
+export type SquareCatalogMoney = {
+  amount?: number;
+  currency?: string;
+};
+
+export type SquareCatalogItemVariationData = {
+  item_id?: string;
+  name?: string;
+  pricing_type?: string;
+  price_money?: SquareCatalogMoney;
+  service_duration?: number;
+};
+
+export type SquareCatalogItemData = {
+  name?: string;
+  description?: string;
+  product_type?: string;
+  is_archived?: boolean;
+  variations?: SquareCatalogObject[];
+};
+
+export type SquareCatalogObject = {
+  type?: string;
+  id?: string;
+  version?: number;
+  updated_at?: string;
+  is_deleted?: boolean;
+  present_at_all_locations?: boolean;
+  present_at_location_ids?: string[];
+  absent_at_location_ids?: string[];
+  item_data?: SquareCatalogItemData;
+  item_variation_data?: SquareCatalogItemVariationData;
+};
+
+export type SquareSearchCatalogServicesInput = {
+  accessToken: string;
+  environment: SquareEnvironment;
+  cursor?: string | null;
+  limit?: number | null;
+  locationId?: string | null;
+  textFilter?: string | null;
+};
+
+export type SquareSearchCatalogServicesResponse = {
+  items?: SquareCatalogObject[];
+  matched_variation_ids?: string[];
+  cursor?: string;
+};
+
 function resolveSquareBaseUrl(environment: SquareEnvironment): string {
   return environment === "sandbox"
     ? "https://connect.squareupsandbox.com"
@@ -443,5 +508,54 @@ export async function squareListTeamMemberBookingProfiles(args: {
     environment: args.environment,
     path: "/v2/bookings/team-member-booking-profiles",
     method: "GET",
+  });
+}
+
+export async function squareListLocations(args: {
+  accessToken: string;
+  environment: SquareEnvironment;
+}): Promise<SquareApiResult<SquareListLocationsResponse>> {
+  return squareRequest<SquareListLocationsResponse>({
+    accessToken: args.accessToken,
+    environment: args.environment,
+    path: "/v2/locations",
+    method: "GET",
+  });
+}
+
+export async function squareSearchCatalogServices(
+  args: SquareSearchCatalogServicesInput
+): Promise<SquareApiResult<SquareSearchCatalogServicesResponse>> {
+  const limit = normalizeNumber(args.limit) || 100;
+  const safeLimit = Math.max(1, Math.min(limit, 100));
+  const locationId = String(args.locationId || "").trim();
+  const cursor = String(args.cursor || "").trim();
+  const textFilter = String(args.textFilter || "").trim();
+
+  const body: Record<string, unknown> = {
+    limit: safeLimit,
+    sort_order: "ASC",
+    product_types: ["APPOINTMENTS_SERVICE"],
+    archived_state: "ARCHIVED_STATE_NOT_ARCHIVED",
+  };
+
+  if (locationId) {
+    body.enabled_location_ids = [locationId];
+  }
+
+  if (cursor) {
+    body.cursor = cursor;
+  }
+
+  if (textFilter) {
+    body.text_filter = textFilter;
+  }
+
+  return squareRequest<SquareSearchCatalogServicesResponse>({
+    accessToken: args.accessToken,
+    environment: args.environment,
+    path: "/v2/catalog/search-catalog-items",
+    method: "POST",
+    body,
   });
 }
