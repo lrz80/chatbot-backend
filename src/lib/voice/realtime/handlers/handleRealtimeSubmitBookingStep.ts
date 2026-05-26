@@ -52,6 +52,7 @@ function clean(value: unknown): string {
 }
 
 function buildSubmitValueCandidates(args: Record<string, any>): SubmitValueCandidate[] {
+  const primaryValue = clean(args.value);
   const rawCandidates = Array.isArray(args.value_candidates)
     ? args.value_candidates
     : [];
@@ -70,25 +71,28 @@ function buildSubmitValueCandidates(args: Record<string, any>): SubmitValueCandi
     })
     .filter(Boolean) as SubmitValueCandidate[];
 
-  const fallbackValue = clean(args.value);
-
-  const candidates =
-    parsedCandidates.length > 0
-      ? parsedCandidates
-      : fallbackValue
-      ? [
-          {
-            source: "legacy",
-            value: fallbackValue,
-          },
-        ]
-      : [];
+  /**
+   * args.value is already the server-selected value from realtimeToolCallHandler.
+   * Do not let raw transcript candidates override it again here.
+   */
+  const orderedCandidates: SubmitValueCandidate[] = [
+    primaryValue
+      ? {
+          source: clean(args.resolved_candidate_source) || "selected",
+          value: primaryValue,
+        }
+      : null,
+    ...parsedCandidates,
+  ].filter(Boolean) as SubmitValueCandidate[];
 
   const seen = new Set<string>();
 
-  return candidates.filter((candidate) => {
-    const key = `${candidate.source}:${candidate.value}`;
+  return orderedCandidates.filter((candidate) => {
+    const normalizedValue = candidate.value.toLowerCase();
+    const key = normalizedValue;
+
     if (seen.has(key)) return false;
+
     seen.add(key);
     return true;
   });
