@@ -14,6 +14,7 @@ import { handleRealtimeToolError } from "./toolErrors/handleRealtimeToolError";
 import { guardTenantReady } from "./toolGuards/guardTenantReady";
 import { handleBlockedSubmitBookingStep } from "./toolGuards/handleBlockedSubmitBookingStep";
 import { applyBookingRuntimeStateAfterToolResult } from "./bookingRuntimeState";
+import { canSubmitBookingStepNow } from "./bookingTurnState";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -55,6 +56,23 @@ function clean(value: unknown): string {
 function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
   if (socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify(payload));
+}
+
+function buildSubmitBookingStepNotReadyInstructions(params: {
+  realtimeState: CallState;
+  reason: string;
+}): string {
+  const pendingPrompt = clean(params.realtimeState.pendingBookingStepPrompt);
+
+  return [
+    "The booking step is not ready to accept a submitted answer yet.",
+    `Reason: ${params.reason}.`,
+    pendingPrompt
+      ? `Ask the caller the pending booking question using this configured prompt as source of truth: ${pendingPrompt}`
+      : "Ask the caller the pending booking question again using the current booking flow state.",
+    "Do not invent booking details, services, dates, times, names, phone numbers, or policies.",
+    "Ask only one question.",
+  ].join(" ");
 }
 
 export async function handleRealtimeToolCall(
@@ -262,6 +280,76 @@ export async function handleRealtimeToolCall(
   }
 
   if (toolName === "submit_booking_step") {
+    const turnGate = canSubmitBookingStepNow({
+      realtimeState,
+      submittedStepKey: clean(toolArgs.step_key),
+      lastUserTranscriptSeq:
+        typeof realtimeState.lastUserTranscriptSeq === "number"
+          ? realtimeState.lastUserTranscriptSeq
+          : -1,
+    });
+
+    if (!turnGate.ok) {
+      const blockedResult: RealtimeToolResult = {
+        ok: false,
+        error: "BOOKING_STEP_NOT_READY_FOR_SUBMIT",
+        message: turnGate.reason,
+        next_required_step: realtimeState.pendingBookingStepKey
+          ? {
+              step_key: realtimeState.pendingBookingStepKey,
+              prompt: realtimeState.pendingBookingStepPrompt || "",
+              required: realtimeState.pendingBookingStepRequired ?? true,
+            }
+          : undefined,
+      };
+
+      console.warn("[VOICE_REALTIME][BOOKING_SUBMIT_BLOCKED_BY_TURN_STATE]", {
+        callSid,
+        reason: turnGate.reason,
+        submittedStepKey: clean(toolArgs.step_key),
+        pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
+        bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
+        lastUserTranscript,
+        lastUserTranscriptSeq:
+          typeof realtimeState.lastUserTranscriptSeq === "number"
+            ? realtimeState.lastUserTranscriptSeq
+            : null,
+        pendingBookingStepPromptAnchorSeq:
+          typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
+            ? realtimeState.pendingBookingStepPromptAnchorSeq
+            : null,
+      });
+
+      sendJson(openAiSocket, {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify(blockedResult),
+        },
+      });
+
+      requestRealtimeResponse(
+        {
+          instructions: buildSubmitBookingStepNotReadyInstructions({
+            realtimeState,
+            reason: turnGate.reason || "UNKNOWN",
+          }),
+        },
+        "tool_guard:submit_booking_step_turn_state"
+      );
+
+      return {
+        consumed: true,
+        result: blockedResult,
+        realtimeState,
+        bookingFlowLoaded,
+        hangupRequestedByTool: false,
+        callEnding,
+        resetLastUserDigits: false,
+      };
+    }
+
     const freshness = validateSubmitBookingStepFreshness({
       toolArgs,
       realtimeState,
@@ -293,21 +381,28 @@ export async function handleRealtimeToolCall(
     const transcriptValue = clean(lastUserTranscript);
 
     const candidates = [
-      modelValue
-        ? {
-            source: "model",
-            value: modelValue,
-          }
-        : null,
       transcriptValue
         ? {
             source: "transcript",
             value: transcriptValue,
           }
         : null,
+      modelValue
+        ? {
+            source: "model",
+            value: modelValue,
+          }
+        : null,
     ].filter(Boolean);
 
-    effectiveToolArgs.value = modelValue || transcriptValue;
+    /**
+     * The transcript is the primary human input.
+     * The model value is only a candidate/normalization hint.
+     *
+     * Do not prefer modelValue here, because Realtime can infer or invent
+     * slot values that the caller did not actually say.
+     */
+    effectiveToolArgs.value = transcriptValue || modelValue;
     effectiveToolArgs.model_value = modelValue;
     effectiveToolArgs.transcript_value = transcriptValue;
     effectiveToolArgs.value_candidates = candidates;
