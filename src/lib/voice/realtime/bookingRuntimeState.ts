@@ -1,5 +1,9 @@
 // src/lib/voice/realtime/bookingRuntimeState.ts
 import type { CallState } from "../types";
+import {
+  clearBookingTurnState,
+  markBookingWaitingForAssistantPrompt,
+} from "./bookingTurnState";
 
 function clean(value: unknown): string {
   return String(value ?? "").trim();
@@ -11,7 +15,10 @@ function finiteNumber(value: unknown, fallback: number): number {
     : fallback;
 }
 
-function pickDefined<T>(primary: T | undefined, fallback: T | undefined): T | undefined {
+function pickDefined<T>(
+  primary: T | undefined,
+  fallback: T | undefined
+): T | undefined {
   return typeof primary !== "undefined" ? primary : fallback;
 }
 
@@ -26,6 +33,15 @@ function pickNonEmptyString(
   if (fallbackClean) return fallbackClean;
 
   return primary ?? fallback;
+}
+
+function hasBookingData(value: unknown): boolean {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value as Record<string, unknown>).length > 0
+  );
 }
 
 function resolveConsumedBookingSubmitValue(params: {
@@ -67,10 +83,14 @@ export function mergeTranscriptStatePreservingBookingRuntime(params: {
         ? currentToolState.bookingStepIndex
         : transcriptState.bookingStepIndex,
 
-    bookingData:
-      Object.keys(currentToolState.bookingData || {}).length > 0
-        ? currentToolState.bookingData
-        : transcriptState.bookingData,
+    bookingData: hasBookingData(currentToolState.bookingData)
+      ? currentToolState.bookingData
+      : transcriptState.bookingData,
+
+    bookingTurnStatus: pickDefined(
+      (currentToolState as any).bookingTurnStatus,
+      (transcriptState as any).bookingTurnStatus
+    ),
 
     pendingBookingStepKey: pickNonEmptyString(
       currentToolState.pendingBookingStepKey,
@@ -136,50 +156,46 @@ export function mergeTranscriptStatePreservingBookingRuntime(params: {
       currentToolState.postBookingClosureTranscript,
       transcriptState.postBookingClosureTranscript
     ),
-  };
+  } as CallState;
 }
 
+/**
+ * Legacy helper kept temporarily because other runtime files may still import it.
+ * The new source of truth is bookingTurnState.ts.
+ */
 export function clearPendingBookingStepAnchor(realtimeState: CallState): CallState {
-  return {
-    ...realtimeState,
-    pendingBookingStepKey: "",
-    pendingBookingStepRequired: undefined,
-    pendingBookingStepPrompt: "",
-    pendingBookingStepPromptAnchorTranscript: "",
-    pendingBookingStepPromptAnchorSeq: -1,
-  };
+  return clearBookingTurnState(realtimeState);
 }
 
+/**
+ * Legacy helper kept temporarily because other runtime files may still import it.
+ * Do not use this for new booking turn logic.
+ */
 export function setPendingBookingStepAnchor(params: {
   realtimeState: CallState;
   nextRequiredStep: any;
   anchorTranscript: string;
   anchorSeq: number;
 }): CallState {
-  const {
-    realtimeState,
-    nextRequiredStep,
-    anchorTranscript,
-    anchorSeq,
-  } = params;
+  const { realtimeState, nextRequiredStep } = params;
 
   const nextStepKey = clean(nextRequiredStep?.step_key);
 
   if (!nextStepKey) {
-    return clearPendingBookingStepAnchor(realtimeState);
+    return clearBookingTurnState(realtimeState);
   }
 
-  return {
-    ...realtimeState,
-    pendingBookingStepKey: nextStepKey,
-    pendingBookingStepRequired:
-      typeof nextRequiredStep?.required === "boolean"
-        ? nextRequiredStep.required
-        : realtimeState.pendingBookingStepRequired,
-    pendingBookingStepPrompt: clean(nextRequiredStep?.prompt),
-    pendingBookingStepPromptAnchorTranscript: clean(anchorTranscript),
-    pendingBookingStepPromptAnchorSeq: finiteNumber(anchorSeq, -1),
-  };
+  return markBookingWaitingForAssistantPrompt({
+    realtimeState: {
+      ...realtimeState,
+      pendingBookingStepRequired:
+        typeof nextRequiredStep?.required === "boolean"
+          ? nextRequiredStep.required
+          : realtimeState.pendingBookingStepRequired,
+    } as CallState,
+    stepKey: nextStepKey,
+    prompt: clean(nextRequiredStep?.prompt),
+  });
 }
 
 export function markSubmittedBookingStep(params: {
@@ -246,19 +262,27 @@ export function applyBookingRuntimeStateAfterToolResult(params: {
     (toolName === "get_booking_flow" || toolName === "submit_booking_step") &&
     toolResult?.next_required_step
   ) {
-    const shouldWaitForAssistantToAskNextStep =
-      toolName === "submit_booking_step" && toolResult?.ok === true;
+    const nextStep = toolResult.next_required_step;
+    const nextStepKey = clean(nextStep?.step_key);
+    const nextPrompt = clean(nextStep?.prompt);
 
-    nextState = setPendingBookingStepAnchor({
-      realtimeState: nextState,
-      nextRequiredStep: toolResult.next_required_step,
-      anchorTranscript: shouldWaitForAssistantToAskNextStep
-        ? ""
-        : lastUserTranscript,
-      anchorSeq: shouldWaitForAssistantToAskNextStep
-        ? -1
-        : lastUserTranscriptSeq,
-    });
+    if (!nextStepKey) {
+      nextState = clearBookingTurnState(nextState);
+    } else {
+      nextState = {
+        ...nextState,
+        pendingBookingStepRequired:
+          typeof nextStep?.required === "boolean"
+            ? nextStep.required
+            : nextState.pendingBookingStepRequired,
+      } as CallState;
+
+      nextState = markBookingWaitingForAssistantPrompt({
+        realtimeState: nextState,
+        stepKey: nextStepKey,
+        prompt: nextPrompt,
+      });
+    }
   }
 
   if (
@@ -266,7 +290,7 @@ export function applyBookingRuntimeStateAfterToolResult(params: {
     toolResult?.ok === true &&
     !toolResult?.next_required_step
   ) {
-    nextState = clearPendingBookingStepAnchor(nextState);
+    nextState = clearBookingTurnState(nextState);
   }
 
   return nextState;

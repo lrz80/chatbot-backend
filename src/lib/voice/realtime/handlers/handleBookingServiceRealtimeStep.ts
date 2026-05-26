@@ -202,19 +202,25 @@ function resolveSquareServiceFromInput(params: {
   services: SquareBookableService[];
 }): SquareServiceMatch {
   const input = clean(params.input);
+  const normalizedInput = normalizeSearchText(input);
 
-  if (!input) {
+  if (!normalizedInput) {
     return { kind: "none" };
   }
 
   const scored = params.services
     .map((service) => {
       const serviceName = getSquareServiceName(service);
-      const score = scoreCandidate(input, getSquareSearchText(service));
+      const searchText = getSquareSearchText(service);
+      const normalizedServiceName = normalizeSearchText(serviceName);
+      const normalizedSearchText = normalizeSearchText(searchText);
+      const score = scoreCandidate(input, searchText);
 
       return {
         service,
         serviceName,
+        normalizedServiceName,
+        normalizedSearchText,
         score,
       };
     })
@@ -223,13 +229,42 @@ function resolveSquareServiceFromInput(params: {
 
   const best = scored[0];
 
-  if (!best || best.score < 0.74) {
+  if (!best || best.score < 0.86) {
     return { kind: "none" };
   }
 
-  const closeMatches = scored.filter((item) => best.score - item.score < 0.12);
+  const exactOrContainedMatches = scored.filter((item) => {
+    return (
+      item.normalizedServiceName === normalizedInput ||
+      item.normalizedSearchText === normalizedInput ||
+      item.normalizedServiceName.includes(normalizedInput) ||
+      item.normalizedSearchText.includes(normalizedInput)
+    );
+  });
 
-  if (closeMatches.length > 1) {
+  if (exactOrContainedMatches.length === 1) {
+    const only = exactOrContainedMatches[0];
+
+    return {
+      kind: "resolved",
+      service: only.service,
+      serviceName: only.serviceName,
+      score: only.score,
+    };
+  }
+
+  if (exactOrContainedMatches.length > 1) {
+    return {
+      kind: "ambiguous",
+      options: exactOrContainedMatches
+        .slice(0, 5)
+        .map((item) => item.serviceName),
+    };
+  }
+
+  const closeMatches = scored.filter((item) => best.score - item.score < 0.08);
+
+  if (closeMatches.length !== 1) {
     return {
       kind: "ambiguous",
       options: closeMatches.slice(0, 5).map((item) => item.serviceName),

@@ -1,4 +1,4 @@
-//src/lib/voice/realtime/openaiRealtimeBridge.ts
+// src/lib/voice/realtime/openaiRealtimeBridge.ts
 
 import WebSocket from "ws";
 import twilio from "twilio";
@@ -8,11 +8,11 @@ import type { CallState } from "../types";
 
 import { handleRealtimeToolCall } from "./realtimeToolCallHandler";
 import { buildOpenAiRealtimeSessionUpdate } from "./buildOpenAiRealtimeSessionUpdate";
-import { handleUserTranscriptCompleted } from "./realtimeTranscriptRuntime";
 import {
   attachLatestUserTranscriptSeq,
-  mergeTranscriptStatePreservingBookingRuntime,
 } from "./bookingRuntimeState";
+import { handleRealtimeUserTranscript } from "./handleRealtimeUserTranscript";
+import { handleRealtimeResponseDone } from "./handleRealtimeResponseLifecycle";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -46,7 +46,9 @@ type TwilioUnknownPayload = {
   [key: string]: unknown;
 };
 
-function isTwilioStartEvent(event: TwilioUnknownPayload): event is TwilioStartPayload {
+function isTwilioStartEvent(
+  event: TwilioUnknownPayload
+): event is TwilioStartPayload {
   return (
     event.event === "start" &&
     typeof event.start === "object" &&
@@ -55,7 +57,9 @@ function isTwilioStartEvent(event: TwilioUnknownPayload): event is TwilioStartPa
   );
 }
 
-function isTwilioMediaEvent(event: TwilioUnknownPayload): event is TwilioMediaPayload {
+function isTwilioMediaEvent(
+  event: TwilioUnknownPayload
+): event is TwilioMediaPayload {
   return (
     event.event === "media" &&
     typeof event.media === "object" &&
@@ -181,10 +185,10 @@ function refreshRealtimeSession(params: {
   sendJson(
     params.openAiSocket,
     buildOpenAiRealtimeSessionUpdate({
-    instructions: session.instructions,
-    voice: session.voice,
-    model: params.model,
-  })
+      instructions: session.instructions,
+      voice: session.voice,
+      model: params.model,
+    })
   );
 
   return {
@@ -261,13 +265,6 @@ async function endTwilioCall(params: {
 
   const incomingAccountSid = clean(params.accountSid);
 
-  /**
-   * TWILIO_ACCOUNT_SID can be the master account.
-   * The call itself can belong to a subaccount.
-   *
-   * authAccountSid/authToken = credentials used to authenticate.
-   * targetAccountSid = account that owns the call resource.
-   */
   const authAccountSid = envAccountSid;
   const authToken = envAuthToken;
   const targetAccountSid = incomingAccountSid || envAccountSid;
@@ -337,12 +334,15 @@ export async function createOpenAiRealtimeBridge({
   let activeResponseId: string | null = null;
   let pendingResponseCreate: Record<string, unknown> | null = null;
 
+  let assistantSpeaking = false;
+  let lastAssistantAudioDoneAtMs = 0;
+
   let hangupRequestedByTool = false;
   let endCallGoodbyeRequested = false;
   let endCallGoodbyeResponseId: string | null = null;
 
   let callEnding = false;
-  
+
   let localeLocked = false;
   let twilioAccountSid: string | null = null;
 
@@ -471,6 +471,7 @@ export async function createOpenAiRealtimeBridge({
           callSid,
           toolName: event?.name || "",
           bookingFlowLoaded,
+          bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
           pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
           pendingBookingStepPromptAnchorTranscript:
             realtimeState.pendingBookingStepPromptAnchorTranscript || "",
@@ -491,7 +492,6 @@ export async function createOpenAiRealtimeBridge({
         if (toolCallResult.resetLastUserDigits) {
           lastUserDigits = "";
         }
-
       })
       .catch((error) => {
         console.error("[VOICE_REALTIME][TOOL_HANDLER_FATAL_ERROR]", {
@@ -600,13 +600,14 @@ export async function createOpenAiRealtimeBridge({
     });
   });
 
-    openAiSocket.on("message", (raw) => {
+  openAiSocket.on("message", (raw) => {
     const event = safeJsonParse(raw);
 
     if (!event) return;
 
     if (event.type === "response.created") {
       activeResponseId = event.response?.id || null;
+      assistantSpeaking = true;
 
       if (endCallGoodbyeRequested && !endCallGoodbyeResponseId) {
         endCallGoodbyeResponseId = activeResponseId;
@@ -651,28 +652,23 @@ export async function createOpenAiRealtimeBridge({
         return;
       }
 
+      assistantSpeaking = true;
+
       sendTwilioAudio({
         twilioSocket,
         streamSid,
         payload: audioDelta,
       });
+
       return;
     }
 
     if (event.type === "response.audio_transcript.done") {
-      /**
-       * Assistant transcript.
-       * Never use this as caller input.
-       */
       return;
     }
 
     if (event.type === "conversation.item.input_audio_transcription.completed") {
-      if (callEnding) {
-        return;
-      }
-
-      handleUserTranscriptCompleted({
+      handleRealtimeUserTranscript({
         event,
         callSid,
         didNumber,
@@ -687,28 +683,24 @@ export async function createOpenAiRealtimeBridge({
         refreshRealtimeSession,
         openAiSocket,
         tenantId,
+        callEnding,
+        assistantSpeaking,
+        lastAssistantAudioDoneAtMs,
+        minMsAfterAssistantAudio: 900,
       })
-        .then((runtimeResult) => {
-          if (!runtimeResult.consumed) {
+        .then((transcriptResult) => {
+          if (!transcriptResult.consumed) {
             return;
           }
 
-          lastUserTranscript = runtimeResult.lastUserTranscript;
-          lastUserTranscriptSeq = runtimeResult.lastUserTranscriptSeq;
-          currentLocale = runtimeResult.currentLocale;
-          
-          const latestToolState = realtimeState;
-
-          realtimeState = mergeTranscriptStatePreservingBookingRuntime({
-            currentToolState: latestToolState,
-            transcriptState: runtimeResult.realtimeState,
-            lastUserTranscriptSeq: runtimeResult.lastUserTranscriptSeq,
-          });
-
-          realtimeTenant = runtimeResult.realtimeTenant;
-          realtimeCfg = runtimeResult.realtimeCfg;
-          localeLocked = runtimeResult.localeLocked;
-          tenantId = runtimeResult.tenantId;
+          lastUserTranscript = transcriptResult.lastUserTranscript;
+          lastUserTranscriptSeq = transcriptResult.lastUserTranscriptSeq;
+          currentLocale = transcriptResult.currentLocale;
+          realtimeState = transcriptResult.realtimeState;
+          realtimeTenant = transcriptResult.realtimeTenant;
+          realtimeCfg = transcriptResult.realtimeCfg;
+          localeLocked = transcriptResult.localeLocked;
+          tenantId = transcriptResult.tenantId;
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {
@@ -721,42 +713,49 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (event.type === "response.done") {
-      const completedResponseId = event.response?.id || activeResponseId;
+      assistantSpeaking = false;
+      lastAssistantAudioDoneAtMs = Date.now();
 
-      activeResponseId = null;
+      const responseDoneResult = handleRealtimeResponseDone({
+        event,
+        callSid,
+        realtimeState,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        activeResponseId,
+        pendingResponseCreate,
+        hangupRequestedByTool,
+        endCallGoodbyeRequested,
+        endCallGoodbyeResponseId,
+        callEnding,
+        flushPendingRealtimeResponse,
+        onEndCallGoodbyeCompleted: () => {
+          if (!pendingResponseCreate && !activeResponseId) {
+            hangupRequestedByTool = false;
+            endCallGoodbyeRequested = false;
+            endCallGoodbyeResponseId = null;
+            callEnding = true;
 
-      const hadPendingResponse = Boolean(pendingResponseCreate);
+            setTimeout(() => {
+              endTwilioCall({
+                callSid,
+                accountSid: twilioAccountSid,
+              }).catch((error) => {
+                console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
+                  callSid,
+                  accountSid: twilioAccountSid,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              });
+            }, 2500);
+          }
+        },
+      });
 
-      if (hadPendingResponse) {
-        flushPendingRealtimeResponse();
-        return;
-      }
+      realtimeState = responseDoneResult.realtimeState;
+      activeResponseId = responseDoneResult.activeResponseId;
 
-      const completedEndCallGoodbye =
-        hangupRequestedByTool &&
-        endCallGoodbyeRequested &&
-        endCallGoodbyeResponseId &&
-        completedResponseId === endCallGoodbyeResponseId;
-
-      if (completedEndCallGoodbye && !pendingResponseCreate && !activeResponseId) {
-        hangupRequestedByTool = false;
-        endCallGoodbyeRequested = false;
-        endCallGoodbyeResponseId = null;
-        callEnding = true;
-
-        setTimeout(() => {
-          endTwilioCall({
-            callSid,
-            accountSid: twilioAccountSid,
-          }).catch((error) => {
-            console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
-              callSid,
-              accountSid: twilioAccountSid,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
-        }, 2500);
-      }
+      return;
     }
   });
 
@@ -792,18 +791,21 @@ export async function createOpenAiRealtimeBridge({
       callerPhone = event.start.customParameters?.callerPhone || null;
 
       bookingFlowLoaded = false;
-      
+
       hangupRequestedByTool = false;
       callEnding = false;
       twilioAccountSid = clean((event as any)?.start?.accountSid || "") || null;
       localeLocked = false;
-      
+
       realtimeState = {};
       realtimeTenant = null;
       realtimeCfg = null;
       lastUserTranscript = "";
       lastUserDigits = "";
       lastUserTranscriptSeq = 0;
+
+      assistantSpeaking = false;
+      lastAssistantAudioDoneAtMs = 0;
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {
         callSid,
