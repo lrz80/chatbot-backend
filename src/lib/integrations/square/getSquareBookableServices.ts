@@ -273,22 +273,6 @@ export async function getSquareBookableServices(
       (service) => service.availableForBooking
     );
 
-    console.log("[SQUARE][BOOKABLE_SERVICES_RESOLVED]", {
-      environment,
-      itemCount: itemMap.size,
-      topLevelVariationCount: topLevelVariationMap.size,
-      nestedVariationCount,
-      totalVariationCount: allServices.length,
-      bookableVariationCount: bookableServices.length,
-      sample: allServices.slice(0, 25).map((service) => ({
-        itemName: service.itemName,
-        variationName: service.variationName,
-        serviceName: service.serviceName,
-        availableForBooking: service.availableForBooking,
-        durationMinutes: service.durationMinutes,
-      })),
-    });
-
     return {
       ok: true,
       services: bookableServices,

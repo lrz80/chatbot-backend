@@ -397,16 +397,6 @@ export async function createOpenAiRealtimeBridge({
       });
     }
 
-    console.log("[VOICE_REALTIME][RESPONSE_CREATE_REQUESTED]", {
-      callSid,
-      source,
-      activeResponseId,
-      instructions:
-        typeof response?.instructions === "string"
-          ? response.instructions.slice(0, 500)
-          : null,
-    });
-
     if (activeResponseId) {
       pendingResponseCreate = event;
       pendingResponseSource = source;

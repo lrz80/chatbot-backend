@@ -194,6 +194,24 @@ function buildSubmitValueCandidates(params: {
 
   const orderedCandidates: Array<SubmitValueCandidate | null> = [];
 
+  const stepSlot = normalizeKey((currentStep as any)?.slot);
+  const stepExpectedType = normalizeKey((currentStep as any)?.expected_type);
+  const submittedStepKey = normalizeKey(args.step_key);
+
+  const isServiceStep =
+    submittedStepKey === "service" ||
+    stepSlot === "service" ||
+    stepExpectedType === "service";
+
+  const primarySource = clean(args.resolved_candidate_source) || "model";
+
+  if (isServiceStep && primaryValue && primarySource === "model") {
+    orderedCandidates.push({
+      source: "model",
+      value: primaryValue,
+    });
+  }
+
   if (transcriptValue) {
     orderedCandidates.push({
       source: "transcript",
@@ -202,8 +220,6 @@ function buildSubmitValueCandidates(params: {
   }
 
   if (primaryValue) {
-    const primarySource = clean(args.resolved_candidate_source) || "model";
-
     if (
       !isSensitiveStep ||
       primarySource === "transcript" ||

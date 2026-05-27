@@ -662,25 +662,6 @@ export async function handleRealtimeToolCall(
       lastUserTranscript,
     });
 
-    console.log("[VOICE_REALTIME][BOOKING_RUNTIME_AFTER_TOOL]", {
-      callSid,
-      toolName,
-      ok: toolResult?.ok,
-      next_required_step_key: toolResult?.next_required_step?.step_key || "",
-      pendingBookingStepKey: nextRealtimeState.pendingBookingStepKey || "",
-      pendingBookingStepPromptAnchorTranscript:
-        nextRealtimeState.pendingBookingStepPromptAnchorTranscript || "",
-      pendingBookingStepPromptAnchorSeq:
-        typeof nextRealtimeState.pendingBookingStepPromptAnchorSeq === "number"
-          ? nextRealtimeState.pendingBookingStepPromptAnchorSeq
-          : null,
-      lastUserTranscript,
-      lastUserTranscriptSeq:
-        typeof nextRealtimeState.lastUserTranscriptSeq === "number"
-          ? nextRealtimeState.lastUserTranscriptSeq
-          : null,
-    });
-
     const hangupRequestedByTool =
       toolName === "end_call" && toolResult?.ok === true;
 

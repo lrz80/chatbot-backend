@@ -187,17 +187,6 @@ export function resolveSquareServiceFromInput(params: {
     .filter((item) => item.serviceName && item.score > 0)
     .sort((a, b) => b.score - a.score);
 
-  if (params.debug) {
-    console.log("[BOOKING][SQUARE_SERVICE_MATCH_SCORES]", {
-      input,
-      normalizedInput,
-      candidates: scored.slice(0, 8).map((item) => ({
-        serviceName: item.serviceName,
-        score: item.score,
-      })),
-    });
-  }
-
   const best = scored[0];
 
   if (!best || best.score < 0.86) {

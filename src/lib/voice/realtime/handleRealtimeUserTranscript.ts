@@ -10,6 +10,7 @@ export type HandleRealtimeUserTranscriptResult = {
   ignoredReason?:
     | "CALL_ENDING"
     | "EMPTY_TRANSCRIPT"
+    | "ASSISTANT_AUDIO_NOISE"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO"
     | "RUNTIME_NOT_CONSUMED";
   lastUserTranscript: string;
@@ -36,6 +37,65 @@ function nowMs(): number {
   return Date.now();
 }
 
+function wordCount(value: string): number {
+  return clean(value).split(/\s+/).filter(Boolean).length;
+}
+
+function normalizedCharCount(value: string): number {
+  return clean(value).replace(/\s+/g, "").length;
+}
+
+function isLikelyHumanInterruption(transcript: string): boolean {
+  const cleaned = clean(transcript);
+
+  if (!cleaned) return false;
+
+  const words = wordCount(cleaned);
+  const chars = normalizedCharCount(cleaned);
+
+  return words >= 2 && chars >= 8;
+}
+
+function isOpenSocket(socket: WebSocket): boolean {
+  return socket.readyState === WebSocket.OPEN;
+}
+
+function cancelActiveAssistantAudio(params: {
+  openAiSocket: WebSocket;
+  callSid: string | null;
+  transcript: string;
+}): void {
+  if (!isOpenSocket(params.openAiSocket)) {
+    console.warn("[VOICE_REALTIME][ASSISTANT_INTERRUPT_CANCEL_SKIPPED]", {
+      callSid: params.callSid,
+      reason: "OPENAI_SOCKET_NOT_OPEN",
+      transcript: params.transcript,
+      readyState: params.openAiSocket.readyState,
+    });
+
+    return;
+  }
+
+  try {
+    params.openAiSocket.send(
+      JSON.stringify({
+        type: "response.cancel",
+      })
+    );
+
+    console.log("[VOICE_REALTIME][ASSISTANT_INTERRUPTED_BY_USER_TRANSCRIPT]", {
+      callSid: params.callSid,
+      transcript: params.transcript,
+    });
+  } catch (error) {
+    console.error("[VOICE_REALTIME][ASSISTANT_INTERRUPT_CANCEL_ERROR]", {
+      callSid: params.callSid,
+      transcript: params.transcript,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /**
  * This guard is intentionally language-agnostic.
  *
@@ -51,15 +111,18 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   minMsAfterAssistantAudio: number;
 }): {
   ignore: boolean;
+  interruptAssistant: boolean;
   reason?:
     | "CALL_ENDING"
     | "EMPTY_TRANSCRIPT"
+    | "ASSISTANT_AUDIO_NOISE"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO";
   msSinceAssistantAudioDone: number | null;
 } {
   if (params.callEnding) {
     return {
       ignore: true,
+      interruptAssistant: false,
       reason: "CALL_ENDING",
       msSinceAssistantAudioDone: null,
     };
@@ -68,7 +131,25 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   if (!clean(params.rawTranscript)) {
     return {
       ignore: true,
+      interruptAssistant: false,
       reason: "EMPTY_TRANSCRIPT",
+      msSinceAssistantAudioDone: null,
+    };
+  }
+
+  if (params.assistantSpeaking) {
+    if (!isLikelyHumanInterruption(params.rawTranscript)) {
+      return {
+        ignore: true,
+        interruptAssistant: false,
+        reason: "ASSISTANT_AUDIO_NOISE",
+        msSinceAssistantAudioDone: null,
+      };
+    }
+
+    return {
+      ignore: false,
+      interruptAssistant: true,
       msSinceAssistantAudioDone: null,
     };
   }
@@ -81,6 +162,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   if (lastAssistantAudioDoneAtMs <= 0) {
     return {
       ignore: false,
+      interruptAssistant: false,
       msSinceAssistantAudioDone: null,
     };
   }
@@ -90,6 +172,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   if (msSinceAssistantAudioDone < params.minMsAfterAssistantAudio) {
     return {
       ignore: true,
+      interruptAssistant: false,
       reason: "TOO_CLOSE_TO_ASSISTANT_AUDIO",
       msSinceAssistantAudioDone,
     };
@@ -97,6 +180,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
 
   return {
     ignore: false,
+    interruptAssistant: false,
     msSinceAssistantAudioDone,
   };
 }
@@ -177,6 +261,14 @@ export async function handleRealtimeUserTranscript(params: {
     };
   }
 
+  if (preGuard.interruptAssistant) {
+    cancelActiveAssistantAudio({
+      openAiSocket: params.openAiSocket,
+      callSid: params.callSid,
+      transcript: rawTranscript,
+    });
+  }
+  
   const runtimeResult = await handleUserTranscriptCompleted({
     event: params.event,
     callSid: params.callSid,

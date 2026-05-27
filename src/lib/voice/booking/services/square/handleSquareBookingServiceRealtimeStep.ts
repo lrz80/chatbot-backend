@@ -177,17 +177,6 @@ export async function handleSquareBookingServiceRealtimeStep(
     });
   }
 
-  console.log("[BOOKING][SQUARE_SERVICES_LOADED_FOR_MATCH]", {
-    tenantId,
-    input: value,
-    serviceCount: servicesResult.services.length,
-    sample: servicesResult.services.slice(0, 8).map((service) => ({
-      serviceName: getSquareServiceName(service),
-      durationMinutes: service.durationMinutes,
-      availableForBooking: service.availableForBooking,
-    })),
-  });
-
   const match = resolveSquareServiceFromInput({
     input: value,
     services: servicesResult.services,
