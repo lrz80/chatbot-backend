@@ -150,5 +150,6 @@ export function resolveRealtimeSubmittedStepValue(params: {
     value,
     rawTranscriptValue,
     modelValue,
+    allowModelNormalization: slot === "service",
   });
 }

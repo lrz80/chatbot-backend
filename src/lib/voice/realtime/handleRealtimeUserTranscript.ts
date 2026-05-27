@@ -109,6 +109,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   assistantSpeaking: boolean;
   lastAssistantAudioDoneAtMs: number;
   minMsAfterAssistantAudio: number;
+  bookingTurnStatus: string;
 }): {
   ignore: boolean;
   interruptAssistant: boolean;
@@ -170,6 +171,17 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   const msSinceAssistantAudioDone = nowMs() - lastAssistantAudioDoneAtMs;
 
   if (msSinceAssistantAudioDone < params.minMsAfterAssistantAudio) {
+    const isWaitingForUserAnswer =
+      clean(params.bookingTurnStatus) === "waiting_user_answer";
+
+    if (isWaitingForUserAnswer && isLikelyHumanInterruption(params.rawTranscript)) {
+      return {
+        ignore: false,
+        interruptAssistant: false,
+        msSinceAssistantAudioDone,
+      };
+    }
+
     return {
       ignore: true,
       interruptAssistant: false,
@@ -234,6 +246,7 @@ export async function handleRealtimeUserTranscript(params: {
     assistantSpeaking: params.assistantSpeaking,
     lastAssistantAudioDoneAtMs: params.lastAssistantAudioDoneAtMs,
     minMsAfterAssistantAudio,
+    bookingTurnStatus: clean((params.realtimeState as any)?.bookingTurnStatus),
   });
 
   if (preGuard.ignore) {

@@ -23,10 +23,21 @@ export function resolveRealtimeTextValue(params: {
   value: string;
   rawTranscriptValue: string;
   modelValue: string;
+
+  /**
+   * Only enable this for provider-backed service resolution.
+   *
+   * Service names often need ASR cleanup or language normalization before
+   * matching against Square/dashboard catalog.
+   *
+   * Do NOT enable for name, phone, email, confirmation, datetime, or generic text.
+   */
+  allowModelNormalization?: boolean;
 }): ResolveRealtimeTextValueResult {
   const value = clean(params.value);
   const rawTranscriptValue = clean(params.rawTranscriptValue);
   const modelValue = clean(params.modelValue);
+  const allowModelNormalization = params.allowModelNormalization === true;
 
   if (!value && !rawTranscriptValue) {
     return {
@@ -45,7 +56,7 @@ export function resolveRealtimeTextValue(params: {
       rawTranscriptValue,
     });
 
-    if (!grounded) {
+    if (!grounded && !allowModelNormalization) {
       return {
         ok: false,
         error: "INCOMPATIBLE_TEXT_VALUE",
@@ -61,7 +72,7 @@ export function resolveRealtimeTextValue(params: {
       value,
       rawTranscriptValue,
       modelValue,
-      source: "model",
+      source: value === rawTranscriptValue ? "transcript" : "model",
     };
   }
 
