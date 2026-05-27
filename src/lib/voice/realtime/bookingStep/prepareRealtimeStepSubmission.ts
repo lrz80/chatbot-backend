@@ -84,16 +84,34 @@ export function prepareRealtimeStepSubmission(
 
   const candidateSource = clean(args.resolved_candidate_source);
 
+  const isTranscriptCandidate = candidateSource === "transcript";
+  const isModelCandidate = candidateSource === "model";
+
   /**
-   * Cuando handleRealtimeSubmitBookingStep está probando value_candidates,
-   * cada candidato debe validarse por sí mismo contra el resolver oficial del step.
+   * Keep the three concepts separated:
    *
-   * prepareRealtimeStepSubmission no debe rechazar un candidato solo porque
-   * el transcript crudo actual sea diferente. Esa comparación fue la causa de
-   * INCOMPATIBLE_TEXT_VALUE en service.
+   * value:
+   *   The candidate currently being tested.
+   *
+   * modelValue:
+   *   The model/tool proposed value.
+   *
+   * rawTranscriptValue:
+   *   The last accepted human transcript.
+   *
+   * Do not overwrite rawTranscriptValue with a model candidate. The step
+   * resolver needs the real transcript for cases like phone confirm_or_replace,
+   * where the user says "sí" and the model candidate is "__USE_CALLER_PHONE__".
    */
-  const modelValue = candidateSource ? value : clean(args.model_value || args.value);
-  const rawTranscriptValue = candidateSource ? value : originalTranscriptValue;
+  const modelValue = isTranscriptCandidate
+    ? clean(args.model_value || originalModelValue || args.value)
+    : isModelCandidate
+      ? value
+      : clean(args.model_value || args.value);
+
+  const rawTranscriptValue = isTranscriptCandidate
+    ? value
+    : originalTranscriptValue;
 
   if (!stepKey) {
     return {

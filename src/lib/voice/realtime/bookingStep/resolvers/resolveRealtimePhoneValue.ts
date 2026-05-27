@@ -90,12 +90,22 @@ export function resolveRealtimePhoneValue(
     };
   }
 
-  const submittedPhone = normalizePhoneToE164(value || modelValue);
+  const submittedPhone = normalizePhoneToE164(value);
 
   if (isValidE164Phone(submittedPhone)) {
     return {
       ok: true,
       value: submittedPhone,
+      source: "spoken_phone",
+    };
+  }
+
+  const modelPhone = normalizePhoneToE164(modelValue);
+
+  if (isValidE164Phone(modelPhone)) {
+    return {
+      ok: true,
+      value: modelPhone,
       source: "spoken_phone",
     };
   }

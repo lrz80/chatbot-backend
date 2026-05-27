@@ -220,37 +220,7 @@ export function validateSubmitBookingStepFreshness(params: {
     Boolean(submittedValue) &&
     !sameComparableText(submittedValue, currentTranscript);
 
-  const submittedValueDiffersFromLastSubmitted =
-    Boolean(submittedValue) &&
-    !sameComparableText(submittedValue, lastSubmittedTranscript);
-
-  /**
-   * Realtime puede disparar submit_booking_step antes de que el transcript nuevo
-   * quede asentado en el runtime. En ese caso, si el modelo envía un value concreto
-   * y diferente al transcript viejo, no debemos bloquearlo como stale.
-   *
-   * Esto no hardcodea servicios ni tenants. Solo resuelve una carrera de eventos.
-   */
-  const hasAcceptedTranscriptContext =
-    Boolean(currentTranscript) && currentTranscriptSeq >= 0;
-
-  /**
-   * Only allow model-value race recovery if there is already some accepted
-   * human transcript context in the runtime.
-   *
-   * If the latest transcript was ignored by anti-echo / assistant-speaking guard,
-   * currentTranscript can be empty or stale. In that case the model value may come
-   * from ignored audio and must not be accepted.
-   */
-  const canAcceptModelValueDuringTranscriptRace =
-    isSubmittingExpectedPendingStep &&
-    !hasNewHumanTranscript &&
-    hasAcceptedTranscriptContext &&
-    Boolean(submittedValue) &&
-    submittedValueDiffersFromCurrentTranscript &&
-    submittedValueDiffersFromLastSubmitted &&
-    !isDuplicateSubmit &&
-    !isReusedTranscriptFromPreviousStep;
+  const canAcceptModelValueDuringTranscriptRace = false;
 
   const base = {
     submittedStepKey,

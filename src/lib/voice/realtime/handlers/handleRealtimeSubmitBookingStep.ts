@@ -9,6 +9,7 @@ import { buildRealtimeStepRetryResult } from "../bookingStep/buildRealtimeStepRe
 import { advanceRealtimeBookingStep } from "../bookingStep/advanceRealtimeBookingStep";
 import { prepareRealtimeStepSubmission } from "../bookingStep/prepareRealtimeStepSubmission";
 import { executeRealtimeStepRoute } from "../bookingStep/executeRealtimeStepRoute";
+import { validateSubmitBookingStepFreshness } from "../toolGuards/validateSubmitBookingStepFreshness";
 
 type RealtimeBookingContext = {
   tenant: any;
@@ -294,6 +295,36 @@ export async function handleRealtimeSubmitBookingStep(
     buildRealtimeBookingState,
     persistVoiceState,
   } = params;
+
+  const freshness = validateSubmitBookingStepFreshness({
+    toolArgs: args,
+    realtimeState: bookingContext.state,
+    lastUserTranscript: bookingContext.userInput,
+  });
+
+  if (!freshness.ok) {
+    console.warn("[VOICE_REALTIME][BOOKING_SUBMIT_BLOCKED_BY_FRESHNESS]", {
+      callSid: bookingContext.callSid,
+      error: freshness.error,
+      submittedStepKey: freshness.submittedStepKey,
+      pendingStepKey: freshness.pendingStepKey,
+      currentTranscript: freshness.currentTranscript,
+      submittedValue: freshness.submittedValue,
+      currentTranscriptSeq: freshness.currentTranscriptSeq,
+      promptAnchorSeq: freshness.promptAnchorSeq,
+      lastSubmittedTranscriptSeq: freshness.lastSubmittedTranscriptSeq,
+      effectiveAnchorSeq: freshness.effectiveAnchorSeq,
+      hasNewHumanTranscript: freshness.hasNewHumanTranscript,
+      isDuplicateSubmit: freshness.isDuplicateSubmit,
+      isReusedTranscriptFromPreviousStep: freshness.isReusedTranscriptFromPreviousStep,
+    });
+
+    return {
+      ok: false,
+      error: freshness.error,
+      message: "Waiting for a fresh user answer before submitting this booking step.",
+    };
+  }
 
   const candidates = buildSubmitValueCandidates({
     args,

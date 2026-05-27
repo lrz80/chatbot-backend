@@ -1,4 +1,4 @@
-//src/lib/voice/realtime/toolGuards/resolveSubmitBookingStepValue.ts
+// src/lib/voice/realtime/toolGuards/resolveSubmitBookingStepValue.ts
 import type { CallState } from "../../types";
 
 export type SubmitStepCandidate = {
@@ -11,6 +11,16 @@ export type ResolveSubmitBookingStepValueParams = {
   modelValue: unknown;
   transcriptValue: unknown;
   realtimeState: CallState;
+
+  /**
+   * The caller may already have selected which source should be tried first.
+   * Example:
+   * - handleRealtimeSubmitBookingStep loops through candidates
+   * - candidate.source is passed as resolved_candidate_source
+   *
+   * This resolver must preserve that ordering instead of always preferring model.
+   */
+  preferredSource?: "model" | "transcript";
 };
 
 export type ResolveSubmitBookingStepValueResult =
@@ -30,16 +40,74 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function uniqueCandidates(candidates: SubmitStepCandidate[]): SubmitStepCandidate[] {
+function uniqueCandidates(
+  candidates: SubmitStepCandidate[]
+): SubmitStepCandidate[] {
   const seen = new Set<string>();
 
   return candidates.filter((candidate) => {
-    const key = `${candidate.source}:${candidate.value}`;
-    if (!candidate.value) return false;
+    const source = clean(candidate.source) as SubmitStepCandidate["source"];
+    const value = clean(candidate.value);
+    const key = `${source}:${value}`;
+
+    if (!value) return false;
     if (seen.has(key)) return false;
+
     seen.add(key);
     return true;
   });
+}
+
+function buildOrderedCandidates(params: {
+  modelValue: string;
+  transcriptValue: string;
+  preferredSource?: "model" | "transcript";
+}): SubmitStepCandidate[] {
+  const { modelValue, transcriptValue, preferredSource } = params;
+
+  if (preferredSource === "transcript") {
+    return uniqueCandidates([
+      {
+        source: "transcript",
+        value: transcriptValue,
+      },
+      {
+        source: "model",
+        value: modelValue,
+      },
+    ]);
+  }
+
+  if (preferredSource === "model") {
+    return uniqueCandidates([
+      {
+        source: "model",
+        value: modelValue,
+      },
+      {
+        source: "transcript",
+        value: transcriptValue,
+      },
+    ]);
+  }
+
+  /**
+   * Safe default:
+   * transcript first.
+   *
+   * Do not default to model first because submit_booking_step is used for
+   * sensitive booking values such as name, datetime, phone and confirmation.
+   */
+  return uniqueCandidates([
+    {
+      source: "transcript",
+      value: transcriptValue,
+    },
+    {
+      source: "model",
+      value: modelValue,
+    },
+  ]);
 }
 
 /**
@@ -60,16 +128,11 @@ export function resolveSubmitBookingStepValue(
   const modelValue = clean(params.modelValue);
   const transcriptValue = clean(params.transcriptValue);
 
-  const candidates = uniqueCandidates([
-    {
-      source: "model",
-      value: modelValue,
-    },
-    {
-      source: "transcript",
-      value: transcriptValue,
-    },
-  ]);
+  const candidates = buildOrderedCandidates({
+    modelValue,
+    transcriptValue,
+    preferredSource: params.preferredSource,
+  });
 
   const firstCandidate = candidates[0];
 
