@@ -51,8 +51,128 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function buildSubmitValueCandidates(args: Record<string, any>): SubmitValueCandidate[] {
+function normalizeKey(value: unknown): string {
+  return clean(value).toLowerCase();
+}
+
+function getCurrentStepLike(params: {
+  args: Record<string, any>;
+  bookingContext: RealtimeBookingContext;
+  steps: BookingFlowStepLike[];
+}): BookingFlowStepLike | null {
+  const submittedStepKey = clean(params.args.step_key);
+
+  if (submittedStepKey) {
+    const bySubmittedKey = params.steps.find(
+      (step) => clean((step as any).step_key) === submittedStepKey
+    );
+
+    if (bySubmittedKey) return bySubmittedKey;
+  }
+
+  const pendingStepKey = clean(
+    (params.bookingContext.state as any)?.pendingBookingStepKey
+  );
+
+  if (pendingStepKey) {
+    const byPendingKey = params.steps.find(
+      (step) => clean((step as any).step_key) === pendingStepKey
+    );
+
+    if (byPendingKey) return byPendingKey;
+  }
+
+  return null;
+}
+
+function isSensitiveBookingStep(params: {
+  args: Record<string, any>;
+  currentStep: BookingFlowStepLike | null;
+}): boolean {
+  const submittedStepKey = normalizeKey(params.args.step_key);
+  const stepKey = normalizeKey((params.currentStep as any)?.step_key);
+  const slot = normalizeKey((params.currentStep as any)?.slot);
+  const expectedType = normalizeKey((params.currentStep as any)?.expected_type);
+
+  const sensitiveStepKeys = new Set([
+    "datetime",
+    "date",
+    "time",
+    "name",
+    "customer_name",
+    "phone",
+    "customer_phone",
+    "email",
+    "customer_email",
+    "confirm",
+    "confirmation",
+  ]);
+
+  const sensitiveSlots = new Set([
+    "datetime",
+    "date",
+    "time",
+    "customer_name",
+    "customer_phone",
+    "customer_email",
+    "confirmation",
+  ]);
+
+  const sensitiveExpectedTypes = new Set([
+    "datetime",
+    "phone",
+    "email",
+    "confirmation",
+  ]);
+
+  return (
+    sensitiveStepKeys.has(submittedStepKey) ||
+    sensitiveStepKeys.has(stepKey) ||
+    sensitiveSlots.has(slot) ||
+    sensitiveExpectedTypes.has(expectedType)
+  );
+}
+
+function isInternalAllowedModelToken(params: {
+  value: string;
+  currentStep: BookingFlowStepLike | null;
+}): boolean {
+  const value = clean(params.value);
+  const slot = normalizeKey((params.currentStep as any)?.slot);
+  const expectedType = normalizeKey((params.currentStep as any)?.expected_type);
+
+  if (
+    value === "__USE_CALLER_PHONE__" &&
+    slot === "customer_phone" &&
+    expectedType === "phone"
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function buildSubmitValueCandidates(params: {
+  args: Record<string, any>;
+  bookingContext: RealtimeBookingContext;
+  steps: BookingFlowStepLike[];
+}): SubmitValueCandidate[] {
+  const { args, bookingContext, steps } = params;
+
+  const currentStep = getCurrentStepLike({
+    args,
+    bookingContext,
+    steps,
+  });
+
+  const isSensitiveStep = isSensitiveBookingStep({
+    args,
+    currentStep,
+  });
+
   const primaryValue = clean(args.value);
+  const transcriptValue = clean(bookingContext.userInput);
+
   const rawCandidates = Array.isArray(args.value_candidates)
     ? args.value_candidates
     : [];
@@ -71,25 +191,71 @@ function buildSubmitValueCandidates(args: Record<string, any>): SubmitValueCandi
     })
     .filter(Boolean) as SubmitValueCandidate[];
 
-  /**
-   * args.value is already the server-selected value from realtimeToolCallHandler.
-   * Do not let raw transcript candidates override it again here.
-   */
-  const orderedCandidates: SubmitValueCandidate[] = [
-    primaryValue
-      ? {
-          source: clean(args.resolved_candidate_source) || "selected",
-          value: primaryValue,
-        }
-      : null,
-    ...parsedCandidates,
-  ].filter(Boolean) as SubmitValueCandidate[];
+  const orderedCandidates: Array<SubmitValueCandidate | null> = [];
+
+  if (transcriptValue) {
+    orderedCandidates.push({
+      source: "transcript",
+      value: transcriptValue,
+    });
+  }
+
+  if (primaryValue) {
+    const primarySource = clean(args.resolved_candidate_source) || "model";
+
+    if (
+      !isSensitiveStep ||
+      primarySource === "transcript" ||
+      isInternalAllowedModelToken({
+        value: primaryValue,
+        currentStep,
+      })
+    ) {
+      orderedCandidates.push({
+        source: primarySource,
+        value: primaryValue,
+      });
+    }
+  }
+
+  for (const candidate of parsedCandidates) {
+    const source = clean(candidate.source);
+    const value = clean(candidate.value);
+
+    if (!value) continue;
+
+    const isModelLike =
+      source === "model" ||
+      source === "selected" ||
+      source === "assistant" ||
+      source === "llm";
+
+    if (
+      isSensitiveStep &&
+      isModelLike &&
+      !isInternalAllowedModelToken({
+        value,
+        currentStep,
+      })
+    ) {
+      continue;
+    }
+
+    orderedCandidates.push({
+      source,
+      value,
+    });
+  }
 
   const seen = new Set<string>();
 
-  return orderedCandidates.filter((candidate) => {
+  const validCandidates = orderedCandidates.filter(
+    (candidate): candidate is SubmitValueCandidate => candidate !== null
+  );
+
+  return validCandidates.filter((candidate) => {
     const normalizedValue = candidate.value.toLowerCase();
-    const key = normalizedValue;
+    const key = `${candidate.source}:${normalizedValue}`;
 
     if (seen.has(key)) return false;
 
@@ -129,7 +295,11 @@ export async function handleRealtimeSubmitBookingStep(
     persistVoiceState,
   } = params;
 
-  const candidates = buildSubmitValueCandidates(args);
+  const candidates = buildSubmitValueCandidates({
+    args,
+    bookingContext,
+    steps,
+  });
 
   if (candidates.length === 0) {
     return {
