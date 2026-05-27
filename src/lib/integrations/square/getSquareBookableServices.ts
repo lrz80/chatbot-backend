@@ -1,3 +1,5 @@
+// src/lib/integrations/square/getSquareBookableServices.ts
+
 import fetch from "node-fetch";
 import type { SquareEnvironment } from "./searchSquareAvailability";
 
@@ -7,16 +9,7 @@ export type SquareCatalogObject = {
   version?: number;
   item_data?: {
     name?: string;
-    variations?: Array<{
-      id: string;
-      type?: string;
-      version?: number;
-      item_variation_data?: {
-        name?: string;
-        service_duration?: number;
-        available_for_booking?: boolean;
-      };
-    }>;
+    variations?: SquareCatalogObject[];
   };
   item_variation_data?: {
     item_id?: string;
@@ -58,6 +51,13 @@ export type GetSquareBookableServicesResult =
   | {
       ok: true;
       services: SquareBookableService[];
+      debug?: {
+        itemCount: number;
+        topLevelVariationCount: number;
+        nestedVariationCount: number;
+        totalVariationCount: number;
+        bookableVariationCount: number;
+      };
     }
   | {
       ok: false;
@@ -88,9 +88,7 @@ function buildSquareServiceName(params: {
   const itemName = clean(params.itemName);
   const variationName = clean(params.variationName);
 
-  if (!variationName) {
-    return itemName;
-  }
+  if (!variationName) return itemName;
 
   if (variationName.toLowerCase() === itemName.toLowerCase()) {
     return itemName;
@@ -108,6 +106,51 @@ function buildSquareServiceSearchText(params: {
     .map(clean)
     .filter(Boolean)
     .join(" | ");
+}
+
+function buildSquareBookableService(params: {
+  item: SquareCatalogObject;
+  variation: SquareCatalogObject;
+  fallbackItemId?: string;
+}): SquareBookableService | null {
+  const { item, variation, fallbackItemId } = params;
+
+  const variationData = variation.item_variation_data;
+
+  const itemId = clean(variationData?.item_id || fallbackItemId || item.id);
+  const itemName = clean(item.item_data?.name);
+  const variationId = clean(variation.id);
+  const variationName = clean(variationData?.name);
+  const variationVersion = Number(variation.version || 0);
+  const availableForBooking = variationData?.available_for_booking === true;
+  const durationMinutes = toMinutesFromMs(variationData?.service_duration);
+
+  if (!itemId || !variationId || !itemName) {
+    return null;
+  }
+
+  const serviceName = buildSquareServiceName({
+    itemName,
+    variationName,
+  });
+
+  const searchText = buildSquareServiceSearchText({
+    itemName,
+    variationName,
+    serviceName,
+  });
+
+  return {
+    itemId,
+    itemName,
+    variationId,
+    variationName,
+    serviceName,
+    searchText,
+    variationVersion,
+    durationMinutes,
+    availableForBooking,
+  };
 }
 
 export async function getSquareBookableServices(
@@ -159,60 +202,107 @@ export async function getSquareBookableServices(
     const allObjects = [...objects, ...relatedObjects];
 
     const itemMap = new Map<string, SquareCatalogObject>();
-    const variationMap = new Map<string, SquareCatalogObject>();
+    const topLevelVariationMap = new Map<string, SquareCatalogObject>();
 
     for (const obj of allObjects) {
       if (!obj?.id || !obj?.type) continue;
-      if (obj.type === "ITEM") itemMap.set(obj.id, obj);
-      if (obj.type === "ITEM_VARIATION") variationMap.set(obj.id, obj);
+
+      if (obj.type === "ITEM") {
+        itemMap.set(obj.id, obj);
+      }
+
+      if (obj.type === "ITEM_VARIATION") {
+        topLevelVariationMap.set(obj.id, obj);
+      }
     }
 
-    const services: SquareBookableService[] = [];
+    const servicesByVariationId = new Map<string, SquareBookableService>();
 
-    for (const variation of variationMap.values()) {
+    let nestedVariationCount = 0;
+
+    /**
+     * 1) Process variations nested inside ITEM.item_data.variations.
+     * Square often returns service variations nested under the ITEM object.
+     */
+    for (const item of itemMap.values()) {
+      const nestedVariations = Array.isArray(item.item_data?.variations)
+        ? item.item_data?.variations || []
+        : [];
+
+      for (const variation of nestedVariations) {
+        if (!variation?.id) continue;
+
+        nestedVariationCount += 1;
+
+        const service = buildSquareBookableService({
+          item,
+          variation,
+          fallbackItemId: item.id,
+        });
+
+        if (!service) continue;
+
+        servicesByVariationId.set(service.variationId, service);
+      }
+    }
+
+    /**
+     * 2) Process top-level ITEM_VARIATION objects too.
+     * This covers catalog responses where variations are returned separately.
+     */
+    for (const variation of topLevelVariationMap.values()) {
       const variationData = variation.item_variation_data;
-      const itemId = String(variationData?.item_id || "").trim();
+      const itemId = clean(variationData?.item_id);
       const item = itemMap.get(itemId);
 
-      const itemName = clean(item?.item_data?.name);
-      const variationName = clean(variationData?.name);
-      const variationId = clean(variation.id);
-      const variationVersion = Number(variation.version || 0);
-      const availableForBooking = Boolean(variationData?.available_for_booking);
-      const durationMinutes = toMinutesFromMs(variationData?.service_duration);
+      if (!item) continue;
 
-      const serviceName = buildSquareServiceName({
-        itemName,
-        variationName,
+      const service = buildSquareBookableService({
+        item,
+        variation,
+        fallbackItemId: itemId,
       });
 
-      const searchText = buildSquareServiceSearchText({
-        itemName,
-        variationName,
-        serviceName,
-      });
+      if (!service) continue;
 
-      if (!itemId || !variationId || !itemName) continue;
-
-      services.push({
-        itemId,
-        itemName,
-        variationId,
-        variationName,
-        serviceName,
-        searchText,
-        variationVersion,
-        durationMinutes,
-        availableForBooking,
-      });
+      servicesByVariationId.set(service.variationId, service);
     }
+
+    const allServices = Array.from(servicesByVariationId.values());
+    const bookableServices = allServices.filter(
+      (service) => service.availableForBooking
+    );
+
+    console.log("[SQUARE][BOOKABLE_SERVICES_RESOLVED]", {
+      environment,
+      itemCount: itemMap.size,
+      topLevelVariationCount: topLevelVariationMap.size,
+      nestedVariationCount,
+      totalVariationCount: allServices.length,
+      bookableVariationCount: bookableServices.length,
+      sample: allServices.slice(0, 25).map((service) => ({
+        itemName: service.itemName,
+        variationName: service.variationName,
+        serviceName: service.serviceName,
+        availableForBooking: service.availableForBooking,
+        durationMinutes: service.durationMinutes,
+      })),
+    });
 
     return {
       ok: true,
-      services: services.filter((service) => service.availableForBooking),
+      services: bookableServices,
+      debug: {
+        itemCount: itemMap.size,
+        topLevelVariationCount: topLevelVariationMap.size,
+        nestedVariationCount,
+        totalVariationCount: allServices.length,
+        bookableVariationCount: bookableServices.length,
+      },
     };
   } catch (error) {
     console.error("[getSquareBookableServices] unexpected error", error);
+
     return {
       ok: false,
       error: "SQUARE_GET_BOOKABLE_SERVICES_UNEXPECTED_ERROR",

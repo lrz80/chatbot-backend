@@ -227,6 +227,17 @@ function resolveSquareServiceFromInput(params: {
     .filter((item) => item.serviceName && item.score > 0)
     .sort((a, b) => b.score - a.score);
 
+  console.log("[BOOKING][SQUARE_SERVICE_MATCH_SCORES]", {
+    input,
+    normalizedInput,
+    candidates: scored.slice(0, 15).map((item) => ({
+      serviceName: item.serviceName,
+      normalizedServiceName: item.normalizedServiceName,
+      normalizedSearchText: item.normalizedSearchText,
+      score: item.score,
+    })),
+  });
+
   const best = scored[0];
 
   if (!best || best.score < 0.86) {
@@ -385,6 +396,22 @@ async function resolveSquareBookingServiceStep(params: {
     };
   }
 
+  console.log("[BOOKING][SQUARE_SERVICES_LOADED_FOR_MATCH]", {
+    tenantId,
+    input: value,
+    serviceCount: servicesResult.services.length,
+    services: servicesResult.services.slice(0, 50).map((service) => ({
+      itemId: service.itemId,
+      itemName: service.itemName,
+      variationId: service.variationId,
+      variationName: service.variationName,
+      durationMinutes: service.durationMinutes,
+      availableForBooking: service.availableForBooking,
+      resolvedName: getSquareServiceName(service),
+      searchText: getSquareSearchText(service),
+    })),
+  });
+
   const match = resolveSquareServiceFromInput({
     input: value,
     services: servicesResult.services,
@@ -439,7 +466,13 @@ async function resolveSquareBookingServiceStep(params: {
         assistant_prompt: prompt,
         booking_state: bookingState,
         next_required_step: nextStepResult.next_required_step,
-        service_options: match.kind === "ambiguous" ? match.options : [],
+        service_options:
+          match.kind === "ambiguous"
+            ? match.options
+            : servicesResult.services
+                .slice(0, 8)
+                .map((service) => getSquareServiceName(service))
+                .filter(Boolean),
       },
     };
   }
