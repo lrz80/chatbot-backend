@@ -549,9 +549,9 @@ export async function createOpenAiRealtimeBridge({
       });
   }
 
-  function flushDeferredSubmitBookingStepIfReady(reason: string): void {
+  function flushDeferredSubmitBookingStepIfReady(reason: string): boolean {
     if (!deferredSubmitBookingStep.event) {
-      return;
+      return false;
     }
 
     const check = canFlushDeferredSubmitBookingStep({
@@ -582,7 +582,7 @@ export async function createOpenAiRealtimeBridge({
       });
 
       enqueueRealtimeToolCall(eventToFlush);
-      return;
+      return true;
     }
 
     if (
@@ -605,7 +605,11 @@ export async function createOpenAiRealtimeBridge({
         event: null,
         reason: null,
       };
+
+      return false;
     }
+
+    return false;
   }
 
   function nudgeBookingStepProcessingAfterTranscript(): void {
@@ -965,8 +969,12 @@ export async function createOpenAiRealtimeBridge({
             lastUserTranscriptSeq,
           });
 
-          flushDeferredSubmitBookingStepIfReady("transcript_accepted");
-          nudgeBookingStepProcessingAfterTranscript();
+          const didFlushDeferredSubmit =
+            flushDeferredSubmitBookingStepIfReady("transcript_accepted");
+
+          if (!didFlushDeferredSubmit) {
+            nudgeBookingStepProcessingAfterTranscript();
+          }
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {
