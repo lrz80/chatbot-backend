@@ -718,6 +718,27 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
+    const catchupAllowedSteps = new Set([
+      "staff",
+      "datetime",
+      "name",
+      "phone",
+      "confirm",
+    ]);
+
+    if (!catchupAllowedSteps.has(pendingBookingStepKey)) {
+      console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_SKIPPED]", {
+        callSid,
+        reason: "STEP_NOT_CATCHUP_ELIGIBLE",
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq,
+      });
+
+      return;
+    }
+
     const catchupKey = [
       callSid || "",
       pendingBookingStepKey,
