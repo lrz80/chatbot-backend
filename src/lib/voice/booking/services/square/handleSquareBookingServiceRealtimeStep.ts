@@ -20,6 +20,7 @@ import { applyResolvedSquareService } from "./applyResolvedSquareService";
 import { buildBookingServiceRetryResult } from "../buildBookingServiceRetryResult";
 import { getLocalizedBookingStepPrompt } from "../getLocalizedBookingStepPrompt";
 import { traducirTexto } from "../../../../traducirTexto";
+import { resolveSquareServiceWithCatalogContext } from "./resolveSquareServiceWithCatalogContext";
 
 type HandleSquareBookingServiceRealtimeStepParams = {
   tenantId: string;
@@ -269,6 +270,45 @@ export async function handleSquareBookingServiceRealtimeStep(
     if (!match || candidateMatch.kind === "ambiguous") {
       match = candidateMatch;
       matchedInput = candidate;
+    }
+  }
+
+  if (!match || match.kind !== "resolved") {
+    const contextMatch = await resolveSquareServiceWithCatalogContext({
+      tenantId,
+      input: value,
+      currentLocale,
+      services: servicesResult.services,
+    });
+
+    if (contextMatch.kind === "resolved") {
+      const contextCandidateMatch = resolveSquareServiceFromInput({
+        input: contextMatch.matchedName,
+        services: servicesResult.services,
+        debug: true,
+      });
+
+      if (contextCandidateMatch.kind === "resolved") {
+        match = contextCandidateMatch;
+        matchedInput = contextMatch.matchedName;
+      } else {
+        console.warn("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_NOT_RESOLVED_BY_MATCHER]", {
+          tenantId,
+          input: value,
+          matchedName: contextMatch.matchedName,
+          contextConfidence: contextMatch.confidence,
+          contextReason: contextMatch.reason,
+          matcherResult: contextCandidateMatch.kind,
+        });
+      }
+    } else {
+      console.warn("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_DID_NOT_RESOLVE]", {
+        tenantId,
+        input: value,
+        reason: contextMatch.reason,
+        confidence: contextMatch.confidence,
+        matchedName: contextMatch.matchedName,
+      });
     }
   }
 
