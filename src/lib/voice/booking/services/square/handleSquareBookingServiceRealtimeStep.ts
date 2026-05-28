@@ -19,6 +19,7 @@ import {
 import { applyResolvedSquareService } from "./applyResolvedSquareService";
 import { buildBookingServiceRetryResult } from "../buildBookingServiceRetryResult";
 import { getLocalizedBookingStepPrompt } from "../getLocalizedBookingStepPrompt";
+import { traducirTexto } from "../../../../traducirTexto";
 
 type HandleSquareBookingServiceRealtimeStepParams = {
   tenantId: string;
@@ -49,6 +50,72 @@ export type HandleSquareBookingServiceRealtimeStepResult =
       kind: "continue";
       workingState: CallState;
     };
+
+function normalizeServiceInput(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function pushUniqueServiceInput(target: string[], value: unknown) {
+  const raw = String(value ?? "").trim();
+
+  if (!raw) return;
+
+  if (!target.includes(raw)) {
+    target.push(raw);
+  }
+
+  const normalized = normalizeServiceInput(raw);
+
+  if (normalized && !target.includes(normalized)) {
+    target.push(normalized);
+  }
+}
+
+async function buildSquareServiceInputCandidates(params: {
+  tenantId: string;
+  input: string;
+  currentLocale: VoiceLocale;
+}): Promise<string[]> {
+  const candidates: string[] = [];
+
+  pushUniqueServiceInput(candidates, params.input);
+
+  const shouldTranslate = String(params.input || "").trim().length >= 3;
+
+  if (!shouldTranslate) {
+    return candidates;
+  }
+
+  try {
+    const translated = await traducirTexto(params.input, "en");
+
+    pushUniqueServiceInput(candidates, translated);
+
+    console.log("[VOICE_BOOKING][SQUARE_SERVICE_TRANSLATION_CANDIDATES]", {
+      tenantId: params.tenantId,
+      locale: params.currentLocale,
+      input: params.input,
+      translated,
+      candidates,
+    });
+  } catch (error) {
+    console.warn("[VOICE_BOOKING][SQUARE_SERVICE_TRANSLATION_FAILED]", {
+      tenantId: params.tenantId,
+      locale: params.currentLocale,
+      input: params.input,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  return candidates;
+}
 
 export async function handleSquareBookingServiceRealtimeStep(
   params: HandleSquareBookingServiceRealtimeStepParams
@@ -177,13 +244,52 @@ export async function handleSquareBookingServiceRealtimeStep(
     });
   }
 
-  const match = resolveSquareServiceFromInput({
+  const serviceInputCandidates = await buildSquareServiceInputCandidates({
+    tenantId,
     input: value,
-    services: servicesResult.services,
-    debug: true,
+    currentLocale,
   });
 
+  let match: ReturnType<typeof resolveSquareServiceFromInput> | null = null;
+  let matchedInput = value;
+
+  for (const candidate of serviceInputCandidates) {
+    const candidateMatch = resolveSquareServiceFromInput({
+      input: candidate,
+      services: servicesResult.services,
+      debug: true,
+    });
+
+    if (candidateMatch.kind === "resolved") {
+      match = candidateMatch;
+      matchedInput = candidate;
+      break;
+    }
+
+    if (!match || candidateMatch.kind === "ambiguous") {
+      match = candidateMatch;
+      matchedInput = candidate;
+    }
+  }
+
+  if (!match) {
+    match = resolveSquareServiceFromInput({
+      input: value,
+      services: servicesResult.services,
+      debug: true,
+    });
+  }
+
   if (match.kind === "resolved") {
+    console.log("[VOICE_BOOKING][SQUARE_SERVICE_RESOLVED]", {
+      tenantId,
+      locale: currentLocale,
+      originalInput: value,
+      matchedInput,
+      serviceName: match.serviceName,
+      score: match.score,
+    });
+
     const nextState = await applyResolvedSquareService({
       tenantId,
       connection: connectionResult.connection,
@@ -192,7 +298,7 @@ export async function handleSquareBookingServiceRealtimeStep(
       workingState,
       targetSlot,
       stepKey,
-      input: value,
+      input: matchedInput,
       service: match.service,
       serviceName: match.serviceName,
       score: match.score,
@@ -208,7 +314,7 @@ export async function handleSquareBookingServiceRealtimeStep(
     match.kind === "ambiguous"
       ? setPendingSquareServiceChoice({
           state: workingState,
-          input: value,
+          input: matchedInput,
           options: match.options,
         })
       : workingState;
