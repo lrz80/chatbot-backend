@@ -556,6 +556,7 @@ export async function createOpenAiRealtimeBridge({
     const check = canFlushDeferredSubmitBookingStep({
       event: deferredSubmitBookingStep.event,
       realtimeState,
+      lastUserTranscript,
       lastUserTranscriptSeq,
     });
 
@@ -575,6 +576,8 @@ export async function createOpenAiRealtimeBridge({
         lastUserTranscript,
         lastUserTranscriptSeq,
         promptAnchorSeq: check.promptAnchorSeq,
+        modelValueIsSupportedByLastTranscript:
+          check.modelValueIsSupportedByLastTranscript,
       });
 
       enqueueRealtimeToolCall(eventToFlush);
@@ -769,6 +772,7 @@ export async function createOpenAiRealtimeBridge({
         shouldDeferSubmitBookingStepUntilTranscript({
           event,
           realtimeState,
+          lastUserTranscript,
           lastUserTranscriptSeq,
         })
       ) {
