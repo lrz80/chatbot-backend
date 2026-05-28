@@ -333,6 +333,7 @@ export async function createOpenAiRealtimeBridge({
   let lastUserDigits = "";
   let lastUserTranscriptSeq = 0;
   let lastBookingTranscriptNudgeSeq = 0;
+  let lastBookingEarlyAnswerCatchupKey = "";
   let openAiReady = false;
   let sessionConfigured = false;
   let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
@@ -693,6 +694,78 @@ export async function createOpenAiRealtimeBridge({
         ].join(" "),
       },
       "tool_followup:booking_step_transcript_nudge"
+    );
+  }
+
+  function catchUpBookingStepIfCallerAnsweredBeforeTurnOpened(): void {
+    const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
+    const pendingBookingStepKey = clean(
+      (realtimeState as any).pendingBookingStepKey
+    );
+
+    const pendingBookingStepPromptAnchorSeq =
+      typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq === "number"
+        ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
+        : -1;
+
+    const hasEarlyCallerAnswer =
+      bookingTurnStatus === "waiting_user_answer" &&
+      !!pendingBookingStepKey &&
+      !!lastUserTranscript &&
+      lastUserTranscriptSeq > pendingBookingStepPromptAnchorSeq;
+
+    if (!hasEarlyCallerAnswer) {
+      return;
+    }
+
+    const catchupKey = [
+      callSid || "",
+      pendingBookingStepKey,
+      String(lastUserTranscriptSeq),
+    ].join(":");
+
+    if (lastBookingEarlyAnswerCatchupKey === catchupKey) {
+      return;
+    }
+
+    if (deferredSubmitBookingStep.event) {
+      console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_SKIPPED]", {
+        callSid,
+        reason: "DEFERRED_SUBMIT_ALREADY_PENDING",
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq,
+      });
+
+      return;
+    }
+
+    lastBookingEarlyAnswerCatchupKey = catchupKey;
+
+    console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_REQUESTED]", {
+      callSid,
+      pendingBookingStepKey,
+      lastUserTranscript,
+      lastUserTranscriptSeq,
+      pendingBookingStepPromptAnchorSeq,
+    });
+
+    requestRealtimeResponse(
+      {
+        instructions: [
+          "The booking step has just opened, but the caller already answered it before the turn was fully opened.",
+          `Current booking step key: ${pendingBookingStepKey}.`,
+          `Use this exact latest caller transcript as the answer: ${lastUserTranscript}`,
+          "Call submit_booking_step for the current booking step now.",
+          "Do not speak to the caller.",
+          "Do not say progress updates.",
+          "Do not ask another question before calling the tool.",
+          "Do not use an older transcript.",
+          "Your only action in this response should be the tool call.",
+        ].join(" "),
+      },
+      "tool_followup:booking_step_early_answer_catchup"
     );
   }
 
@@ -1063,6 +1136,14 @@ export async function createOpenAiRealtimeBridge({
       activeResponseSource = null;
       activeResponseStartedAtUserTranscriptSeq = lastUserTranscriptSeq;
 
+      /**
+       * Important:
+       * If the caller answered while the assistant prompt was still being completed,
+       * the booking turn may open after the transcript was already accepted.
+       * This catch-up prevents the user from having to repeat the same answer.
+       */
+      catchUpBookingStepIfCallerAnsweredBeforeTurnOpened();
+
       flushDeferredSubmitBookingStepIfReady("response_done");
 
       if (responseDoneResult.shouldFlushPendingResponse) {
@@ -1118,6 +1199,7 @@ export async function createOpenAiRealtimeBridge({
       lastUserDigits = "";
       lastUserTranscriptSeq = 0;
       lastBookingTranscriptNudgeSeq = 0;
+      lastBookingEarlyAnswerCatchupKey = "";
 
       assistantSpeaking = false;
       lastAssistantAudioDoneAtMs = 0;
