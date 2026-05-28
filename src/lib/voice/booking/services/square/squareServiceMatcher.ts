@@ -17,6 +17,19 @@ export type SquareServiceMatch =
       kind: "none";
     };
 
+type ScoredSquareService = {
+  service: SquareBookableService;
+  serviceName: string;
+  normalizedServiceName: string;
+  normalizedSearchText: string;
+  score: number;
+  matchedInputTokens: string[];
+  matchedCandidateTokens: string[];
+  inputCoverage: number;
+  candidateCoverage: number;
+  meaningfulOverlapCount: number;
+};
+
 function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
@@ -26,6 +39,8 @@ export function normalizeSquareServiceSearchText(value: unknown): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/fullset/gi, "full set")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -33,6 +48,27 @@ export function normalizeSquareServiceSearchText(value: unknown): string {
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.map(clean).filter(Boolean)));
+}
+
+function uniqueTokens(value: string): string[] {
+  return uniqueStrings(
+    normalizeSquareServiceSearchText(value)
+      .split(" ")
+      .map((token) => token.trim())
+      .filter(Boolean)
+  );
+}
+
+function meaningfulTokens(value: string): string[] {
+  return uniqueTokens(value).filter((token) => {
+    if (token.length >= 4) return true;
+
+    /**
+     * Tokens cortos pero semánticamente útiles para servicios.
+     * No son tenant-specific ni business-specific.
+     */
+    return ["set", "wax", "spa", "gel"].includes(token);
+  });
 }
 
 export function getSquareServiceName(service: SquareBookableService): string {
@@ -62,18 +98,56 @@ export function getSquareServiceSearchText(
   ]).join(" | ");
 }
 
-function scoreSquareServiceCandidate(input: string, candidate: string): number {
+function scoreSquareServiceCandidateDetails(
+  input: string,
+  candidate: string
+): Omit<
+  ScoredSquareService,
+  | "service"
+  | "serviceName"
+  | "normalizedServiceName"
+  | "normalizedSearchText"
+> {
   const normalizedInput = normalizeSquareServiceSearchText(input);
   const normalizedCandidate = normalizeSquareServiceSearchText(candidate);
 
-  if (!normalizedInput || !normalizedCandidate) return 0;
+  if (!normalizedInput || !normalizedCandidate) {
+    return {
+      score: 0,
+      matchedInputTokens: [],
+      matchedCandidateTokens: [],
+      inputCoverage: 0,
+      candidateCoverage: 0,
+      meaningfulOverlapCount: 0,
+    };
+  }
 
-  if (normalizedInput === normalizedCandidate) return 1;
+  if (normalizedInput === normalizedCandidate) {
+    const tokens = meaningfulTokens(normalizedInput);
 
-  const inputTokens = uniqueStrings(normalizedInput.split(" "));
-  const candidateTokens = uniqueStrings(normalizedCandidate.split(" "));
+    return {
+      score: 1,
+      matchedInputTokens: tokens,
+      matchedCandidateTokens: tokens,
+      inputCoverage: 1,
+      candidateCoverage: 1,
+      meaningfulOverlapCount: tokens.length,
+    };
+  }
 
-  if (inputTokens.length === 0 || candidateTokens.length === 0) return 0;
+  const inputTokens = meaningfulTokens(normalizedInput);
+  const candidateTokens = meaningfulTokens(normalizedCandidate);
+
+  if (inputTokens.length === 0 || candidateTokens.length === 0) {
+    return {
+      score: 0,
+      matchedInputTokens: [],
+      matchedCandidateTokens: [],
+      inputCoverage: 0,
+      candidateCoverage: 0,
+      meaningfulOverlapCount: 0,
+    };
+  }
 
   const candidateTokenSet = new Set(candidateTokens);
   const inputTokenSet = new Set(inputTokens);
@@ -96,17 +170,64 @@ function scoreSquareServiceCandidate(input: string, candidate: string): number {
   const containsFullInput = normalizedCandidate.includes(normalizedInput);
   const containsFullCandidate = normalizedInput.includes(normalizedCandidate);
 
-  if (containsFullInput && inputTokens.length >= 2) return 0.96;
-  if (containsFullCandidate && candidateTokens.length >= 2) return 0.94;
+  if (containsFullInput && inputTokens.length >= 2) {
+    return {
+      score: 0.96,
+      matchedInputTokens,
+      matchedCandidateTokens,
+      inputCoverage,
+      candidateCoverage,
+      meaningfulOverlapCount: matchedInputTokens.length,
+    };
+  }
+
+  if (containsFullCandidate && candidateTokens.length >= 2) {
+    return {
+      score: 0.94,
+      matchedInputTokens,
+      matchedCandidateTokens,
+      inputCoverage,
+      candidateCoverage,
+      meaningfulOverlapCount: matchedInputTokens.length,
+    };
+  }
 
   const hasStrongEvidence =
     matchedInputTokens.length >= 2 ||
     inputCoverage >= 0.8 ||
     candidateCoverage >= 0.8;
 
-  if (!hasStrongEvidence) return 0;
+  if (!hasStrongEvidence) {
+    return {
+      score: 0,
+      matchedInputTokens,
+      matchedCandidateTokens,
+      inputCoverage,
+      candidateCoverage,
+      meaningfulOverlapCount: matchedInputTokens.length,
+    };
+  }
 
-  return inputCoverage * 0.5 + candidateCoverage * 0.35 + jaccard * 0.15;
+  return {
+    score: inputCoverage * 0.5 + candidateCoverage * 0.35 + jaccard * 0.15,
+    matchedInputTokens,
+    matchedCandidateTokens,
+    inputCoverage,
+    candidateCoverage,
+    meaningfulOverlapCount: matchedInputTokens.length,
+  };
+}
+
+function hasUsablePartialEvidence(item: ScoredSquareService): boolean {
+  /**
+   * Esto permite casos como:
+   * input: "pestañas clásicas full set"
+   * candidate: "Classic Full Set Regular"
+   *
+   * Coinciden "full" + "set". No resolvemos ciegamente si hay varios,
+   * pero tampoco devolvemos none.
+   */
+  return item.meaningfulOverlapCount >= 2;
 }
 
 function getChoiceNumberFromInput(value: string): number | null {
@@ -168,20 +289,21 @@ export function resolveSquareServiceFromInput(params: {
 
   if (!normalizedInput) return { kind: "none" };
 
-  const scored = params.services
+  const scored: ScoredSquareService[] = params.services
     .map((service) => {
       const serviceName = getSquareServiceName(service);
       const searchText = getSquareServiceSearchText(service);
       const normalizedServiceName = normalizeSquareServiceSearchText(serviceName);
       const normalizedSearchText = normalizeSquareServiceSearchText(searchText);
-      const score = scoreSquareServiceCandidate(input, searchText);
+
+      const scoreDetails = scoreSquareServiceCandidateDetails(input, searchText);
 
       return {
         service,
         serviceName,
         normalizedServiceName,
         normalizedSearchText,
-        score,
+        ...scoreDetails,
       };
     })
     .filter((item) => item.serviceName && item.score > 0)
@@ -189,7 +311,7 @@ export function resolveSquareServiceFromInput(params: {
 
   const best = scored[0];
 
-  if (!best || best.score < 0.86) {
+  if (!best) {
     return { kind: "none" };
   }
 
@@ -222,21 +344,54 @@ export function resolveSquareServiceFromInput(params: {
     };
   }
 
-  const closeMatches = scored.filter((item) => best.score - item.score < 0.08);
+  /**
+   * Match fuerte normal.
+   */
+  if (best.score >= 0.86) {
+    const closeMatches = scored.filter((item) => best.score - item.score < 0.08);
 
-  if (closeMatches.length !== 1) {
+    if (closeMatches.length !== 1) {
+      return {
+        kind: "ambiguous",
+        options: closeMatches.slice(0, 5).map((item) => item.service),
+      };
+    }
+
     return {
-      kind: "ambiguous",
-      options: closeMatches.slice(0, 5).map((item) => item.service),
+      kind: "resolved",
+      service: best.service,
+      serviceName: best.serviceName,
+      score: best.score,
     };
   }
 
-  return {
-    kind: "resolved",
-    service: best.service,
-    serviceName: best.serviceName,
-    score: best.score,
-  };
+  /**
+   * Fallback seguro:
+   * Si el input y los servicios tienen evidencia parcial útil, no devolvemos none.
+   * - Si solo hay un candidato parcial, resolvemos.
+   * - Si hay varios, pedimos elección.
+   */
+  const partialMatches = scored.filter(hasUsablePartialEvidence);
+
+  if (partialMatches.length === 1) {
+    const only = partialMatches[0];
+
+    return {
+      kind: "resolved",
+      service: only.service,
+      serviceName: only.serviceName,
+      score: only.score,
+    };
+  }
+
+  if (partialMatches.length > 1) {
+    return {
+      kind: "ambiguous",
+      options: partialMatches.slice(0, 5).map((item) => item.service),
+    };
+  }
+
+  return { kind: "none" };
 }
 
 export function resolveSquareServiceChoiceFromInput(params: {

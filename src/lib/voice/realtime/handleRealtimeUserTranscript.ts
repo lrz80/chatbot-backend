@@ -110,6 +110,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   lastAssistantAudioDoneAtMs: number;
   minMsAfterAssistantAudio: number;
   bookingTurnStatus: string;
+  pendingBookingStepKey: string;
 }): {
   ignore: boolean;
   interruptAssistant: boolean;
@@ -120,6 +121,8 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO";
   msSinceAssistantAudioDone: number | null;
 } {
+  const transcript = clean(params.rawTranscript);
+
   if (params.callEnding) {
     return {
       ignore: true,
@@ -129,7 +132,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     };
   }
 
-  if (!clean(params.rawTranscript)) {
+  if (!transcript) {
     return {
       ignore: true,
       interruptAssistant: false,
@@ -138,8 +141,32 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     };
   }
 
+  const isWaitingForBookingAnswer =
+    clean(params.bookingTurnStatus) === "waiting_user_answer" &&
+    !!clean(params.pendingBookingStepKey);
+
+  /**
+   * Importante:
+   * Si estamos esperando respuesta de un step, NO podemos exigir
+   * words >= 2 && chars >= 8.
+   *
+   * Respuestas válidas pueden ser:
+   * - Sí
+   * - No
+   * - Andrea
+   * - Mañana
+   * - 9
+   */
   if (params.assistantSpeaking) {
-    if (!isLikelyHumanInterruption(params.rawTranscript)) {
+    if (isWaitingForBookingAnswer) {
+      return {
+        ignore: false,
+        interruptAssistant: true,
+        msSinceAssistantAudioDone: null,
+      };
+    }
+
+    if (!isLikelyHumanInterruption(transcript)) {
       return {
         ignore: true,
         interruptAssistant: false,
@@ -171,10 +198,15 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   const msSinceAssistantAudioDone = nowMs() - lastAssistantAudioDoneAtMs;
 
   if (msSinceAssistantAudioDone < params.minMsAfterAssistantAudio) {
-    const isWaitingForUserAnswer =
-      clean(params.bookingTurnStatus) === "waiting_user_answer";
+    if (isWaitingForBookingAnswer) {
+      return {
+        ignore: false,
+        interruptAssistant: false,
+        msSinceAssistantAudioDone,
+      };
+    }
 
-    if (isWaitingForUserAnswer && isLikelyHumanInterruption(params.rawTranscript)) {
+    if (isLikelyHumanInterruption(transcript)) {
       return {
         ignore: false,
         interruptAssistant: false,
@@ -247,6 +279,9 @@ export async function handleRealtimeUserTranscript(params: {
     lastAssistantAudioDoneAtMs: params.lastAssistantAudioDoneAtMs,
     minMsAfterAssistantAudio,
     bookingTurnStatus: clean((params.realtimeState as any)?.bookingTurnStatus),
+    pendingBookingStepKey: clean(
+      (params.realtimeState as any)?.pendingBookingStepKey
+    ),
   });
 
   if (preGuard.ignore) {
