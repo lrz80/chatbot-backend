@@ -636,6 +636,17 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
+    if (deferredSubmitBookingStep.event) {
+      console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_NUDGE_SKIPPED]", {
+        callSid,
+        reason: "DEFERRED_SUBMIT_ALREADY_PENDING",
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+      });
+
+      return;
+    }
     lastBookingTranscriptNudgeSeq = lastUserTranscriptSeq;
 
     console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_PROCESSING_NUDGED]", {
@@ -653,8 +664,12 @@ export async function createOpenAiRealtimeBridge({
           `Current booking step key: ${pendingBookingStepKey}.`,
           `Use this exact latest caller transcript as the answer: ${lastUserTranscript}`,
           "Call submit_booking_step for the current booking step now.",
+          "Do not speak to the caller.",
+          "Do not say progress updates.",
+          "Do not say anything like 'we are moving forward with your booking'.",
           "Do not ask another question before calling the tool.",
           "Do not use an older transcript.",
+          "Your only action in this response should be the tool call.",
         ].join(" "),
       },
       "tool_followup:booking_step_transcript_nudge"
