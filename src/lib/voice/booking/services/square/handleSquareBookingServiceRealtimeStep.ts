@@ -118,6 +118,23 @@ async function buildSquareServiceInputCandidates(params: {
   return candidates;
 }
 
+function getSquareServicesByExactNames(params: {
+  services: any[];
+  names: string[];
+}): any[] {
+  const wanted = new Set(
+    params.names.map((name) => String(name ?? "").trim()).filter(Boolean)
+  );
+
+  if (wanted.size === 0) {
+    return [];
+  }
+
+  return params.services.filter((service) =>
+    wanted.has(String(getSquareServiceName(service) ?? "").trim())
+  );
+}
+
 export async function handleSquareBookingServiceRealtimeStep(
   params: HandleSquareBookingServiceRealtimeStepParams
 ): Promise<HandleSquareBookingServiceRealtimeStepResult> {
@@ -301,6 +318,37 @@ export async function handleSquareBookingServiceRealtimeStep(
           matcherResult: contextCandidateMatch.kind,
         });
       }
+    } else if (contextMatch.kind === "ambiguous") {
+      const ambiguousOptions = getSquareServicesByExactNames({
+        services: servicesResult.services,
+        names: contextMatch.candidateNames,
+      });
+
+      if (ambiguousOptions.length >= 2) {
+        match = {
+          kind: "ambiguous",
+          options: ambiguousOptions,
+        } as ReturnType<typeof resolveSquareServiceFromInput>;
+
+        matchedInput = value;
+
+        console.log("[VOICE_BOOKING][SQUARE_SERVICE_AMBIGUOUS_FROM_CONTEXT]", {
+          tenantId,
+          locale: currentLocale,
+          originalInput: value,
+          candidateNames: contextMatch.candidateNames,
+          optionCount: ambiguousOptions.length,
+          confidence: contextMatch.confidence,
+          reason: contextMatch.reason,
+        });
+      } else {
+        console.warn("[VOICE_BOOKING][SQUARE_CONTEXT_AMBIGUOUS_WITH_TOO_FEW_VALID_OPTIONS]", {
+          tenantId,
+          input: value,
+          candidateNames: contextMatch.candidateNames,
+          validOptionCount: ambiguousOptions.length,
+        });
+      }
     } else {
       console.warn("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_DID_NOT_RESOLVE]", {
         tenantId,
@@ -308,6 +356,7 @@ export async function handleSquareBookingServiceRealtimeStep(
         reason: contextMatch.reason,
         confidence: contextMatch.confidence,
         matchedName: contextMatch.matchedName,
+        candidateNames: contextMatch.candidateNames,
       });
     }
   }

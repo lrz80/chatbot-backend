@@ -1,4 +1,4 @@
-//src/lib/voice/booking/services/square/resolveSquareServiceWithCatalogContext.ts
+// src/lib/voice/booking/services/square/resolveSquareServiceWithCatalogContext.ts
 import type { VoiceLocale } from "../../../types";
 import { getSquareServiceName } from "./squareServiceMatcher";
 
@@ -10,10 +10,17 @@ export type ResolveSquareServiceWithCatalogContextResult =
       reason: string;
     }
   | {
+      kind: "ambiguous";
+      candidateNames: string[];
+      confidence: number;
+      reason: string;
+    }
+  | {
       kind: "none";
       reason: string;
       confidence?: number;
       matchedName?: string | null;
+      candidateNames?: string[];
     };
 
 type ResolveSquareServiceWithCatalogContextParams = {
@@ -29,6 +36,21 @@ function safeJsonParse(value: string): any | null {
   } catch {
     return null;
   }
+}
+
+function normalizeCandidateNames(value: unknown, catalogNames: string[]): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const catalogSet = new Set(catalogNames);
+
+  return Array.from(
+    new Set(
+      value
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean)
+        .filter((name) => catalogSet.has(name))
+    )
+  ).slice(0, 8);
 }
 
 export async function resolveSquareServiceWithCatalogContext(
@@ -95,13 +117,16 @@ export async function resolveSquareServiceWithCatalogContext(
           {
             role: "system",
             content:
-              "You match a customer booking request to exactly one service from a provider catalog. " +
+              "You classify a customer booking request against a provider catalog. " +
               "The customer may speak any language. The catalog service names may be in another language. " +
-              "Use meaning and business context, not literal word-by-word translation. " +
-              "Return JSON only. " +
-              "Never invent a service. " +
-              "matchedName must be exactly one of the provided catalogServiceNames or null. " +
-              "If there is not enough evidence for one clear service, return matchedName as null.",
+              "Use the catalog as the only source of truth. " +
+              "Return JSON only. Never invent services. " +
+              "Do not choose arbitrarily. " +
+              "If the customer request clearly identifies exactly one catalog service, return resolution='resolved'. " +
+              "If more than one catalog service is semantically compatible with the customer request, return resolution='ambiguous'. " +
+              "If no catalog service is clearly compatible, return resolution='none'. " +
+              "matchedName must be exactly one name from catalogServiceNames or null. " +
+              "candidateNames must contain only exact names from catalogServiceNames.",
           },
           {
             role: "user",
@@ -110,7 +135,9 @@ export async function resolveSquareServiceWithCatalogContext(
               locale: params.currentLocale,
               catalogServiceNames: serviceNames,
               outputShape: {
+                resolution: "resolved | ambiguous | none",
                 matchedName: "exact catalog service name or null",
+                candidateNames: ["exact catalog service names when ambiguous"],
                 confidence: "number from 0 to 1",
                 reason: "short explanation",
               },
@@ -146,7 +173,9 @@ export async function resolveSquareServiceWithCatalogContext(
     }
 
     const parsed = safeJsonParse(content) as {
+      resolution?: string;
       matchedName?: string | null;
+      candidateNames?: string[];
       confidence?: number;
       reason?: string;
     } | null;
@@ -158,66 +187,130 @@ export async function resolveSquareServiceWithCatalogContext(
       };
     }
 
+    const resolution = String(parsed.resolution ?? "")
+      .trim()
+      .toLowerCase();
+
     const matchedName = String(parsed.matchedName ?? "").trim();
     const confidence =
       typeof parsed.confidence === "number" ? parsed.confidence : 0;
+    const candidateNames = normalizeCandidateNames(
+      parsed.candidateNames,
+      serviceNames
+    );
 
-    console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_MODEL_OUTPUT]", {
-      tenantId: params.tenantId,
-      input,
-      matchedName: matchedName || null,
-      confidence,
-      reason: parsed.reason,
-    });
-
-    if (!matchedName || confidence < 0.72) {
-      console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_NONE]", {
+    if (candidateNames.length >= 2) {
+      console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_AMBIGUOUS_FROM_CANDIDATES]", {
         tenantId: params.tenantId,
         input,
+        resolution,
         matchedName: matchedName || null,
+        candidateNames,
         confidence,
         reason: parsed.reason,
       });
 
       return {
-        kind: "none",
-        reason: parsed.reason || "LOW_CONFIDENCE",
+        kind: "ambiguous",
+        candidateNames,
         confidence,
-        matchedName: matchedName || null,
+        reason: parsed.reason || "MULTIPLE_COMPATIBLE_CATALOG_SERVICES",
       };
     }
 
-    const existsInCatalog = serviceNames.includes(matchedName);
+    console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_MODEL_OUTPUT]", {
+      tenantId: params.tenantId,
+      input,
+      resolution,
+      matchedName: matchedName || null,
+      candidateNames,
+      confidence,
+      reason: parsed.reason,
+    });
 
-    if (!existsInCatalog) {
-      console.warn("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_REJECTED_NOT_IN_CATALOG]", {
+    if (
+      resolution === "ambiguous" &&
+      candidateNames.length >= 2 &&
+      confidence >= 0.55
+    ) {
+      console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_AMBIGUOUS]", {
+        tenantId: params.tenantId,
+        input,
+        candidateNames,
+        confidence,
+        reason: parsed.reason,
+      });
+
+      return {
+        kind: "ambiguous",
+        candidateNames,
+        confidence,
+        reason: parsed.reason || "AMBIGUOUS_CATALOG_CONTEXT_MATCH",
+      };
+    }
+
+    if (resolution === "resolved") {
+      if (!matchedName || confidence < 0.72) {
+        return {
+          kind: "none",
+          reason: parsed.reason || "LOW_CONFIDENCE",
+          confidence,
+          matchedName: matchedName || null,
+          candidateNames,
+        };
+      }
+
+      const existsInCatalog = serviceNames.includes(matchedName);
+
+      if (!existsInCatalog) {
+        console.warn("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_REJECTED_NOT_IN_CATALOG]", {
+          tenantId: params.tenantId,
+          input,
+          matchedName,
+          confidence,
+        });
+
+        return {
+          kind: "none",
+          reason: "MATCH_NOT_IN_CATALOG",
+          confidence,
+          matchedName,
+          candidateNames,
+        };
+      }
+
+      console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_RESOLVED]", {
         tenantId: params.tenantId,
         input,
         matchedName,
         confidence,
+        reason: parsed.reason,
       });
 
       return {
-        kind: "none",
-        reason: "MATCH_NOT_IN_CATALOG",
-        confidence,
+        kind: "resolved",
         matchedName,
+        confidence,
+        reason: parsed.reason || "CATALOG_CONTEXT_MATCH",
       };
     }
 
-    console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_RESOLVED]", {
+    console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_NONE]", {
       tenantId: params.tenantId,
       input,
-      matchedName,
+      resolution,
+      matchedName: matchedName || null,
+      candidateNames,
       confidence,
       reason: parsed.reason,
     });
 
     return {
-      kind: "resolved",
-      matchedName,
+      kind: "none",
+      reason: parsed.reason || "NO_CLEAR_MATCH",
       confidence,
-      reason: parsed.reason || "CATALOG_CONTEXT_MATCH",
+      matchedName: matchedName || null,
+      candidateNames,
     };
   } catch (error) {
     console.warn("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_FAILED]", {
