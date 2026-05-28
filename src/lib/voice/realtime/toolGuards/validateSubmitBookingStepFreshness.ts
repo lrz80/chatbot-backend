@@ -214,6 +214,7 @@ export function validateSubmitBookingStepFreshness(params: {
     Boolean(submittedStepKey) &&
     lastSubmittedStepKey !== submittedStepKey &&
     Boolean(currentTranscript) &&
+    currentTranscriptSeq <= lastSubmittedTranscriptSeq &&
     isSameOrNearSameHumanAnswer(currentTranscript, lastSubmittedTranscript);
 
   const submittedValueDiffersFromCurrentTranscript =
