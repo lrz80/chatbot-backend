@@ -8,6 +8,7 @@ import {
   squareCreateCustomer,
   squareRetrieveBooking,
   squareSearchAvailability,
+  squareSearchCustomerByContact,
   type SquareEnvironment,
 } from "./square.client";
 import type {
@@ -69,6 +70,51 @@ async function resolveSquareCustomerIdForBooking(args: {
 
   if (!customerName && !customerPhone && !customerEmail) {
     return null;
+  }
+
+  if (customerPhone || customerEmail) {
+    const searchResult = await squareSearchCustomerByContact({
+      accessToken: args.accessToken,
+      environment: args.environment,
+      phoneNumber: customerPhone || null,
+      email: customerEmail || null,
+    });
+
+    if (searchResult.ok) {
+      const existingCustomer = Array.isArray(searchResult.data.customers)
+        ? searchResult.data.customers.find((customer) => {
+            const squareCustomerId = cleanString(customer.id);
+            const squarePhone = cleanString(customer.phone_number);
+            const squareEmail = cleanString(customer.email_address);
+
+            if (!squareCustomerId) return false;
+
+            return (
+              (customerPhone && squarePhone === customerPhone) ||
+              (customerEmail &&
+                squareEmail.toLowerCase() === customerEmail.toLowerCase())
+            );
+          })
+        : null;
+
+      const existingSquareCustomerId = cleanString(existingCustomer?.id);
+
+      if (existingSquareCustomerId) {
+        console.log("🟦 [SQUARE_PROVIDER] existing customer reused", {
+          squareCustomerId: existingSquareCustomerId,
+          hasPhone: Boolean(customerPhone),
+          hasEmail: Boolean(customerEmail),
+        });
+
+        return existingSquareCustomerId;
+      }
+    } else {
+      console.warn("🟨 [SQUARE_PROVIDER] customer search failed before create", {
+        status: searchResult.status,
+        error: searchResult.error,
+        details: JSON.stringify(searchResult.details || {}, null, 2),
+      });
+    }
   }
 
   const { givenName, familyName } = splitCustomerName(customerName);

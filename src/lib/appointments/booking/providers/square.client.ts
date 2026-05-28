@@ -1,5 +1,6 @@
 //src/lib/appointments/booking/providers/square.client.ts
 import fetch from "node-fetch";
+import { createHash } from "crypto";
 
 export type SquareEnvironment = "sandbox" | "production";
 
@@ -178,6 +179,37 @@ function normalizeNumber(value: number | string | null | undefined): number | nu
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function sortObjectDeep(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortObjectDeep);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>)
+      .sort()
+      .reduce<Record<string, unknown>>((acc, key) => {
+        acc[key] = sortObjectDeep((value as Record<string, unknown>)[key]);
+        return acc;
+      }, {});
+  }
+
+  return value;
+}
+
+function buildStableIdempotencyKey(params: {
+  namespace: string;
+  payload: unknown;
+}): string {
+  const canonicalPayload = JSON.stringify(sortObjectDeep(params.payload));
+
+  const hash = createHash("sha256")
+    .update(`${params.namespace}:${canonicalPayload}`)
+    .digest("hex")
+    .slice(0, 40);
+
+  return `aamy:square:${params.namespace}:${hash}`.slice(0, 128);
+}
+
 export async function squareRequest<T = unknown>(
   options: SquareRequestOptions
 ): Promise<SquareApiResult<T>> {
@@ -338,6 +370,52 @@ export async function squareSearchAvailability(args: SquareSearchAvailabilityInp
   });
 }
 
+export async function squareSearchCustomerByContact(
+  args: SquareSearchCustomerInput
+): Promise<
+  SquareApiResult<{
+    customers?: SquareCustomer[];
+  }>
+> {
+  const email = String(args.email || "").trim();
+  const phoneNumber = String(args.phoneNumber || "").trim();
+
+  if (!email && !phoneNumber) {
+    return {
+      ok: false,
+      status: 400,
+      error: "SQUARE_CUSTOMER_SEARCH_INPUT_MISSING",
+    };
+  }
+
+  const filter: Record<string, unknown> = {};
+
+  if (email) {
+    filter.email_address = {
+      exact: email,
+    };
+  }
+
+  if (phoneNumber) {
+    filter.phone_number = {
+      exact: phoneNumber,
+    };
+  }
+
+  return squareRequest({
+    accessToken: args.accessToken,
+    environment: args.environment,
+    path: "/v2/customers/search",
+    method: "POST",
+    body: {
+      query: {
+        filter,
+      },
+      limit: 10,
+    },
+  });
+}
+
 export async function squareCreateCustomer(args: SquareCreateCustomerInput): Promise<
   SquareApiResult<{
     customer?: {
@@ -364,10 +442,15 @@ export async function squareCreateCustomer(args: SquareCreateCustomerInput): Pro
 
   const customer: Record<string, unknown> = {};
 
-  if (givenName) customer.given_name = givenName;
-  if (familyName) customer.family_name = familyName;
-  if (email) customer.email_address = email;
-  if (phoneNumber) customer.phone_number = phoneNumber;
+    if (givenName) customer.given_name = givenName;
+    if (familyName) customer.family_name = familyName;
+    if (email) customer.email_address = email;
+    if (phoneNumber) customer.phone_number = phoneNumber;
+
+  const idempotencyKey = buildStableIdempotencyKey({
+    namespace: "customer_create",
+    payload: customer,
+  });
 
   return squareRequest({
     accessToken: args.accessToken,
@@ -375,19 +458,26 @@ export async function squareCreateCustomer(args: SquareCreateCustomerInput): Pro
     path: "/v2/customers",
     method: "POST",
     body: {
-      idempotency_key: [
-        "aamy",
-        "square",
-        "customer",
-        email || phoneNumber || `${givenName}_${familyName}`,
-      ]
-        .map((part) => String(part || "").replace(/\s+/g, "_"))
-        .join(":")
-        .slice(0, 128),
+      idempotency_key: idempotencyKey,
       ...customer,
     },
   });
 }
+
+export type SquareSearchCustomerInput = {
+  accessToken: string;
+  environment: SquareEnvironment;
+  email?: string | null;
+  phoneNumber?: string | null;
+};
+
+export type SquareCustomer = {
+  id?: string;
+  given_name?: string;
+  family_name?: string;
+  email_address?: string;
+  phone_number?: string;
+};
 
 export async function squareCreateBooking(args: SquareCreateBookingInput): Promise<
   SquareApiResult<{
