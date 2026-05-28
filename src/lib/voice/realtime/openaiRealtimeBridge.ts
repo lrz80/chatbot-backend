@@ -632,6 +632,22 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
+    const shouldAllowTranscriptNudgeForStep =
+      pendingBookingStepKey === "datetime";
+
+    if (!shouldAllowTranscriptNudgeForStep) {
+      console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_NUDGE_SKIPPED]", {
+        callSid,
+        reason: "STEP_NOT_NUDGE_ELIGIBLE",
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq,
+      });
+
+      return;
+    }
+
     if (lastBookingTranscriptNudgeSeq === lastUserTranscriptSeq) {
       return;
     }
