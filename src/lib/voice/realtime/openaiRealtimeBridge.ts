@@ -334,6 +334,7 @@ export async function createOpenAiRealtimeBridge({
 
   let activeResponseId: string | null = null;
   let activeResponseSource: string | null = null;
+  let activeResponseStartedAtUserTranscriptSeq = 0;
 
   let pendingResponseCreate: Record<string, unknown> | null = null;
   let pendingResponseSource: string | null = null;
@@ -642,6 +643,7 @@ export async function createOpenAiRealtimeBridge({
     if (event.type === "response.created") {
       activeResponseId = event.response?.id || null;
       activeResponseSource = awaitingResponseSource;
+      activeResponseStartedAtUserTranscriptSeq = lastUserTranscriptSeq;
       awaitingResponseSource = null;
       assistantSpeaking = true;
 
@@ -649,7 +651,9 @@ export async function createOpenAiRealtimeBridge({
         callSid,
         activeResponseId,
         activeResponseSource,
+        activeResponseStartedAtUserTranscriptSeq,
       });
+
       assistantSpeaking = true;
 
       if (endCallGoodbyeRequested && !endCallGoodbyeResponseId) {
@@ -800,12 +804,22 @@ export async function createOpenAiRealtimeBridge({
 
       const completedResponseSource = activeResponseSource;
 
+      const isBookingAssistantPromptResponse =
+        typeof completedResponseSource === "string" &&
+        completedResponseSource.startsWith("tool_followup:") &&
+        (realtimeState as any).bookingTurnStatus === "waiting_assistant_prompt" &&
+        clean((realtimeState as any).pendingBookingStepKey);
+
+      const responseDoneAnchorSeq = isBookingAssistantPromptResponse
+        ? activeResponseStartedAtUserTranscriptSeq
+        : lastUserTranscriptSeq;
+
       const responseDoneResult = handleRealtimeResponseDone({
         event,
         callSid,
         realtimeState,
         lastUserTranscript,
-        lastUserTranscriptSeq,
+        lastUserTranscriptSeq: responseDoneAnchorSeq,
         activeResponseId,
         completedResponseSource,
         pendingResponseCreate,
@@ -839,6 +853,7 @@ export async function createOpenAiRealtimeBridge({
       realtimeState = responseDoneResult.realtimeState;
       activeResponseId = responseDoneResult.activeResponseId;
       activeResponseSource = null;
+      activeResponseStartedAtUserTranscriptSeq = lastUserTranscriptSeq;
 
       if (responseDoneResult.shouldFlushPendingResponse) {
         flushPendingRealtimeResponse();
