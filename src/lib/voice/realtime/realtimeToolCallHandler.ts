@@ -73,18 +73,39 @@ function resolveSubmitBookingStepForwardedValue(params: {
     return "";
   }
 
+  /**
+   * service:
+   * El modelo puede normalizar el nombre del servicio para resolverlo contra
+   * catálogo/provider. La protección contra adelantos ya está en deferredSubmit.
+   */
   if (stepKey === "service") {
-    if (modelValue) {
-      return modelValue;
-    }
-
-    if (transcriptIsAfterPrompt) {
-      return transcriptValue;
-    }
-
+    if (modelValue) return modelValue;
+    if (transcriptIsAfterPrompt) return transcriptValue;
     return "";
   }
 
+  /**
+   * datetime:
+   * No hacemos detección por palabras ni regex.
+   * No decidimos aquí si algo "parece fecha".
+   *
+   * Regla:
+   * - Si el modelo ya produjo un valor para datetime, se lo dejamos al parser.
+   * - El parser de datetime es quien debe validar si sirve o no.
+   *
+   * Esto evita que un transcript posterior como "Hola" pise:
+   * modelValue = "hoy a las 10 de la mañana".
+   */
+  if (stepKey === "datetime") {
+    if (modelValue) return modelValue;
+    if (transcriptIsAfterPrompt) return transcriptValue;
+    return "";
+  }
+
+  /**
+   * Resto de steps:
+   * preferimos el transcript humano nuevo.
+   */
   if (transcriptIsAfterPrompt && transcriptValue) {
     return transcriptValue;
   }

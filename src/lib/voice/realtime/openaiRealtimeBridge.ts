@@ -332,6 +332,7 @@ export async function createOpenAiRealtimeBridge({
   let lastUserTranscript = "";
   let lastUserDigits = "";
   let lastUserTranscriptSeq = 0;
+  let lastBookingTranscriptNudgeSeq = 0;
   let openAiReady = false;
   let sessionConfigured = false;
   let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
@@ -605,6 +606,59 @@ export async function createOpenAiRealtimeBridge({
         reason: null,
       };
     }
+  }
+
+  function nudgeBookingStepProcessingAfterTranscript(): void {
+    const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
+    const pendingBookingStepKey = clean(
+      (realtimeState as any).pendingBookingStepKey
+    );
+
+    const pendingBookingStepPromptAnchorSeq =
+      typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq === "number"
+        ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
+        : -1;
+
+    const hasPendingBookingAnswer =
+      bookingTurnStatus === "waiting_user_answer" &&
+      !!pendingBookingStepKey &&
+      lastUserTranscriptSeq > pendingBookingStepPromptAnchorSeq;
+
+    if (!hasPendingBookingAnswer) {
+      return;
+    }
+
+    if (lastBookingTranscriptNudgeSeq === lastUserTranscriptSeq) {
+      return;
+    }
+
+    if (!lastUserTranscript) {
+      return;
+    }
+
+    lastBookingTranscriptNudgeSeq = lastUserTranscriptSeq;
+
+    console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_PROCESSING_NUDGED]", {
+      callSid,
+      pendingBookingStepKey,
+      lastUserTranscript,
+      lastUserTranscriptSeq,
+      pendingBookingStepPromptAnchorSeq,
+    });
+
+    requestRealtimeResponse(
+      {
+        instructions: [
+          "The caller just answered the current booking step.",
+          `Current booking step key: ${pendingBookingStepKey}.`,
+          `Use this exact latest caller transcript as the answer: ${lastUserTranscript}`,
+          "Call submit_booking_step for the current booking step now.",
+          "Do not ask another question before calling the tool.",
+          "Do not use an older transcript.",
+        ].join(" "),
+      },
+      "tool_followup:booking_step_transcript_nudge"
+    );
   }
 
   async function configureRealtimeSessionIfReady(): Promise<void> {
@@ -897,6 +951,7 @@ export async function createOpenAiRealtimeBridge({
           });
 
           flushDeferredSubmitBookingStepIfReady("transcript_accepted");
+          nudgeBookingStepProcessingAfterTranscript();
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {
@@ -1023,6 +1078,7 @@ export async function createOpenAiRealtimeBridge({
       lastUserTranscript = "";
       lastUserDigits = "";
       lastUserTranscriptSeq = 0;
+      lastBookingTranscriptNudgeSeq = 0;
 
       assistantSpeaking = false;
       lastAssistantAudioDoneAtMs = 0;
