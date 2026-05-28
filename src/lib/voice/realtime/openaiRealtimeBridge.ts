@@ -14,6 +14,13 @@ import {
 } from "./bookingRuntimeState";
 import { handleRealtimeUserTranscript } from "./handleRealtimeUserTranscript";
 import { handleRealtimeResponseDone } from "./handleRealtimeResponseLifecycle";
+import {
+  canFlushDeferredSubmitBookingStep,
+  getRealtimeToolName,
+  parseRealtimeToolArgs,
+  shouldDeferSubmitBookingStepUntilTranscript,
+  type DeferredSubmitBookingStepState,
+} from "./deferredSubmitBookingStep";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -332,6 +339,11 @@ export async function createOpenAiRealtimeBridge({
 
   let realtimeToolQueue: Promise<void> = Promise.resolve();
 
+  let deferredSubmitBookingStep: DeferredSubmitBookingStepState = {
+    event: null,
+    reason: null,
+  };
+
   let activeResponseId: string | null = null;
   let activeResponseSource: string | null = null;
   let activeResponseStartedAtUserTranscriptSeq = 0;
@@ -536,6 +548,62 @@ export async function createOpenAiRealtimeBridge({
       });
   }
 
+  function flushDeferredSubmitBookingStepIfReady(reason: string): void {
+    if (!deferredSubmitBookingStep.event) {
+      return;
+    }
+
+    const check = canFlushDeferredSubmitBookingStep({
+      event: deferredSubmitBookingStep.event,
+      realtimeState,
+      lastUserTranscriptSeq,
+    });
+
+    if (check.ok) {
+      const eventToFlush = deferredSubmitBookingStep.event;
+
+      deferredSubmitBookingStep = {
+        event: null,
+        reason: null,
+      };
+
+      console.log("[VOICE_REALTIME][DEFERRED_SUBMIT_BOOKING_STEP_FLUSHED]", {
+        callSid,
+        reason,
+        submittedStepKey: check.submittedStepKey,
+        pendingStepKey: check.pendingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        promptAnchorSeq: check.promptAnchorSeq,
+      });
+
+      enqueueRealtimeToolCall(eventToFlush);
+      return;
+    }
+
+    if (
+      check.submittedStepKey &&
+      check.pendingStepKey &&
+      check.submittedStepKey !== check.pendingStepKey
+    ) {
+      console.warn("[VOICE_REALTIME][DEFERRED_SUBMIT_BOOKING_STEP_DROPPED]", {
+        callSid,
+        reason,
+        deferredReason: deferredSubmitBookingStep.reason,
+        submittedStepKey: check.submittedStepKey,
+        pendingStepKey: check.pendingStepKey,
+        bookingTurnStatus: check.bookingTurnStatus,
+        lastUserTranscriptSeq,
+        promptAnchorSeq: check.promptAnchorSeq,
+      });
+
+      deferredSubmitBookingStep = {
+        event: null,
+        reason: null,
+      };
+    }
+  }
+
   async function configureRealtimeSessionIfReady(): Promise<void> {
     if (sessionConfigured) return;
     if (!openAiReady) return;
@@ -697,6 +765,42 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (event.type === "response.function_call_arguments.done") {
+      if (
+        shouldDeferSubmitBookingStepUntilTranscript({
+          event,
+          realtimeState,
+          lastUserTranscriptSeq,
+        })
+      ) {
+        const args = parseRealtimeToolArgs(event);
+
+        deferredSubmitBookingStep = {
+          event,
+          reason: "WAITING_FOR_TRANSCRIPT_SEQ_ADVANCE",
+        };
+
+        console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_DEFERRED]", {
+          callSid,
+          toolName: getRealtimeToolName(event),
+          submittedStepKey: String(args.step_key || "").trim(),
+          pendingBookingStepKey: String(
+            (realtimeState as any).pendingBookingStepKey || ""
+          ).trim(),
+          bookingTurnStatus: String(
+            (realtimeState as any).bookingTurnStatus || ""
+          ).trim(),
+          lastUserTranscript,
+          lastUserTranscriptSeq,
+          pendingBookingStepPromptAnchorSeq:
+            typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq ===
+            "number"
+              ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
+              : null,
+        });
+
+        return;
+      }
+
       enqueueRealtimeToolCall(event);
       return;
     }
@@ -787,6 +891,8 @@ export async function createOpenAiRealtimeBridge({
             lastUserTranscript,
             lastUserTranscriptSeq,
           });
+
+          flushDeferredSubmitBookingStepIfReady("transcript_accepted");
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {
@@ -850,10 +956,16 @@ export async function createOpenAiRealtimeBridge({
         },
       });
 
-      realtimeState = responseDoneResult.realtimeState;
+      realtimeState = attachLatestUserTranscriptSeq({
+        realtimeState: responseDoneResult.realtimeState,
+        lastUserTranscriptSeq,
+      });
+
       activeResponseId = responseDoneResult.activeResponseId;
       activeResponseSource = null;
       activeResponseStartedAtUserTranscriptSeq = lastUserTranscriptSeq;
+
+      flushDeferredSubmitBookingStepIfReady("response_done");
 
       if (responseDoneResult.shouldFlushPendingResponse) {
         flushPendingRealtimeResponse();
