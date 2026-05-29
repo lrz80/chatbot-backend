@@ -76,6 +76,7 @@ export async function createOpenAiRealtimeBridge({
   let bookingFlowLoaded = false;
 
   let assistantSpeaking = false;
+  let lastAssistantAudioDeltaAtMs = 0;
   let lastAssistantAudioDoneAtMs = 0;
 
   let hangupRequestedByTool = false;
@@ -323,6 +324,7 @@ export async function createOpenAiRealtimeBridge({
       }
 
       assistantSpeaking = true;
+      lastAssistantAudioDeltaAtMs = Date.now();
 
       sendTwilioAudio({
         twilioSocket,
@@ -338,6 +340,10 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (event.type === "conversation.item.input_audio_transcription.completed") {
+      const assistantAudioActive =
+        lastAssistantAudioDeltaAtMs > 0 &&
+        Date.now() - lastAssistantAudioDeltaAtMs < 450;
+
       handleRealtimeUserTranscript({
         event,
         callSid,
@@ -354,7 +360,7 @@ export async function createOpenAiRealtimeBridge({
         openAiSocket,
         tenantId,
         callEnding,
-        assistantSpeaking,
+        assistantSpeaking: assistantAudioActive,
         lastAssistantAudioDoneAtMs,
         minMsAfterAssistantAudio: 800,
       })
@@ -534,6 +540,7 @@ export async function createOpenAiRealtimeBridge({
       bookingCoordinator.reset();
 
       assistantSpeaking = false;
+      lastAssistantAudioDeltaAtMs = 0;
       lastAssistantAudioDoneAtMs = 0;
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {
