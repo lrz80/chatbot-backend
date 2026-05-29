@@ -12,6 +12,7 @@ export type HandleRealtimeUserTranscriptResult = {
     | "EMPTY_TRANSCRIPT"
     | "ASSISTANT_AUDIO_NOISE"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO"
+    | "NOISE_LIKE_TRANSCRIPT"
     | "RUNTIME_NOT_CONSUMED";
   lastUserTranscript: string;
   lastUserTranscriptSeq: number;
@@ -54,6 +55,61 @@ function isLikelyHumanInterruption(transcript: string): boolean {
   const chars = normalizedCharCount(cleaned);
 
   return words >= 2 && chars >= 8;
+}
+
+function letterCount(value: string): number {
+  const matches = clean(value).match(/\p{L}/gu);
+  return matches ? matches.length : 0;
+}
+
+function digitCount(value: string): number {
+  const matches = clean(value).match(/\p{N}/gu);
+  return matches ? matches.length : 0;
+}
+
+function uniqueLetterRatio(value: string): number {
+  const letters = clean(value)
+    .toLowerCase()
+    .match(/\p{L}/gu);
+
+  if (!letters || letters.length === 0) return 0;
+
+  return new Set(letters).size / letters.length;
+}
+
+function isLikelyNoiseTranscript(transcript: string): boolean {
+  const cleaned = clean(transcript);
+
+  if (!cleaned) return true;
+
+  const words = wordCount(cleaned);
+  const letters = letterCount(cleaned);
+  const digits = digitCount(cleaned);
+  const chars = normalizedCharCount(cleaned);
+
+  if (chars <= 1) return true;
+
+  if (letters === 0 && digits === 0) return true;
+
+  /**
+   * Una sola palabra muy corta suele ser ruido.
+   * Esto aplica globalmente, no solo en booking.
+   *
+   * No bloquea "sí", "no", "ok", etc. porque esas tienen 2 letras
+   * y pueden ser válidas después de una pregunta directa.
+   */
+  if (words === 1 && letters > 0 && letters <= 2 && digits === 0) {
+    return true;
+  }
+
+  /**
+   * Texto largo con poquísima variedad de letras suele ser ruido/transcripción mala.
+   */
+  if (letters >= 6 && uniqueLetterRatio(cleaned) < 0.28) {
+    return true;
+  }
+
+  return false;
 }
 
 function isOpenSocket(socket: WebSocket): boolean {
@@ -118,7 +174,8 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     | "CALL_ENDING"
     | "EMPTY_TRANSCRIPT"
     | "ASSISTANT_AUDIO_NOISE"
-    | "TOO_CLOSE_TO_ASSISTANT_AUDIO";
+    | "TOO_CLOSE_TO_ASSISTANT_AUDIO"
+    | "NOISE_LIKE_TRANSCRIPT";
   msSinceAssistantAudioDone: number | null;
 } {
   const transcript = clean(params.rawTranscript);
@@ -141,31 +198,28 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     };
   }
 
+  if (isLikelyNoiseTranscript(transcript)) {
+    return {
+      ignore: true,
+      interruptAssistant: false,
+      reason: "NOISE_LIKE_TRANSCRIPT",
+      msSinceAssistantAudioDone: null,
+    };
+  }
+
   const isWaitingForBookingAnswer =
     clean(params.bookingTurnStatus) === "waiting_user_answer" &&
     !!clean(params.pendingBookingStepKey);
 
   /**
-   * Importante:
-   * Si estamos esperando respuesta de un step, NO podemos exigir
-   * words >= 2 && chars >= 8.
+   * En booking NO debemos aceptar cualquier transcript mientras Aamy habla.
+   * Respuestas cortas como "sí", "no", "Andrea", "9" son válidas,
+   * pero deben entrar cuando el audio de Aamy ya terminó.
    *
-   * Respuestas válidas pueden ser:
-   * - Sí
-   * - No
-   * - Andrea
-   * - Mañana
-   * - 9
+   * Si el cliente realmente interrumpe mientras Aamy habla, exigimos una señal humana fuerte.
+   * Esto evita que brisa/eco/ruido avance steps.
    */
   if (params.assistantSpeaking) {
-    if (isWaitingForBookingAnswer) {
-      return {
-        ignore: false,
-        interruptAssistant: true,
-        msSinceAssistantAudioDone: null,
-      };
-    }
-
     if (!isLikelyHumanInterruption(transcript)) {
       return {
         ignore: true,
@@ -197,15 +251,11 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
 
   const msSinceAssistantAudioDone = nowMs() - lastAssistantAudioDoneAtMs;
 
-  if (msSinceAssistantAudioDone < params.minMsAfterAssistantAudio) {
-    if (isWaitingForBookingAnswer) {
-      return {
-        ignore: false,
-        interruptAssistant: false,
-        msSinceAssistantAudioDone,
-      };
-    }
+  const effectiveMinMsAfterAssistantAudio = isWaitingForBookingAnswer
+    ? Math.max(params.minMsAfterAssistantAudio, 1500)
+    : params.minMsAfterAssistantAudio;
 
+  if (msSinceAssistantAudioDone < effectiveMinMsAfterAssistantAudio) {
     if (isLikelyHumanInterruption(transcript)) {
       return {
         ignore: false,
