@@ -101,19 +101,6 @@ export function guardGetBookingFlowIntent(
     },
   });
 
-  requestRealtimeResponse(
-    {
-      instructions: [
-        "Do not start the booking flow yet.",
-        "There is no accepted caller request for booking.",
-        "Continue the conversation naturally and ask how you can help.",
-        "Do not invent booking details.",
-        "Do not ask booking flow questions unless the caller asks for an appointment.",
-      ].join(" "),
-    },
-    "tool_guard:get_booking_flow_no_user_intent"
-  );
-
   return {
     handled: true,
     result: blockedResult,
