@@ -10,7 +10,7 @@ export type HandleRealtimeUserTranscriptResult = {
   ignoredReason?:
     | "CALL_ENDING"
     | "EMPTY_TRANSCRIPT"
-    | "ASSISTANT_AUDIO_NOISE"
+    | "ASSISTANT_AUDIO_ACTIVE"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO"
     | "NOISE_LIKE_TRANSCRIPT"
     | "RUNTIME_NOT_CONSUMED";
@@ -38,23 +38,8 @@ function nowMs(): number {
   return Date.now();
 }
 
-function wordCount(value: string): number {
-  return clean(value).split(/\s+/).filter(Boolean).length;
-}
-
 function normalizedCharCount(value: string): number {
   return clean(value).replace(/\s+/g, "").length;
-}
-
-function isLikelyHumanInterruption(transcript: string): boolean {
-  const cleaned = clean(transcript);
-
-  if (!cleaned) return false;
-
-  const words = wordCount(cleaned);
-  const chars = normalizedCharCount(cleaned);
-
-  return words >= 2 && chars >= 8;
 }
 
 function letterCount(value: string): number {
@@ -162,7 +147,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   reason?:
     | "CALL_ENDING"
     | "EMPTY_TRANSCRIPT"
-    | "ASSISTANT_AUDIO_NOISE"
+    | "ASSISTANT_AUDIO_ACTIVE"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO"
     | "NOISE_LIKE_TRANSCRIPT";
   msSinceAssistantAudioDone: number | null;
@@ -210,18 +195,10 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
    * Esto evita que brisa/eco/ruido avance steps.
    */
   if (params.assistantSpeaking) {
-    if (!isLikelyHumanInterruption(transcript)) {
-      return {
-        ignore: true,
-        interruptAssistant: false,
-        reason: "ASSISTANT_AUDIO_NOISE",
-        msSinceAssistantAudioDone: null,
-      };
-    }
-
     return {
-      ignore: false,
-      interruptAssistant: true,
+      ignore: true,
+      interruptAssistant: false,
+      reason: "ASSISTANT_AUDIO_ACTIVE",
       msSinceAssistantAudioDone: null,
     };
   }
@@ -246,14 +223,6 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     : params.minMsAfterAssistantAudio;
 
   if (msSinceAssistantAudioDone < effectiveMinMsAfterAssistantAudio) {
-    if (isLikelyHumanInterruption(transcript)) {
-      return {
-        ignore: false,
-        interruptAssistant: false,
-        msSinceAssistantAudioDone,
-      };
-    }
-
     return {
       ignore: true,
       interruptAssistant: false,
