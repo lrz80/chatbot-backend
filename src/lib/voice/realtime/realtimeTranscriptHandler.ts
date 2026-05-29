@@ -1,6 +1,7 @@
 // src/lib/voice/realtime/realtimeTranscriptHandler.ts
 import type { CallState } from "../types";
 import { detectarIdioma } from "../../detectarIdioma";
+import { guardRealtimeUserTranscript } from "./transcriptGuards/guardRealtimeUserTranscript";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -100,6 +101,32 @@ export async function handleRealtimeTranscriptEvent(
   const transcript = clean(event.transcript || "");
 
   if (!transcript) {
+    return {
+      consumed: true,
+      transcript: "",
+      currentLocale,
+      realtimeState,
+      realtimeTenant,
+      realtimeCfg,
+      localeLocked,
+    };
+  }
+
+  const transcriptGuard = guardRealtimeUserTranscript({
+    transcript,
+    realtimeState,
+  });
+
+  if (!transcriptGuard.ok) {
+    console.log("[VOICE_REALTIME][USER_TRANSCRIPT_REJECTED_BY_GUARD]", {
+      callSid,
+      transcript,
+      reason: transcriptGuard.reason,
+      bookingTurnStatus: (realtimeState as any).bookingTurnStatus ?? null,
+      pendingBookingStepKey: (realtimeState as any).pendingBookingStepKey ?? null,
+      activeResponseId: (realtimeState as any).activeResponseId ?? null,
+    });
+
     return {
       consumed: true,
       transcript: "",

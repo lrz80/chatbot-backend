@@ -15,6 +15,7 @@ import { guardTenantReady } from "./toolGuards/guardTenantReady";
 import { handleBlockedSubmitBookingStep } from "./toolGuards/handleBlockedSubmitBookingStep";
 import { applyBookingRuntimeStateAfterToolResult } from "./bookingRuntimeState";
 import { canSubmitBookingStepNow } from "./bookingTurnState";
+import { guardGetBookingFlowIntent } from "./toolGuards/guardGetBookingFlowIntent";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -287,6 +288,31 @@ export async function handleRealtimeToolCall(
   }
 
   const resolvedTenantId: string = tenantId;
+
+  const getBookingFlowIntentGuard = guardGetBookingFlowIntent({
+    toolName,
+    callId,
+    callSid,
+    openAiSocket,
+    requestRealtimeResponse,
+    realtimeState,
+    bookingFlowLoaded,
+    callEnding,
+    lastUserTranscript,
+    lastUserDigits,
+  });
+
+  if (getBookingFlowIntentGuard.handled) {
+    return {
+      consumed: true,
+      result: getBookingFlowIntentGuard.result,
+      realtimeState: getBookingFlowIntentGuard.realtimeState,
+      bookingFlowLoaded: getBookingFlowIntentGuard.bookingFlowLoaded,
+      hangupRequestedByTool: getBookingFlowIntentGuard.hangupRequestedByTool,
+      callEnding: getBookingFlowIntentGuard.callEnding,
+      resetLastUserDigits: getBookingFlowIntentGuard.resetLastUserDigits,
+    };
+  }
   
   const unsafeToolRequiresRecentUserInput =
     toolName === "send_useful_link_sms" ||
