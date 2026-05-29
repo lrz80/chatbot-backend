@@ -161,6 +161,33 @@ export async function createOpenAiRealtimeBridge({
       requestRealtimeResponse,
     });
 
+  function scheduleTwilioHangupAfterGoodbye(source: string): void {
+    if (callEnding) return;
+
+    hangupRequestedByTool = false;
+    endCallGoodbyeRequested = false;
+    endCallGoodbyeResponseId = null;
+    callEnding = true;
+
+    console.log("[VOICE_REALTIME][TWILIO_HANGUP_SCHEDULED_AFTER_GOODBYE]", {
+      callSid,
+      source,
+    });
+
+    setTimeout(() => {
+      endTwilioCall({
+        callSid,
+        accountSid: twilioAccountSid,
+      }).catch((error) => {
+        console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
+          callSid,
+          accountSid: twilioAccountSid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, 1200);
+  }
+
   function requestRealtimeResponse(
     response?: Record<string, unknown>,
     source = "unknown"
@@ -471,27 +498,7 @@ export async function createOpenAiRealtimeBridge({
         endCallGoodbyeResponseId,
         callEnding,
         onEndCallGoodbyeCompleted: () => {
-          const responseState = responseController.getState();
-
-          if (!responseState.pendingResponseCreate && !responseState.activeResponseId) {
-            hangupRequestedByTool = false;
-            endCallGoodbyeRequested = false;
-            endCallGoodbyeResponseId = null;
-            callEnding = true;
-
-            setTimeout(() => {
-              endTwilioCall({
-                callSid,
-                accountSid: twilioAccountSid,
-              }).catch((error) => {
-                console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
-                  callSid,
-                  accountSid: twilioAccountSid,
-                  error: error instanceof Error ? error.message : String(error),
-                });
-              });
-            }, 2500);
-          }
+          scheduleTwilioHangupAfterGoodbye("response_done_callback");
         },
       });
 
