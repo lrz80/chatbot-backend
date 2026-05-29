@@ -19,6 +19,11 @@ type BookingRealtimeCoordinatorParams = {
   getLastUserTranscript: () => string;
   getLastUserTranscriptSeq: () => number;
   enqueueRealtimeToolCall: (event: any) => void;
+  enqueueSubmitBookingStepFromTranscript: (params: {
+    stepKey: string;
+    value: string;
+    source: string;
+  }) => void;
   requestRealtimeResponse: RequestRealtimeResponse;
 };
 
@@ -222,23 +227,11 @@ export function createBookingRealtimeCoordinator(
       pendingBookingStepPromptAnchorSeq,
     });
 
-    params.requestRealtimeResponse(
-      {
-        instructions: [
-          "The caller just answered the current booking step.",
-          `Current booking step key: ${pendingBookingStepKey}.`,
-          `Use this exact latest caller transcript as the answer: ${lastUserTranscript}`,
-          "Call submit_booking_step for the current booking step now.",
-          "Do not speak to the caller.",
-          "Do not say progress updates.",
-          "Do not say anything like 'we are moving forward with your booking'.",
-          "Do not ask another question before calling the tool.",
-          "Do not use an older transcript.",
-          "Your only action in this response should be the tool call.",
-        ].join(" "),
-      },
-      "tool_followup:booking_step_transcript_nudge"
-    );
+    params.enqueueSubmitBookingStepFromTranscript({
+      stepKey: pendingBookingStepKey,
+      value: lastUserTranscript,
+      source: "booking_step_transcript_nudge",
+    });
   }
 
   function catchUpBookingStepIfCallerAnsweredBeforeTurnOpened(): void {
@@ -335,22 +328,11 @@ export function createBookingRealtimeCoordinator(
       pendingBookingStepPromptAnchorSeq,
     });
 
-    params.requestRealtimeResponse(
-      {
-        instructions: [
-          "The booking step has just opened, but the caller already answered it before the turn was fully opened.",
-          `Current booking step key: ${pendingBookingStepKey}.`,
-          `Use this exact latest caller transcript as the answer: ${lastUserTranscript}`,
-          "Call submit_booking_step for the current booking step now.",
-          "Do not speak to the caller.",
-          "Do not say progress updates.",
-          "Do not ask another question before calling the tool.",
-          "Do not use an older transcript.",
-          "Your only action in this response should be the tool call.",
-        ].join(" "),
-      },
-      "tool_followup:booking_step_early_answer_catchup"
-    );
+    params.enqueueSubmitBookingStepFromTranscript({
+      stepKey: pendingBookingStepKey,
+      value: lastUserTranscript,
+      source: "booking_step_early_answer_catchup",
+    });
   }
 
   return {

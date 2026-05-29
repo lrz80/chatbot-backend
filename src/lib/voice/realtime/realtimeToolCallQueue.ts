@@ -36,6 +36,38 @@ type RealtimeToolCallQueueParams = {
   resetLastUserDigits: () => void;
 };
 
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function buildSyntheticSubmitBookingStepEvent(params: {
+  callId: string;
+  stepKey: string;
+  value: string;
+  source: string;
+}): any {
+  const args = {
+    step_key: params.stepKey,
+    value: params.value,
+  };
+
+  return {
+    type: "response.function_call_arguments.done",
+    name: "submit_booking_step",
+    call_id: params.callId,
+    arguments: JSON.stringify(args),
+
+    // Campos redundantes a propósito para ser compatible con parsers internos
+    // que puedan leer toolName/callId/toolArgs en vez de name/call_id/arguments.
+    toolName: "submit_booking_step",
+    callId: params.callId,
+    toolArgs: args,
+
+    synthetic: true,
+    syntheticSource: params.source,
+  };
+}
+
 export function createRealtimeToolCallQueue(
   params: RealtimeToolCallQueueParams
 ) {
@@ -96,7 +128,54 @@ export function createRealtimeToolCallQueue(
       });
   }
 
+  function enqueueSubmitBookingStepFromTranscript(paramsForSubmit: {
+    stepKey: string;
+    value: string;
+    source: string;
+  }): void {
+    const stepKey = clean(paramsForSubmit.stepKey);
+    const value = clean(paramsForSubmit.value);
+
+    if (!stepKey || !value) {
+      console.warn("[VOICE_REALTIME][SYNTHETIC_SUBMIT_BOOKING_STEP_SKIPPED]", {
+        callSid: params.getCallSid(),
+        reason: "EMPTY_STEP_OR_VALUE",
+        stepKey,
+        value,
+        source: paramsForSubmit.source,
+      });
+
+      return;
+    }
+
+    const callId = [
+      "synthetic_submit_booking_step",
+      params.getCallSid() || "unknown_call",
+      stepKey,
+      String(params.getLastUserTranscriptSeq()),
+      Date.now().toString(),
+    ].join("_");
+
+    console.warn("[VOICE_REALTIME][SYNTHETIC_SUBMIT_BOOKING_STEP_ENQUEUED]", {
+      callSid: params.getCallSid(),
+      stepKey,
+      value,
+      lastUserTranscriptSeq: params.getLastUserTranscriptSeq(),
+      source: paramsForSubmit.source,
+    });
+
+    enqueueRealtimeToolCall(
+      buildSyntheticSubmitBookingStepEvent({
+        callId,
+        stepKey,
+        value,
+        source: paramsForSubmit.source,
+      })
+    );
+  }
+
   return {
     enqueueRealtimeToolCall,
+    enqueueSubmitBookingStepFromTranscript,
   };
 }

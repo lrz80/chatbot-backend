@@ -146,6 +146,8 @@ export async function createOpenAiRealtimeBridge({
     getLastUserTranscript: () => lastUserTranscript,
     getLastUserTranscriptSeq: () => lastUserTranscriptSeq,
     enqueueRealtimeToolCall: toolCallQueue.enqueueRealtimeToolCall,
+    enqueueSubmitBookingStepFromTranscript:
+      toolCallQueue.enqueueSubmitBookingStepFromTranscript,
     requestRealtimeResponse,
   });
 
