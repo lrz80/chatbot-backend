@@ -561,32 +561,6 @@ export async function createOpenAiRealtimeBridge({
     if (isTwilioMediaEvent(event)) {
       if (!openAiReady || openAiSocket.readyState !== WebSocket.OPEN) return;
 
-      if (assistantSpeaking) {
-        console.warn("[VOICE_REALTIME][TWILIO_MEDIA_DROPPED_ASSISTANT_SPEAKING]", {
-          callSid,
-          streamSid,
-        });
-
-        return;
-      }
-
-      const msSinceAssistantAudioDone =
-        lastAssistantAudioDoneAtMs > 0 ? Date.now() - lastAssistantAudioDoneAtMs : null;
-
-      if (
-        typeof msSinceAssistantAudioDone === "number" &&
-        msSinceAssistantAudioDone < 800
-      ) {
-        console.warn("[VOICE_REALTIME][TWILIO_MEDIA_DROPPED_AFTER_ASSISTANT_AUDIO]", {
-          callSid,
-          streamSid,
-          msSinceAssistantAudioDone,
-          minMsAfterAssistantAudio: 800,
-        });
-
-        return;
-      }
-
       sendJson(openAiSocket, {
         type: "input_audio_buffer.append",
         audio: event.media.payload,
