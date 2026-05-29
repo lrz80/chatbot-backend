@@ -26,6 +26,29 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function getPendingBookingStepKey(realtimeState: CallState): string {
+  return clean((realtimeState as any).pendingBookingStepKey);
+}
+
+function getBookingTurnStatus(realtimeState: CallState): string {
+  return clean((realtimeState as any).bookingTurnStatus);
+}
+
+function getPendingBookingStepPromptAnchorSeq(realtimeState: CallState): number {
+  return typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq ===
+    "number"
+    ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
+    : -1;
+}
+
+function getDeferredSubmittedStepKey(
+  deferredSubmitBookingStep: DeferredSubmitBookingStepState
+): string {
+  if (!deferredSubmitBookingStep.event) return "";
+  const args = parseRealtimeToolArgs(deferredSubmitBookingStep.event);
+  return clean(args.step_key);
+}
+
 export function createBookingRealtimeCoordinator(
   params: BookingRealtimeCoordinatorParams
 ) {
@@ -48,6 +71,82 @@ export function createBookingRealtimeCoordinator(
 
   function hasDeferredSubmitBookingStep(): boolean {
     return Boolean(deferredSubmitBookingStep.event);
+  }
+
+  function clearStaleDeferredSubmitIfItCannotApplyToCurrentTurn(paramsForLog: {
+    source: string;
+    pendingBookingStepKey: string;
+    lastUserTranscript: string;
+    lastUserTranscriptSeq: number;
+    pendingBookingStepPromptAnchorSeq: number;
+  }): boolean {
+    if (!deferredSubmitBookingStep.event) return false;
+
+    const realtimeState = params.getRealtimeState();
+    const submittedStepKey = getDeferredSubmittedStepKey(
+      deferredSubmitBookingStep
+    );
+
+    const pendingStepKey = paramsForLog.pendingBookingStepKey;
+    const bookingTurnStatus = getBookingTurnStatus(realtimeState);
+
+    const check = canFlushDeferredSubmitBookingStep({
+      event: deferredSubmitBookingStep.event,
+      realtimeState,
+      lastUserTranscript: paramsForLog.lastUserTranscript,
+      lastUserTranscriptSeq: paramsForLog.lastUserTranscriptSeq,
+    });
+
+    if (check.ok) {
+      return false;
+    }
+
+    const isSameStep = submittedStepKey && submittedStepKey === pendingStepKey;
+
+    const callerAlreadyAnsweredAfterPrompt =
+      paramsForLog.lastUserTranscriptSeq >
+      paramsForLog.pendingBookingStepPromptAnchorSeq;
+
+    /**
+     * Important:
+     * A deferred submit is only useful while it can still apply to the current
+     * booking turn. If the caller already produced a newer transcript for the
+     * same pending step, keeping the old deferred submit blocks the fresh answer.
+     *
+     * This is what caused cases like:
+     * - service ambiguity prompt is opened
+     * - caller answers "dos semanas refill"
+     * - coordinator skips the transcript nudge because an old deferred submit is still pending
+     */
+    const shouldClearStaleDeferred =
+      bookingTurnStatus === "waiting_user_answer" &&
+      isSameStep &&
+      callerAlreadyAnsweredAfterPrompt;
+
+    if (!shouldClearStaleDeferred) {
+      return false;
+    }
+
+    console.warn("[VOICE_REALTIME][DEFERRED_SUBMIT_BOOKING_STEP_CLEARED_STALE]", {
+      callSid: params.getCallSid(),
+      source: paramsForLog.source,
+      deferredReason: deferredSubmitBookingStep.reason,
+      submittedStepKey,
+      pendingStepKey,
+      bookingTurnStatus,
+      lastUserTranscript: paramsForLog.lastUserTranscript,
+      lastUserTranscriptSeq: paramsForLog.lastUserTranscriptSeq,
+      pendingBookingStepPromptAnchorSeq:
+        paramsForLog.pendingBookingStepPromptAnchorSeq,
+      flushBlockedReason: "DEFERRED_SUBMIT_NOT_FLUSHABLE_FOR_CURRENT_TURN",
+    });
+
+    deferredSubmitBookingStep = {
+      event: null,
+      reason: null,
+    };
+
+    return true;
   }
 
   function deferSubmitBookingStepUntilTranscriptIfNeeded(event: any): boolean {
@@ -77,12 +176,8 @@ export function createBookingRealtimeCoordinator(
       callSid: params.getCallSid(),
       toolName: getRealtimeToolName(event),
       submittedStepKey: String(args.step_key || "").trim(),
-      pendingBookingStepKey: String(
-        (realtimeState as any).pendingBookingStepKey || ""
-      ).trim(),
-      bookingTurnStatus: String(
-        (realtimeState as any).bookingTurnStatus || ""
-      ).trim(),
+      pendingBookingStepKey: getPendingBookingStepKey(realtimeState),
+      bookingTurnStatus: getBookingTurnStatus(realtimeState),
       lastUserTranscript,
       lastUserTranscriptSeq,
       pendingBookingStepPromptAnchorSeq:
@@ -155,16 +250,11 @@ export function createBookingRealtimeCoordinator(
     const lastUserTranscript = params.getLastUserTranscript();
     const lastUserTranscriptSeq = params.getLastUserTranscriptSeq();
 
-    const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
-    const pendingBookingStepKey = clean(
-      (realtimeState as any).pendingBookingStepKey
-    );
+    const bookingTurnStatus = getBookingTurnStatus(realtimeState);
+    const pendingBookingStepKey = getPendingBookingStepKey(realtimeState);
 
     const pendingBookingStepPromptAnchorSeq =
-      typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq ===
-      "number"
-        ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
-        : -1;
+      getPendingBookingStepPromptAnchorSeq(realtimeState);
 
     const hasPendingBookingAnswer =
       bookingTurnStatus === "waiting_user_answer" &&
@@ -199,6 +289,14 @@ export function createBookingRealtimeCoordinator(
     if (!lastUserTranscript) {
       return;
     }
+
+    clearStaleDeferredSubmitIfItCannotApplyToCurrentTurn({
+      source: "booking_step_transcript_nudge",
+      pendingBookingStepKey,
+      lastUserTranscript,
+      lastUserTranscriptSeq,
+      pendingBookingStepPromptAnchorSeq,
+    });
 
     if (deferredSubmitBookingStep.event) {
       console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_NUDGE_SKIPPED]", {
@@ -246,16 +344,11 @@ export function createBookingRealtimeCoordinator(
     const lastUserTranscript = params.getLastUserTranscript();
     const lastUserTranscriptSeq = params.getLastUserTranscriptSeq();
 
-    const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
-    const pendingBookingStepKey = clean(
-      (realtimeState as any).pendingBookingStepKey
-    );
+    const bookingTurnStatus = getBookingTurnStatus(realtimeState);
+    const pendingBookingStepKey = getPendingBookingStepKey(realtimeState);
 
     const pendingBookingStepPromptAnchorSeq =
-      typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq ===
-      "number"
-        ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
-        : -1;
+      getPendingBookingStepPromptAnchorSeq(realtimeState);
 
     const hasEarlyCallerAnswer =
       bookingTurnStatus === "waiting_user_answer" &&
@@ -311,6 +404,14 @@ export function createBookingRealtimeCoordinator(
 
       return;
     }
+
+    clearStaleDeferredSubmitIfItCannotApplyToCurrentTurn({
+      source: "booking_step_early_answer_catchup",
+      pendingBookingStepKey,
+      lastUserTranscript,
+      lastUserTranscriptSeq,
+      pendingBookingStepPromptAnchorSeq,
+    });
 
     if (deferredSubmitBookingStep.event) {
       console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_SKIPPED]", {
