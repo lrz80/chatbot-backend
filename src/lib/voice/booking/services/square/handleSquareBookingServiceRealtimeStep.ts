@@ -139,6 +139,19 @@ function getSquareServicesByExactNames(params: {
   );
 }
 
+function hasExactResolvedServiceCandidate(params: {
+  inputCandidates: string[];
+  resolvedServiceName: string;
+}): boolean {
+  const resolved = normalizeServiceInput(params.resolvedServiceName);
+
+  if (!resolved) return false;
+
+  return params.inputCandidates.some(
+    (candidate) => normalizeServiceInput(candidate) === resolved
+  );
+}
+
 function buildSquareAmbiguousServicePrompt(params: {
   basePrompt: string;
   serviceOptions: string[];
@@ -422,27 +435,42 @@ export async function handleSquareBookingServiceRealtimeStep(
   if (match.kind === "resolved") {
     const resolvedServiceName = match.serviceName;
 
-    const ambiguityGuard = findSquareServiceAmbiguityFromInput({
-      services: servicesResult.services,
+    const exactResolvedCandidate = hasExactResolvedServiceCandidate({
       inputCandidates: serviceInputCandidates,
       resolvedServiceName,
     });
 
-    if (ambiguityGuard.kind === "ambiguous") {
-      match = {
-        kind: "ambiguous",
-        options: ambiguityGuard.options,
-      } as ReturnType<typeof resolveSquareServiceFromInput>;
+    if (!exactResolvedCandidate) {
+      const ambiguityGuard = findSquareServiceAmbiguityFromInput({
+        services: servicesResult.services,
+        inputCandidates: serviceInputCandidates,
+        resolvedServiceName,
+      });
 
-      matchedInput = value;
+      if (ambiguityGuard.kind === "ambiguous") {
+        match = {
+          kind: "ambiguous",
+          options: ambiguityGuard.options,
+        } as ReturnType<typeof resolveSquareServiceFromInput>;
 
-      console.log("[VOICE_BOOKING][SQUARE_SERVICE_RESOLVED_OVERRIDDEN_TO_AMBIGUOUS]", {
+        matchedInput = value;
+
+        console.log("[VOICE_BOOKING][SQUARE_SERVICE_RESOLVED_OVERRIDDEN_TO_AMBIGUOUS]", {
+          tenantId,
+          locale: currentLocale,
+          originalInput: value,
+          previousResolvedServiceName: resolvedServiceName,
+          signalTokens: ambiguityGuard.signalTokens,
+          optionNames: ambiguityGuard.optionNames,
+        });
+      }
+    } else {
+      console.log("[VOICE_BOOKING][SQUARE_SERVICE_AMBIGUITY_GUARD_SKIPPED_EXACT_MATCH]", {
         tenantId,
         locale: currentLocale,
         originalInput: value,
-        previousResolvedServiceName: resolvedServiceName,
-        signalTokens: ambiguityGuard.signalTokens,
-        optionNames: ambiguityGuard.optionNames,
+        resolvedServiceName,
+        inputCandidates: serviceInputCandidates,
       });
     }
   }

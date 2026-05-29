@@ -82,7 +82,6 @@ function isLikelyNoiseTranscript(transcript: string): boolean {
 
   if (!cleaned) return true;
 
-  const words = wordCount(cleaned);
   const letters = letterCount(cleaned);
   const digits = digitCount(cleaned);
   const chars = normalizedCharCount(cleaned);
@@ -92,18 +91,8 @@ function isLikelyNoiseTranscript(transcript: string): boolean {
   if (letters === 0 && digits === 0) return true;
 
   /**
-   * Una sola palabra muy corta suele ser ruido.
-   * Esto aplica globalmente, no solo en booking.
-   *
-   * No bloquea "sí", "no", "ok", etc. porque esas tienen 2 letras
-   * y pueden ser válidas después de una pregunta directa.
-   */
-  if (words === 1 && letters > 0 && letters <= 2 && digits === 0) {
-    return true;
-  }
-
-  /**
    * Texto largo con poquísima variedad de letras suele ser ruido/transcripción mala.
+   * Esta regla es agnóstica al idioma y no depende del negocio.
    */
   if (letters >= 6 && uniqueLetterRatio(cleaned) < 0.28) {
     return true;
@@ -213,7 +202,8 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
 
   /**
    * En booking NO debemos aceptar cualquier transcript mientras Aamy habla.
-   * Respuestas cortas como "sí", "no", "Andrea", "9" son válidas,
+   * Short answers can be valid after a direct question,
+   * but they should not interrupt assistant audio.
    * pero deben entrar cuando el audio de Aamy ya terminó.
    *
    * Si el cliente realmente interrumpe mientras Aamy habla, exigimos una señal humana fuerte.
