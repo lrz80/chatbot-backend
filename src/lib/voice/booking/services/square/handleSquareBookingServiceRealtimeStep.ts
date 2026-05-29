@@ -21,7 +21,10 @@ import { buildBookingServiceRetryResult } from "../buildBookingServiceRetryResul
 import { getLocalizedBookingStepPrompt } from "../getLocalizedBookingStepPrompt";
 import { traducirTexto } from "../../../../traducirTexto";
 import { resolveSquareServiceWithCatalogContext } from "./resolveSquareServiceWithCatalogContext";
-import { findSquareServiceAmbiguityFromInput } from "./findSquareServiceAmbiguityFromInput";
+import {
+  findSquareServiceAmbiguityFromCandidates,
+  findSquareServiceAmbiguityFromInput,
+} from "./findSquareServiceAmbiguityFromInput";
 
 type HandleSquareBookingServiceRealtimeStepParams = {
   tenantId: string;
@@ -390,6 +393,30 @@ export async function handleSquareBookingServiceRealtimeStep(
       services: servicesResult.services,
       debug: true,
     });
+  }
+
+  if (!match || match.kind !== "resolved") {
+    const ambiguityFromCandidates = findSquareServiceAmbiguityFromCandidates({
+      services: servicesResult.services,
+      inputCandidates: serviceInputCandidates,
+    });
+
+    if (ambiguityFromCandidates.kind === "ambiguous") {
+      match = {
+        kind: "ambiguous",
+        options: ambiguityFromCandidates.options,
+      } as ReturnType<typeof resolveSquareServiceFromInput>;
+
+      matchedInput = value;
+
+      console.log("[VOICE_BOOKING][SQUARE_SERVICE_AMBIGUOUS_FROM_CANDIDATES]", {
+        tenantId,
+        locale: currentLocale,
+        originalInput: value,
+        signalTokens: ambiguityFromCandidates.signalTokens,
+        optionNames: ambiguityFromCandidates.optionNames,
+      });
+    }
   }
 
   if (match.kind === "resolved") {

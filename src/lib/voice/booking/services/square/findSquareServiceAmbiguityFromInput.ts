@@ -140,3 +140,72 @@ export function findSquareServiceAmbiguityFromInput(
     optionNames,
   };
 }
+
+export function findSquareServiceAmbiguityFromCandidates(params: {
+  services: any[];
+  inputCandidates: string[];
+}): FindSquareServiceAmbiguityFromInputResult {
+  const userTokens = Array.from(
+    new Set(params.inputCandidates.flatMap((candidate) => tokenize(candidate)))
+  );
+
+  const serviceNames = params.services
+    .map((service) => getServiceName(service))
+    .filter(Boolean);
+
+  const catalogTokenFrequency = new Map<string, number>();
+
+  for (const serviceName of serviceNames) {
+    const serviceTokens = new Set(tokenize(serviceName));
+
+    for (const token of serviceTokens) {
+      catalogTokenFrequency.set(token, (catalogTokenFrequency.get(token) ?? 0) + 1);
+    }
+  }
+
+  const catalogSize = Math.max(serviceNames.length, 1);
+
+  const signalTokens = userTokens.filter((token) => {
+    const frequency = catalogTokenFrequency.get(token) ?? 0;
+    const ratio = frequency / catalogSize;
+
+    if (frequency < 2) return false;
+    if (ratio > 0.65) return false;
+
+    return true;
+  });
+
+  if (signalTokens.length === 0) {
+    return {
+      kind: "none",
+      reason: "NO_SHARED_AMBIGUITY_SIGNAL_TOKENS",
+      signalTokens,
+    };
+  }
+
+  const options = params.services.filter((service) => {
+    const serviceName = getServiceName(service);
+
+    if (!serviceName) return false;
+
+    return includesAllTokens(serviceName, signalTokens);
+  });
+
+  const optionNames = options.map((service) => getServiceName(service)).filter(Boolean);
+
+  if (options.length >= 2) {
+    return {
+      kind: "ambiguous",
+      options,
+      signalTokens,
+      optionNames,
+    };
+  }
+
+  return {
+    kind: "none",
+    reason: "NO_MULTIPLE_OPTIONS_FOR_SIGNAL_TOKENS",
+    signalTokens,
+    optionNames,
+  };
+}
