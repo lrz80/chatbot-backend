@@ -11,6 +11,7 @@ export type HandleRealtimeUserTranscriptResult = {
     | "CALL_ENDING"
     | "EMPTY_TRANSCRIPT"
     | "ASSISTANT_AUDIO_ACTIVE"
+    | "ASSISTANT_ECHO"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO"
     | "NOISE_LIKE_TRANSCRIPT"
     | "RUNTIME_NOT_CONSUMED";
@@ -40,6 +41,64 @@ function nowMs(): number {
 
 function normalizedCharCount(value: string): number {
   return clean(value).replace(/\s+/g, "").length;
+}
+
+function normalizeForEchoComparison(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenSet(value: string): Set<string> {
+  return new Set(
+    normalizeForEchoComparison(value)
+      .split(/\s+/)
+      .filter((token) => token.length >= 2)
+  );
+}
+
+function tokenOverlapRatio(a: string, b: string): number {
+  const aTokens = tokenSet(a);
+  const bTokens = tokenSet(b);
+
+  if (aTokens.size === 0 || bTokens.size === 0) return 0;
+
+  let overlap = 0;
+
+  for (const token of aTokens) {
+    if (bTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+
+  return overlap / Math.min(aTokens.size, bTokens.size);
+}
+
+function isLikelyAssistantEcho(params: {
+  transcript: string;
+  lastAssistantTranscript?: string | null;
+}): boolean {
+  const transcript = normalizeForEchoComparison(params.transcript);
+  const assistant = normalizeForEchoComparison(params.lastAssistantTranscript);
+
+  if (!transcript || !assistant) return false;
+
+  if (transcript === assistant) return true;
+
+  if (transcript.length >= 12 && assistant.includes(transcript)) {
+    return true;
+  }
+
+  if (assistant.length >= 12 && transcript.includes(assistant)) {
+    return true;
+  }
+
+  return tokenOverlapRatio(transcript, assistant) >= 0.75;
 }
 
 function letterCount(value: string): number {
@@ -141,6 +200,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   minMsAfterAssistantAudio: number;
   bookingTurnStatus: string;
   pendingBookingStepKey: string;
+  lastAssistantTranscript?: string | null;
 }): {
   ignore: boolean;
   interruptAssistant: boolean;
@@ -148,6 +208,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     | "CALL_ENDING"
     | "EMPTY_TRANSCRIPT"
     | "ASSISTANT_AUDIO_ACTIVE"
+    | "ASSISTANT_ECHO"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO"
     | "NOISE_LIKE_TRANSCRIPT";
   msSinceAssistantAudioDone: number | null;
@@ -177,6 +238,20 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
       ignore: true,
       interruptAssistant: false,
       reason: "NOISE_LIKE_TRANSCRIPT",
+      msSinceAssistantAudioDone: null,
+    };
+  }
+
+  if (
+    isLikelyAssistantEcho({
+      transcript,
+      lastAssistantTranscript: params.lastAssistantTranscript,
+    })
+  ) {
+    return {
+      ignore: true,
+      interruptAssistant: false,
+      reason: "ASSISTANT_ECHO",
       msSinceAssistantAudioDone: null,
     };
   }
@@ -223,10 +298,23 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     : params.minMsAfterAssistantAudio;
 
   if (msSinceAssistantAudioDone < effectiveMinMsAfterAssistantAudio) {
+    if (
+      isLikelyAssistantEcho({
+        transcript,
+        lastAssistantTranscript: params.lastAssistantTranscript,
+      })
+    ) {
+      return {
+        ignore: true,
+        interruptAssistant: false,
+        reason: "ASSISTANT_ECHO",
+        msSinceAssistantAudioDone,
+      };
+    }
+
     return {
-      ignore: true,
+      ignore: false,
       interruptAssistant: false,
-      reason: "TOO_CLOSE_TO_ASSISTANT_AUDIO",
       msSinceAssistantAudioDone,
     };
   }
@@ -266,6 +354,7 @@ export async function handleRealtimeUserTranscript(params: {
    * Used as a short grace window after Aamy finishes speaking.
    */
   lastAssistantAudioDoneAtMs: number;
+  lastAssistantTranscript?: string | null;
 
   /**
    * Production default: 700–1200ms.
@@ -291,6 +380,7 @@ export async function handleRealtimeUserTranscript(params: {
     pendingBookingStepKey: clean(
       (params.realtimeState as any)?.pendingBookingStepKey
     ),
+    lastAssistantTranscript: params.lastAssistantTranscript,
   });
 
   if (preGuard.ignore) {

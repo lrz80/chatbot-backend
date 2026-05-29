@@ -78,6 +78,7 @@ export async function createOpenAiRealtimeBridge({
   let assistantSpeaking = false;
   let lastAssistantAudioDeltaAtMs = 0;
   let lastAssistantAudioDoneAtMs = 0;
+  let lastAssistantTranscript = "";
 
   let hangupRequestedByTool = false;
   let endCallGoodbyeRequested = false;
@@ -336,6 +337,15 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (event.type === "response.audio_transcript.done") {
+      lastAssistantTranscript = clean(
+        event.transcript || event.response?.output_text || ""
+      );
+
+      console.log("[VOICE_REALTIME][ASSISTANT_TRANSCRIPT_DONE]", {
+        callSid,
+        transcript: lastAssistantTranscript,
+      });
+
       return;
     }
 
@@ -362,6 +372,7 @@ export async function createOpenAiRealtimeBridge({
         callEnding,
         assistantSpeaking: assistantAudioActive,
         lastAssistantAudioDoneAtMs,
+        lastAssistantTranscript,
         minMsAfterAssistantAudio: 800,
       })
         .then((transcriptResult) => {
@@ -542,6 +553,7 @@ export async function createOpenAiRealtimeBridge({
       assistantSpeaking = false;
       lastAssistantAudioDeltaAtMs = 0;
       lastAssistantAudioDoneAtMs = 0;
+      lastAssistantTranscript = "";
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {
         callSid,
