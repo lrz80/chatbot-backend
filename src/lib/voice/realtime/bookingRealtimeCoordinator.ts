@@ -299,6 +299,19 @@ export function createBookingRealtimeCoordinator(
       return;
     }
 
+    if (lastBookingTranscriptNudgeSeq === lastUserTranscriptSeq) {
+      console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_SKIPPED]", {
+        callSid: params.getCallSid(),
+        reason: "TRANSCRIPT_ALREADY_NUDGED",
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq,
+      });
+
+      return;
+    }
+
     if (deferredSubmitBookingStep.event) {
       console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_SKIPPED]", {
         callSid: params.getCallSid(),

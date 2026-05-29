@@ -46,11 +46,12 @@ export function createUserTranscriptFollowupController(
       (realtimeState as any).pendingBookingStepKey
     );
 
-    const alreadyInsideBookingTurn =
-      bookingTurnStatus === "waiting_user_answer" &&
-      Boolean(pendingBookingStepKey);
+    const isInsideBookingRuntime =
+      Boolean(pendingBookingStepKey) ||
+      bookingTurnStatus === "waiting_assistant_prompt" ||
+      bookingTurnStatus === "waiting_user_answer";
 
-    if (alreadyInsideBookingTurn) {
+    if (isInsideBookingRuntime) {
       return;
     }
 

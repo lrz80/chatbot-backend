@@ -171,13 +171,6 @@ export async function resolveSquareServiceWithCatalogContext(
     };
   }
 
-  console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_CATALOG]", {
-    tenantId: params.tenantId,
-    input,
-    serviceCount: catalogEntries.length,
-    sampleEntries: catalogEntries.slice(0, 20),
-  });
-
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
