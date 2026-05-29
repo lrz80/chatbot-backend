@@ -1,310 +1,53 @@
 // src/lib/voice/realtime/openaiRealtimeBridge.ts
 
 import WebSocket from "ws";
-import twilio from "twilio";
-import { buildRealtimeVoiceSession } from "./buildRealtimeVoiceSession";
-import { resolveVoiceRequestContext } from "../runtime/resolveVoiceRequestContext";
 import type { CallState } from "../types";
 
-import { handleRealtimeToolCall } from "./realtimeToolCallHandler";
-import { buildOpenAiRealtimeSessionUpdate } from "./buildOpenAiRealtimeSessionUpdate";
 import {
   attachLatestUserTranscriptSeq,
   mergeTranscriptStatePreservingBookingRuntime,
 } from "./bookingRuntimeState";
 import { handleRealtimeUserTranscript } from "./handleRealtimeUserTranscript";
 import { handleRealtimeResponseDone } from "./handleRealtimeResponseLifecycle";
+import { createRealtimeResponseController } from "./realtimeResponseController";
 import {
-  canFlushDeferredSubmitBookingStep,
-  getRealtimeToolName,
-  parseRealtimeToolArgs,
-  shouldDeferSubmitBookingStepUntilTranscript,
-  type DeferredSubmitBookingStepState,
-} from "./deferredSubmitBookingStep";
+  endTwilioCall,
+  isTwilioMediaEvent,
+  isTwilioStartEvent,
+  isTwilioStopEvent,
+  sendTwilioAudio,
+  type TwilioUnknownPayload,
+} from "./twilioRealtimeTransport";
+import {
+  buildInitialGreetingFromConfiguredWelcome,
+  buildRealtimeSessionUpdatePayload,
+  refreshRealtimeSession,
+  refreshRealtimeVoiceContext,
+  resolveConfiguredWelcomeMessage,
+  resolveInitialRealtimeSessionContext,
+  type VoiceLocale,
+} from "./realtimeSessionManager";
+import { createBookingRealtimeCoordinator } from "./bookingRealtimeCoordinator";
+import {
+  getOpenAiRealtimeUrl,
+  isConversationAlreadyHasActiveResponseError,
+  isResponseCancelNotActiveError,
+  resolveOpenAiRealtimeAudioDelta,
+  safeJsonParseRealtimeEvent,
+} from "./openAiRealtimeEvents";
+import { createRealtimeToolCallQueue } from "./realtimeToolCallQueue";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
 };
-
-type TwilioStartPayload = {
-  event: "start";
-  start: {
-    streamSid: string;
-    callSid?: string;
-    accountSid?: string;
-    customParameters?: Record<string, string>;
-  };
-};
-
-type TwilioMediaPayload = {
-  event: "media";
-  streamSid?: string;
-  media: {
-    payload: string;
-  };
-};
-
-type TwilioStopPayload = {
-  event: "stop";
-  streamSid?: string;
-};
-
-type TwilioUnknownPayload = {
-  event?: string;
-  [key: string]: unknown;
-};
-
-function isTwilioStartEvent(
-  event: TwilioUnknownPayload
-): event is TwilioStartPayload {
-  return (
-    event.event === "start" &&
-    typeof event.start === "object" &&
-    event.start !== null &&
-    typeof (event.start as { streamSid?: unknown }).streamSid === "string"
-  );
-}
-
-function isTwilioMediaEvent(
-  event: TwilioUnknownPayload
-): event is TwilioMediaPayload {
-  return (
-    event.event === "media" &&
-    typeof event.media === "object" &&
-    event.media !== null &&
-    typeof (event.media as { payload?: unknown }).payload === "string"
-  );
-}
-
-function isTwilioStopEvent(event: TwilioUnknownPayload): event is TwilioStopPayload {
-  return event.event === "stop";
-}
-
-function safeJsonParse(value: WebSocket.RawData): any | null {
-  try {
-    return JSON.parse(value.toString());
-  } catch {
-    return null;
-  }
-}
 
 function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
   if (socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify(payload));
 }
 
-function getOpenAiRealtimeUrl(model: string): string {
-  return `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
-}
-
-function normalizeLocale(locale?: string): "en-US" | "es-ES" | "pt-BR" {
-  const value = String(locale || "").trim().toLowerCase();
-
-  if (value.startsWith("es")) return "es-ES";
-  if (value.startsWith("pt")) return "pt-BR";
-  return "en-US";
-}
-
 function clean(value: unknown): string {
   return String(value ?? "").trim();
-}
-
-function buildInitialGreetingInstruction(params: {
-  brand: string;
-  locale?: string;
-}): string {
-  const normalized = normalizeLocale(params.locale);
-
-  if (normalized === "es-ES") {
-    return `Greet the caller in Spanish for ${params.brand}. Keep it short and natural.`;
-  }
-
-  if (normalized === "pt-BR") {
-    return `Greet the caller in Brazilian Portuguese for ${params.brand}. Keep it short and natural.`;
-  }
-
-  return `Greet the caller in English for ${params.brand}. Keep it short and natural.`;
-}
-
-function resolveConfiguredWelcomeMessage(params: {
-  cfg: any;
-  tenant: any;
-}): string {
-  const cfgWelcome =
-    clean(params.cfg?.welcome_message) ||
-    clean(params.cfg?.welcomeMessage) ||
-    clean(params.cfg?.mensaje_bienvenida) ||
-    clean(params.cfg?.bienvenida);
-
-  if (cfgWelcome) {
-    return cfgWelcome;
-  }
-
-  const tenantWelcome =
-    clean(params.tenant?.welcome_message) ||
-    clean(params.tenant?.welcomeMessage) ||
-    clean(params.tenant?.mensaje_bienvenida) ||
-    clean(params.tenant?.bienvenida);
-
-  return tenantWelcome;
-}
-
-function buildInitialGreetingFromConfiguredWelcome(params: {
-  configuredWelcome: string;
-  brand: string;
-  locale: "en-US" | "es-ES" | "pt-BR";
-}): string {
-  const configuredWelcome = clean(params.configuredWelcome);
-
-  if (!configuredWelcome) {
-    return buildInitialGreetingInstruction({
-      brand: params.brand,
-      locale: params.locale,
-    });
-  }
-
-  return [
-    "Use only this configured welcome message as the source of truth.",
-    "Say it naturally as the first greeting of the phone call.",
-    "Do not replace it with a generic greeting.",
-    "Do not invent another business name.",
-    "Do not add menu options unless they are already included in the configured welcome message.",
-    `Configured welcome message: ${configuredWelcome}`,
-  ].join(" ");
-}
-
-function refreshRealtimeSession(params: {
-  openAiSocket: WebSocket;
-  model: string;
-  locale: "en-US" | "es-ES" | "pt-BR";
-  businessName: string;
-  businessInfo?: string | null;
-  systemPrompt?: string | null;
-}): { voice: string } | null {
-  if (params.openAiSocket.readyState !== WebSocket.OPEN) return null;
-
-  const session = buildRealtimeVoiceSession({
-    businessName: params.businessName,
-    businessInfo: params.businessInfo || "",
-    systemPrompt: params.systemPrompt || "",
-    locale: params.locale,
-  });
-
-  sendJson(
-    params.openAiSocket,
-    buildOpenAiRealtimeSessionUpdate({
-      instructions: session.instructions,
-      voice: session.voice,
-      model: params.model,
-    })
-  );
-
-  return {
-    voice: session.voice,
-  };
-}
-
-async function refreshRealtimeVoiceContext(params: {
-  callSid: string | null;
-  didNumber: string | null;
-  currentLocale: "en-US" | "es-ES" | "pt-BR";
-  realtimeState: CallState;
-}): Promise<{
-  tenantId: string | null;
-  tenant: any;
-  cfg: any;
-  brand: string;
-  voiceName: string | null;
-} | null> {
-  if (!params.callSid || !params.didNumber) return null;
-
-  const context = await resolveVoiceRequestContext({
-    callSid: params.callSid,
-    didNumber: params.didNumber,
-    state: {
-      ...params.realtimeState,
-      lang: params.currentLocale,
-    },
-    langParam:
-      params.currentLocale === "es-ES"
-        ? "es"
-        : params.currentLocale === "pt-BR"
-        ? "pt"
-        : "en",
-    channelKey: "voice",
-  });
-
-  if (!context.ok) {
-    return null;
-  }
-
-  return {
-    tenantId: context.tenant.id,
-    tenant: context.tenant,
-    cfg: context.cfg || {},
-    brand: context.brand,
-    voiceName: context.voiceName || null,
-  };
-}
-
-function sendTwilioAudio(params: {
-  twilioSocket: WebSocket;
-  streamSid: string;
-  payload: string;
-}): void {
-  sendJson(params.twilioSocket, {
-    event: "media",
-    streamSid: params.streamSid,
-    media: {
-      payload: params.payload,
-    },
-  });
-}
-
-async function endTwilioCall(params: {
-  callSid: string | null;
-  accountSid?: string | null;
-}): Promise<void> {
-  const callSid = params.callSid;
-  if (!callSid) return;
-
-  const envAccountSid = process.env.TWILIO_ACCOUNT_SID?.trim() || "";
-  const envAuthToken = process.env.TWILIO_AUTH_TOKEN?.trim() || "";
-
-  const incomingAccountSid = clean(params.accountSid);
-
-  const authAccountSid = envAccountSid;
-  const authToken = envAuthToken;
-  const targetAccountSid = incomingAccountSid || envAccountSid;
-
-  if (!authAccountSid || !authToken || !targetAccountSid) {
-    console.warn("[VOICE_REALTIME][TWILIO_HANGUP_SKIPPED]", {
-      callSid,
-      reason: "MISSING_TWILIO_CREDENTIALS",
-      authAccountSid,
-      targetAccountSid,
-    });
-    return;
-  }
-
-  try {
-    const client = twilio(authAccountSid, authToken, {
-      accountSid: targetAccountSid,
-    });
-
-    await client.calls(callSid).update({
-      status: "completed",
-    });
-
-  } catch (error) {
-    console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
-      callSid,
-      authAccountSid,
-      targetAccountSid,
-      incomingAccountSid,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 export async function createOpenAiRealtimeBridge({
@@ -327,28 +70,10 @@ export async function createOpenAiRealtimeBridge({
   let lastUserTranscript = "";
   let lastUserDigits = "";
   let lastUserTranscriptSeq = 0;
-  let lastBookingTranscriptNudgeSeq = 0;
-  let lastBookingEarlyAnswerCatchupKey = "";
   let openAiReady = false;
   let sessionConfigured = false;
-  let currentLocale: "en-US" | "es-ES" | "pt-BR" = "en-US";
+  let currentLocale: VoiceLocale = "en-US";
   let bookingFlowLoaded = false;
-
-  let realtimeToolQueue: Promise<void> = Promise.resolve();
-
-  let deferredSubmitBookingStep: DeferredSubmitBookingStepState = {
-    event: null,
-    reason: null,
-  };
-
-  let activeResponseId: string | null = null;
-  let activeResponseSource: string | null = null;
-  let activeResponseStartedAtUserTranscriptSeq = 0;
-
-  let pendingResponseCreate: Record<string, unknown> | null = null;
-  let pendingResponseSource: string | null = null;
-
-  let awaitingResponseSource: string | null = null;
 
   let assistantSpeaking = false;
   let lastAssistantAudioDoneAtMs = 0;
@@ -370,6 +95,57 @@ export async function createOpenAiRealtimeBridge({
     },
   });
 
+  const responseController = createRealtimeResponseController({
+    openAiSocket,
+    twilioSocket,
+    getCallSid: () => callSid,
+    getStreamSid: () => streamSid,
+  });
+
+  const toolCallQueue = createRealtimeToolCallQueue({
+    openAiSocket,
+    requestRealtimeResponse,
+
+    getCallSid: () => callSid,
+    getTenantId: () => tenantId,
+    getCallerPhone: () => callerPhone,
+    getDidNumber: () => didNumber,
+    getRealtimeTenant: () => realtimeTenant,
+    getRealtimeCfg: () => realtimeCfg,
+    getRealtimeState: () => realtimeState,
+    getCurrentLocale: () => currentLocale,
+    getBookingFlowLoaded: () => bookingFlowLoaded,
+    getCallEnding: () => callEnding,
+    getLastUserTranscript: () => lastUserTranscript,
+    getLastUserTranscriptSeq: () => lastUserTranscriptSeq,
+    getLastUserDigits: () => lastUserDigits,
+
+    setRealtimeState: (state) => {
+      realtimeState = state;
+    },
+    setBookingFlowLoaded: (value) => {
+      bookingFlowLoaded = value;
+    },
+    setHangupRequestedByTool: (value) => {
+      hangupRequestedByTool = value;
+    },
+    setCallEnding: (value) => {
+      callEnding = value;
+    },
+    resetLastUserDigits: () => {
+      lastUserDigits = "";
+    },
+  });
+
+  const bookingCoordinator = createBookingRealtimeCoordinator({
+    getCallSid: () => callSid,
+    getRealtimeState: () => realtimeState,
+    getLastUserTranscript: () => lastUserTranscript,
+    getLastUserTranscriptSeq: () => lastUserTranscriptSeq,
+    enqueueRealtimeToolCall: toolCallQueue.enqueueRealtimeToolCall,
+    requestRealtimeResponse,
+  });
+
   function requestRealtimeResponse(
     response?: Record<string, unknown>,
     source = "unknown"
@@ -389,8 +165,7 @@ export async function createOpenAiRealtimeBridge({
       responseInstructions.includes("Say a short, natural goodbye") &&
       !responseInstructions.includes("Do not end the call yet");
 
-    const shouldInterruptActiveResponse =
-      source.startsWith("tool_followup:");
+    const shouldInterruptActiveResponse = source.startsWith("tool_followup:");
 
     if (isEndCallFollowup && shouldCreateEndCallGoodbye) {
       endCallGoodbyeRequested = true;
@@ -407,349 +182,12 @@ export async function createOpenAiRealtimeBridge({
       });
     }
 
-    if (activeResponseId) {
-      pendingResponseCreate = event;
-      pendingResponseSource = source;
-
-      console.warn("[VOICE_REALTIME][RESPONSE_CREATE_QUEUED]", {
-        callSid,
-        source,
-        activeResponseId,
-        shouldInterruptActiveResponse,
-      });
-
-      if (shouldInterruptActiveResponse && openAiSocket.readyState === WebSocket.OPEN) {
-        console.warn("[VOICE_REALTIME][ACTIVE_RESPONSE_CANCEL_REQUESTED]", {
-          callSid,
-          activeResponseId,
-          activeResponseSource,
-          pendingResponseSource: source,
-        });
-
-        sendJson(openAiSocket, {
-          type: "response.cancel",
-        });
-
-        if (streamSid && twilioSocket.readyState === WebSocket.OPEN) {
-          sendJson(twilioSocket, {
-            event: "clear",
-            streamSid,
-          });
-        }
-      }
-
-      return;
-    }
-
-    awaitingResponseSource = source;
-    sendJson(openAiSocket, event);
-  }
-
-  function flushPendingRealtimeResponse(): void {
-    if (!pendingResponseCreate) return;
-    if (activeResponseId) return;
-    if (openAiSocket.readyState !== WebSocket.OPEN) return;
-
-    const event = pendingResponseCreate;
-    const source = pendingResponseSource;
-
-    pendingResponseCreate = null;
-    pendingResponseSource = null;
-    awaitingResponseSource = source;
-
-    sendJson(openAiSocket, event);
-  }
-
-  function isConversationAlreadyHasActiveResponseError(event: any): boolean {
-    return (
-      event?.type === "error" &&
-      event?.error?.code === "conversation_already_has_active_response"
-    );
-  }
-
-  function isResponseCancelNotActiveError(event: any): boolean {
-    return (
-      event?.type === "error" &&
-      event?.error?.code === "response_cancel_not_active"
-    );
-  }
-
-  function enqueueRealtimeToolCall(event: any): void {
-    realtimeToolQueue = realtimeToolQueue
-      .then(async () => {
-        const toolCallResult = await handleRealtimeToolCall({
-          event,
-          openAiSocket,
-          requestRealtimeResponse,
-          callSid,
-          tenantId,
-          callerPhone,
-          didNumber,
-          realtimeTenant,
-          realtimeCfg,
-          realtimeState,
-          currentLocale,
-          bookingFlowLoaded,
-          callEnding,
-          lastUserTranscript,
-          lastUserDigits,
-        });
-
-        if (!toolCallResult.consumed) {
-          return;
-        }
-
-        realtimeState = attachLatestUserTranscriptSeq({
-          realtimeState: toolCallResult.realtimeState,
-          lastUserTranscriptSeq,
-        });
-
-        bookingFlowLoaded = toolCallResult.bookingFlowLoaded;
-
-        if (toolCallResult.hangupRequestedByTool) {
-          hangupRequestedByTool = true;
-        }
-
-        callEnding = toolCallResult.callEnding;
-
-        if (toolCallResult.resetLastUserDigits) {
-          lastUserDigits = "";
-        }
-      })
-      .catch((error) => {
-        console.error("[VOICE_REALTIME][TOOL_HANDLER_FATAL_ERROR]", {
-          callSid,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-  }
-
-  function flushDeferredSubmitBookingStepIfReady(reason: string): boolean {
-    if (!deferredSubmitBookingStep.event) {
-      return false;
-    }
-
-    const check = canFlushDeferredSubmitBookingStep({
-      event: deferredSubmitBookingStep.event,
-      realtimeState,
-      lastUserTranscript,
-      lastUserTranscriptSeq,
+    responseController.requestRealtimeResponse({
+      event,
+      source,
+      shouldInterruptActiveResponse,
+      startedAtUserTranscriptSeq: lastUserTranscriptSeq,
     });
-
-    if (check.ok) {
-      const eventToFlush = deferredSubmitBookingStep.event;
-
-      deferredSubmitBookingStep = {
-        event: null,
-        reason: null,
-      };
-
-      enqueueRealtimeToolCall(eventToFlush);
-      return true;
-    }
-
-    if (
-      check.submittedStepKey &&
-      check.pendingStepKey &&
-      check.submittedStepKey !== check.pendingStepKey
-    ) {
-      console.warn("[VOICE_REALTIME][DEFERRED_SUBMIT_BOOKING_STEP_DROPPED]", {
-        callSid,
-        reason,
-        deferredReason: deferredSubmitBookingStep.reason,
-        submittedStepKey: check.submittedStepKey,
-        pendingStepKey: check.pendingStepKey,
-        bookingTurnStatus: check.bookingTurnStatus,
-        lastUserTranscriptSeq,
-        promptAnchorSeq: check.promptAnchorSeq,
-      });
-
-      deferredSubmitBookingStep = {
-        event: null,
-        reason: null,
-      };
-
-      return false;
-    }
-
-    return false;
-  }
-
-  function nudgeBookingStepProcessingAfterTranscript(): void {
-    const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
-    const pendingBookingStepKey = clean(
-      (realtimeState as any).pendingBookingStepKey
-    );
-
-    const pendingBookingStepPromptAnchorSeq =
-      typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq === "number"
-        ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
-        : -1;
-
-    const hasPendingBookingAnswer =
-      bookingTurnStatus === "waiting_user_answer" &&
-      !!pendingBookingStepKey &&
-      lastUserTranscriptSeq > pendingBookingStepPromptAnchorSeq;
-
-    if (!hasPendingBookingAnswer) {
-      return;
-    }
-
-    const shouldAllowTranscriptNudgeForStep =
-      pendingBookingStepKey === "datetime";
-
-    if (!shouldAllowTranscriptNudgeForStep) {
-      console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_NUDGE_SKIPPED]", {
-        callSid,
-        reason: "STEP_NOT_NUDGE_ELIGIBLE",
-        pendingBookingStepKey,
-        lastUserTranscript,
-        lastUserTranscriptSeq,
-        pendingBookingStepPromptAnchorSeq,
-      });
-
-      return;
-    }
-
-    if (lastBookingTranscriptNudgeSeq === lastUserTranscriptSeq) {
-      return;
-    }
-
-    if (!lastUserTranscript) {
-      return;
-    }
-
-    if (deferredSubmitBookingStep.event) {
-      console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_NUDGE_SKIPPED]", {
-        callSid,
-        reason: "DEFERRED_SUBMIT_ALREADY_PENDING",
-        pendingBookingStepKey,
-        lastUserTranscript,
-        lastUserTranscriptSeq,
-      });
-
-      return;
-    }
-    lastBookingTranscriptNudgeSeq = lastUserTranscriptSeq;
-
-    console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_PROCESSING_NUDGED]", {
-      callSid,
-      pendingBookingStepKey,
-      lastUserTranscript,
-      lastUserTranscriptSeq,
-      pendingBookingStepPromptAnchorSeq,
-    });
-
-    requestRealtimeResponse(
-      {
-        instructions: [
-          "The caller just answered the current booking step.",
-          `Current booking step key: ${pendingBookingStepKey}.`,
-          `Use this exact latest caller transcript as the answer: ${lastUserTranscript}`,
-          "Call submit_booking_step for the current booking step now.",
-          "Do not speak to the caller.",
-          "Do not say progress updates.",
-          "Do not say anything like 'we are moving forward with your booking'.",
-          "Do not ask another question before calling the tool.",
-          "Do not use an older transcript.",
-          "Your only action in this response should be the tool call.",
-        ].join(" "),
-      },
-      "tool_followup:booking_step_transcript_nudge"
-    );
-  }
-
-  function catchUpBookingStepIfCallerAnsweredBeforeTurnOpened(): void {
-    const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
-    const pendingBookingStepKey = clean(
-      (realtimeState as any).pendingBookingStepKey
-    );
-
-    const pendingBookingStepPromptAnchorSeq =
-      typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq === "number"
-        ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
-        : -1;
-
-    const hasEarlyCallerAnswer =
-      bookingTurnStatus === "waiting_user_answer" &&
-      !!pendingBookingStepKey &&
-      !!lastUserTranscript &&
-      lastUserTranscriptSeq > pendingBookingStepPromptAnchorSeq;
-
-    if (!hasEarlyCallerAnswer) {
-      return;
-    }
-
-    const catchupAllowedSteps = new Set([
-      "staff",
-      "datetime",
-      "name",
-      "phone",
-      "confirm",
-    ]);
-
-    if (!catchupAllowedSteps.has(pendingBookingStepKey)) {
-      console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_SKIPPED]", {
-        callSid,
-        reason: "STEP_NOT_CATCHUP_ELIGIBLE",
-        pendingBookingStepKey,
-        lastUserTranscript,
-        lastUserTranscriptSeq,
-        pendingBookingStepPromptAnchorSeq,
-      });
-
-      return;
-    }
-
-    const catchupKey = [
-      callSid || "",
-      pendingBookingStepKey,
-      String(lastUserTranscriptSeq),
-    ].join(":");
-
-    if (lastBookingEarlyAnswerCatchupKey === catchupKey) {
-      return;
-    }
-
-    if (deferredSubmitBookingStep.event) {
-      console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_SKIPPED]", {
-        callSid,
-        reason: "DEFERRED_SUBMIT_ALREADY_PENDING",
-        pendingBookingStepKey,
-        lastUserTranscript,
-        lastUserTranscriptSeq,
-        pendingBookingStepPromptAnchorSeq,
-      });
-
-      return;
-    }
-
-    lastBookingEarlyAnswerCatchupKey = catchupKey;
-
-    console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_REQUESTED]", {
-      callSid,
-      pendingBookingStepKey,
-      lastUserTranscript,
-      lastUserTranscriptSeq,
-      pendingBookingStepPromptAnchorSeq,
-    });
-
-    requestRealtimeResponse(
-      {
-        instructions: [
-          "The booking step has just opened, but the caller already answered it before the turn was fully opened.",
-          `Current booking step key: ${pendingBookingStepKey}.`,
-          `Use this exact latest caller transcript as the answer: ${lastUserTranscript}`,
-          "Call submit_booking_step for the current booking step now.",
-          "Do not speak to the caller.",
-          "Do not say progress updates.",
-          "Do not ask another question before calling the tool.",
-          "Do not use an older transcript.",
-          "Your only action in this response should be the tool call.",
-        ].join(" "),
-      },
-      "tool_followup:booking_step_early_answer_catchup"
-    );
   }
 
   async function configureRealtimeSessionIfReady(): Promise<void> {
@@ -759,14 +197,10 @@ export async function createOpenAiRealtimeBridge({
     if (!didNumber) return;
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
 
-    const requestState: CallState = realtimeState;
-
-    const context = await resolveVoiceRequestContext({
+    const context = await resolveInitialRealtimeSessionContext({
       callSid,
       didNumber,
-      state: requestState,
-      langParam: undefined,
-      channelKey: "voice",
+      realtimeState,
     });
 
     if (!context.ok) {
@@ -781,24 +215,18 @@ export async function createOpenAiRealtimeBridge({
 
     currentLocale = "en-US";
 
-    const session = buildRealtimeVoiceSession({
-      businessName: context.brand || context.tenant.name || "the business",
+    const sessionUpdatePayload = buildRealtimeSessionUpdatePayload({
+      businessName: context.brand,
       businessInfo: context.tenant.info_clave || "",
       systemPrompt: context.cfg.system_prompt || "",
       locale: currentLocale,
+      model,
     });
 
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
     if (twilioSocket.readyState !== WebSocket.OPEN) return;
 
-    sendJson(
-      openAiSocket,
-      buildOpenAiRealtimeSessionUpdate({
-        instructions: session.instructions,
-        voice: session.voice,
-        model,
-      })
-    );
+    sendJson(openAiSocket, sessionUpdatePayload);
 
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
     if (twilioSocket.readyState !== WebSocket.OPEN) return;
@@ -812,14 +240,14 @@ export async function createOpenAiRealtimeBridge({
       {
         instructions: buildInitialGreetingFromConfiguredWelcome({
           configuredWelcome: configuredWelcomeMessage,
-          brand: context.brand || context.tenant.name || "the business",
+          brand: context.brand,
           locale: currentLocale,
         }),
       },
       "bridge:initial_greeting"
     );
 
-    tenantId = context.tenant.id;
+    tenantId = context.tenantId;
     realtimeTenant = context.tenant;
     realtimeCfg = context.cfg || {};
     realtimeState = {
@@ -839,21 +267,20 @@ export async function createOpenAiRealtimeBridge({
   });
 
   openAiSocket.on("message", (raw) => {
-    const event = safeJsonParse(raw);
+    const event = safeJsonParseRealtimeEvent(raw);
 
     if (!event) return;
 
     if (event.type === "response.created") {
-      activeResponseId = event.response?.id || null;
-      activeResponseSource = awaitingResponseSource;
-      activeResponseStartedAtUserTranscriptSeq = lastUserTranscriptSeq;
-      awaitingResponseSource = null;
-      assistantSpeaking = true;
+      const responseState = responseController.markResponseCreated({
+        responseId: event.response?.id || null,
+        startedAtUserTranscriptSeq: lastUserTranscriptSeq,
+      });
 
       assistantSpeaking = true;
 
       if (endCallGoodbyeRequested && !endCallGoodbyeResponseId) {
-        endCallGoodbyeResponseId = activeResponseId;
+        endCallGoodbyeResponseId = responseState.activeResponseId;
 
         console.log("[VOICE_REALTIME][END_CALL_GOODBYE_RESPONSE_CREATED]", {
           callSid,
@@ -866,25 +293,12 @@ export async function createOpenAiRealtimeBridge({
 
     if (event.type === "error") {
       if (isConversationAlreadyHasActiveResponseError(event)) {
-        console.warn("[VOICE_REALTIME][RESPONSE_ALREADY_ACTIVE_IGNORED]", {
-          callSid,
-          activeResponseId,
-        });
-
+        responseController.handleConversationAlreadyHasActiveResponseError();
         return;
       }
 
       if (isResponseCancelNotActiveError(event)) {
-        console.warn("[VOICE_REALTIME][RESPONSE_CANCEL_NOT_ACTIVE_IGNORED]", {
-          callSid,
-          activeResponseId,
-          pendingResponseSource,
-        });
-
-        activeResponseId = null;
-        activeResponseSource = null;
-        flushPendingRealtimeResponse();
-
+        responseController.handleResponseCancelNotActiveError();
         return;
       }
 
@@ -893,53 +307,15 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (event.type === "response.function_call_arguments.done") {
-      if (
-        shouldDeferSubmitBookingStepUntilTranscript({
-          event,
-          realtimeState,
-          lastUserTranscript,
-          lastUserTranscriptSeq,
-        })
-      ) {
-        const args = parseRealtimeToolArgs(event);
-
-        deferredSubmitBookingStep = {
-          event,
-          reason: "WAITING_FOR_TRANSCRIPT_SEQ_ADVANCE",
-        };
-
-        console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_DEFERRED]", {
-          callSid,
-          toolName: getRealtimeToolName(event),
-          submittedStepKey: String(args.step_key || "").trim(),
-          pendingBookingStepKey: String(
-            (realtimeState as any).pendingBookingStepKey || ""
-          ).trim(),
-          bookingTurnStatus: String(
-            (realtimeState as any).bookingTurnStatus || ""
-          ).trim(),
-          lastUserTranscript,
-          lastUserTranscriptSeq,
-          pendingBookingStepPromptAnchorSeq:
-            typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq ===
-            "number"
-              ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
-              : null,
-        });
-
+      if (bookingCoordinator.deferSubmitBookingStepUntilTranscriptIfNeeded(event)) {
         return;
       }
 
-      enqueueRealtimeToolCall(event);
+      toolCallQueue.enqueueRealtimeToolCall(event);
       return;
     }
 
-    const audioDelta =
-      typeof event.delta === "string" &&
-      (event.type === "response.audio.delta" ||
-        event.type === "response.output_audio.delta")
-        ? event.delta
-        : null;
+    const audioDelta = resolveOpenAiRealtimeAudioDelta(event);
 
     if (audioDelta && streamSid) {
       if (callEnding) {
@@ -1010,10 +386,12 @@ export async function createOpenAiRealtimeBridge({
           tenantId = transcriptResult.tenantId;
 
           const didFlushDeferredSubmit =
-            flushDeferredSubmitBookingStepIfReady("transcript_accepted");
+            bookingCoordinator.flushDeferredSubmitBookingStepIfReady(
+              "transcript_accepted"
+            );
 
           if (!didFlushDeferredSubmit) {
-            nudgeBookingStepProcessingAfterTranscript();
+            bookingCoordinator.nudgeBookingStepProcessingAfterTranscript();
           }
         })
         .catch((error) => {
@@ -1030,7 +408,9 @@ export async function createOpenAiRealtimeBridge({
       assistantSpeaking = false;
       lastAssistantAudioDoneAtMs = Date.now();
 
-      const completedResponseSource = activeResponseSource;
+      const responseStateBeforeDone = responseController.getState();
+
+      const completedResponseSource = responseStateBeforeDone.activeResponseSource;
 
       const isBookingAssistantPromptResponse =
         typeof completedResponseSource === "string" &&
@@ -1039,7 +419,7 @@ export async function createOpenAiRealtimeBridge({
         clean((realtimeState as any).pendingBookingStepKey);
 
       const responseDoneAnchorSeq = isBookingAssistantPromptResponse
-        ? activeResponseStartedAtUserTranscriptSeq
+        ? responseStateBeforeDone.activeResponseStartedAtUserTranscriptSeq
         : lastUserTranscriptSeq;
 
       const responseDoneResult = handleRealtimeResponseDone({
@@ -1048,15 +428,17 @@ export async function createOpenAiRealtimeBridge({
         realtimeState,
         lastUserTranscript,
         lastUserTranscriptSeq: responseDoneAnchorSeq,
-        activeResponseId,
+        activeResponseId: responseStateBeforeDone.activeResponseId,
         completedResponseSource,
-        pendingResponseCreate,
+        pendingResponseCreate: responseStateBeforeDone.pendingResponseCreate,
         hangupRequestedByTool,
         endCallGoodbyeRequested,
         endCallGoodbyeResponseId,
         callEnding,
         onEndCallGoodbyeCompleted: () => {
-          if (!pendingResponseCreate && !activeResponseId) {
+          const responseState = responseController.getState();
+
+          if (!responseState.pendingResponseCreate && !responseState.activeResponseId) {
             hangupRequestedByTool = false;
             endCallGoodbyeRequested = false;
             endCallGoodbyeResponseId = null;
@@ -1083,9 +465,9 @@ export async function createOpenAiRealtimeBridge({
         lastUserTranscriptSeq,
       });
 
-      activeResponseId = responseDoneResult.activeResponseId;
-      activeResponseSource = null;
-      activeResponseStartedAtUserTranscriptSeq = lastUserTranscriptSeq;
+      responseController.markResponseDone({
+        lastUserTranscriptSeq,
+      });
 
       /**
        * Important:
@@ -1093,12 +475,12 @@ export async function createOpenAiRealtimeBridge({
        * the booking turn may open after the transcript was already accepted.
        * This catch-up prevents the user from having to repeat the same answer.
        */
-      catchUpBookingStepIfCallerAnsweredBeforeTurnOpened();
+      bookingCoordinator.catchUpBookingStepIfCallerAnsweredBeforeTurnOpened();
 
-      flushDeferredSubmitBookingStepIfReady("response_done");
+      bookingCoordinator.flushDeferredSubmitBookingStepIfReady("response_done");
 
       if (responseDoneResult.shouldFlushPendingResponse) {
-        flushPendingRealtimeResponse();
+        responseController.flushPendingRealtimeResponse();
       }
 
       return;
@@ -1126,7 +508,7 @@ export async function createOpenAiRealtimeBridge({
   });
 
   twilioSocket.on("message", (raw) => {
-    const event = safeJsonParse(raw) as TwilioUnknownPayload | null;
+    const event = safeJsonParseRealtimeEvent(raw) as TwilioUnknownPayload | null;
 
     if (!event) return;
 
@@ -1149,8 +531,7 @@ export async function createOpenAiRealtimeBridge({
       lastUserTranscript = "";
       lastUserDigits = "";
       lastUserTranscriptSeq = 0;
-      lastBookingTranscriptNudgeSeq = 0;
-      lastBookingEarlyAnswerCatchupKey = "";
+      bookingCoordinator.reset();
 
       assistantSpeaking = false;
       lastAssistantAudioDoneAtMs = 0;
