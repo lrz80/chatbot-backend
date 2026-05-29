@@ -176,6 +176,7 @@ export function createBookingRealtimeCoordinator(
     }
 
     const shouldAllowTranscriptNudgeForStep =
+      pendingBookingStepKey === "service" ||
       pendingBookingStepKey === "datetime";
 
     if (!shouldAllowTranscriptNudgeForStep) {
@@ -267,6 +268,7 @@ export function createBookingRealtimeCoordinator(
     }
 
     const catchupAllowedSteps = new Set([
+      "service",
       "staff",
       "datetime",
       "name",
