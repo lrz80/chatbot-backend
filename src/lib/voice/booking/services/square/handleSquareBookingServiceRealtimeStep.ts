@@ -136,6 +136,28 @@ function getSquareServicesByExactNames(params: {
   );
 }
 
+function buildSquareAmbiguousServicePrompt(params: {
+  basePrompt: string;
+  serviceOptions: string[];
+}): string {
+  const cleanBasePrompt = String(params.basePrompt ?? "").trim();
+
+  const cleanOptions = params.serviceOptions
+    .map((option) => String(option ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+
+  if (cleanOptions.length === 0) {
+    return cleanBasePrompt;
+  }
+
+  const optionLines = cleanOptions
+    .map((option, index) => `${index + 1}. ${option}`)
+    .join("\n");
+
+  return `${cleanBasePrompt}\n\nOpciones disponibles:\n${optionLines}`;
+}
+
 export async function handleSquareBookingServiceRealtimeStep(
   params: HandleSquareBookingServiceRealtimeStepParams
 ): Promise<HandleSquareBookingServiceRealtimeStepResult> {
@@ -437,15 +459,31 @@ export async function handleSquareBookingServiceRealtimeStep(
         })
       : workingState;
 
-  const prompt = getLocalizedBookingStepPrompt({
+  const basePrompt = getLocalizedBookingStepPrompt({
     step: currentStep,
     locale: currentLocale,
     field: "retry_prompt",
-  })
+    });
 
-  return buildBookingServiceRetryResult({
+    const serviceOptions =
+    match.kind === "ambiguous"
+        ? match.options.map((service) => getSquareServiceName(service)).filter(Boolean)
+        : servicesResult.services
+            .slice(0, 8)
+            .map((service) => getSquareServiceName(service))
+            .filter(Boolean);
+
+    const prompt =
+    match.kind === "ambiguous"
+        ? buildSquareAmbiguousServicePrompt({
+            basePrompt,
+            serviceOptions,
+        })
+        : basePrompt;
+
+    return buildBookingServiceRetryResult({
     error:
-      match.kind === "ambiguous"
+        match.kind === "ambiguous"
         ? "AMBIGUOUS_BOOKING_SERVICE"
         : "UNRESOLVED_BOOKING_SERVICE",
     prompt,
@@ -454,13 +492,7 @@ export async function handleSquareBookingServiceRealtimeStep(
     currentLocale,
     workingState: stateForRetry,
     steps,
-    serviceOptions:
-      match.kind === "ambiguous"
-        ? match.options.map((service) => getSquareServiceName(service))
-        : servicesResult.services
-            .slice(0, 8)
-            .map((service) => getSquareServiceName(service))
-            .filter(Boolean),
+    serviceOptions,
     buildRealtimeBookingState,
   });
 }
