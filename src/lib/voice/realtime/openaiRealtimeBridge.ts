@@ -36,6 +36,7 @@ import {
   safeJsonParseRealtimeEvent,
 } from "./openAiRealtimeEvents";
 import { createRealtimeToolCallQueue } from "./realtimeToolCallQueue";
+import { createUserTranscriptFollowupController } from "./userTranscriptFollowupController";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -147,6 +148,16 @@ export async function createOpenAiRealtimeBridge({
     enqueueRealtimeToolCall: toolCallQueue.enqueueRealtimeToolCall,
     requestRealtimeResponse,
   });
+
+  const userTranscriptFollowupController =
+    createUserTranscriptFollowupController({
+      getCallSid: () => callSid,
+      getRealtimeState: () => realtimeState,
+      getLastUserTranscript: () => lastUserTranscript,
+      getLastUserTranscriptSeq: () => lastUserTranscriptSeq,
+      getBookingFlowLoaded: () => bookingFlowLoaded,
+      requestRealtimeResponse,
+    });
 
   function requestRealtimeResponse(
     response?: Record<string, unknown>,
@@ -410,6 +421,8 @@ export async function createOpenAiRealtimeBridge({
           if (!didFlushDeferredSubmit) {
             bookingCoordinator.nudgeBookingStepProcessingAfterTranscript();
           }
+
+          userTranscriptFollowupController.requestFollowupAfterAcceptedUserTranscript();
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {
@@ -549,6 +562,7 @@ export async function createOpenAiRealtimeBridge({
       lastUserDigits = "";
       lastUserTranscriptSeq = 0;
       bookingCoordinator.reset();
+      userTranscriptFollowupController.reset();
 
       assistantSpeaking = false;
       lastAssistantAudioDeltaAtMs = 0;
