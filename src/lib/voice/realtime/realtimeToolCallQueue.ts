@@ -148,13 +148,9 @@ export function createRealtimeToolCallQueue(
       return;
     }
 
-    const callId = [
-      "synthetic_submit_booking_step",
-      params.getCallSid() || "unknown_call",
-      stepKey,
-      String(params.getLastUserTranscriptSeq()),
-      Date.now().toString(),
-    ].join("_");
+    const callId = `syn_${Date.now().toString(36)}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
 
     console.warn("[VOICE_REALTIME][SYNTHETIC_SUBMIT_BOOKING_STEP_ENQUEUED]", {
       callSid: params.getCallSid(),
