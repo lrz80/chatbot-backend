@@ -25,7 +25,6 @@ import {
   findSquareServiceAmbiguityFromCandidates,
   findSquareServiceAmbiguityFromInput,
 } from "./findSquareServiceAmbiguityFromInput";
-import { resolveSquareServiceAmbiguousChoiceWithContext } from "./resolveSquareServiceAmbiguousChoiceWithContext";
 
 type HandleSquareBookingServiceRealtimeStepParams = {
   tenantId: string;
@@ -217,87 +216,6 @@ export async function handleSquareBookingServiceRealtimeStep(
   const pendingChoice = getPendingSquareServiceChoice(workingState);
 
   if (pendingChoice) {
-    const contextChoice = await resolveSquareServiceAmbiguousChoiceWithContext({
-      tenantId,
-      input: value,
-      currentLocale,
-      options: pendingChoice.options,
-    });
-
-    if (contextChoice.kind === "resolved") {
-      const selectedService = getSquareServicesByExactNames({
-        services: pendingChoice.options,
-        names: [contextChoice.matchedName],
-      })[0];
-
-      if (selectedService) {
-        const nextState = await applyResolvedSquareService({
-          tenantId,
-          connection: connectionResult.connection,
-          currentIndex,
-          rawAnswers,
-          workingState,
-          targetSlot,
-          stepKey,
-          input: value,
-          service: selectedService,
-          serviceName: contextChoice.matchedName,
-          score: contextChoice.confidence,
-        });
-
-        return {
-          kind: "continue",
-          workingState: nextState,
-        };
-      }
-
-      console.warn("[VOICE_BOOKING][SQUARE_AMBIGUOUS_CHOICE_RESOLVED_NOT_FOUND]", {
-        tenantId,
-        input: value,
-        matchedName: contextChoice.matchedName,
-        pendingOptionNames: pendingChoice.options
-          .map((service) => getSquareServiceName(service))
-          .filter(Boolean),
-      });
-    }
-
-    if (contextChoice.kind === "ambiguous") {
-      const narrowedOptions = getSquareServicesByExactNames({
-        services: pendingChoice.options,
-        names: contextChoice.candidateNames,
-      });
-
-      const stateForRetry =
-        narrowedOptions.length >= 2
-          ? setPendingSquareServiceChoice({
-              state: workingState,
-              input: value,
-              options: narrowedOptions,
-            })
-          : workingState;
-
-      const prompt = getLocalizedBookingStepPrompt({
-        step: currentStep,
-        locale: currentLocale,
-        field: "retry_prompt",
-      });
-
-      return buildBookingServiceRetryResult({
-        error: "AMBIGUOUS_BOOKING_SERVICE",
-        prompt,
-        currentStep,
-        currentIndex,
-        currentLocale,
-        workingState: stateForRetry,
-        steps,
-        serviceOptions:
-          narrowedOptions.length >= 2
-            ? narrowedOptions.map((service) => getSquareServiceName(service)).filter(Boolean)
-            : pendingChoice.options.map((service) => getSquareServiceName(service)).filter(Boolean),
-        buildRealtimeBookingState,
-      });
-    }
-
     const selected = resolveSquareServiceChoiceFromInput({
       input: value,
       options: pendingChoice.options,
@@ -337,7 +255,7 @@ export async function handleSquareBookingServiceRealtimeStep(
       step: currentStep,
       locale: currentLocale,
       field: "retry_prompt",
-    });
+    })
 
     return buildBookingServiceRetryResult({
       error:
@@ -352,8 +270,8 @@ export async function handleSquareBookingServiceRealtimeStep(
       steps,
       serviceOptions:
         selected.kind === "ambiguous"
-          ? selected.options.map((service) => getSquareServiceName(service)).filter(Boolean)
-          : pendingChoice.options.map((service) => getSquareServiceName(service)).filter(Boolean),
+          ? selected.options.map((service) => getSquareServiceName(service))
+          : pendingChoice.options.map((service) => getSquareServiceName(service)),
       buildRealtimeBookingState,
     });
   }
