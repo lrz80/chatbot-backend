@@ -6,6 +6,7 @@ import { resolveAppointmentServiceId } from "./resolveAppointmentServiceId";
 import { resolveTenantBookingProvider } from "./booking/providers/resolveTenantBookingProvider";
 import { resolveSquareServiceMappingFromDbForTenant } from "../integrations/square/resolveSquareServiceMappingFromDbForTenant";
 import type { CreateExternalBookingInput } from "./booking/providers/types";
+import { resolveBookingDepositPolicyFromExternalMetadata } from "./resolveBookingDepositPolicy";
 
 type AppointmentSettings = {
   default_duration_min: number;
@@ -168,6 +169,30 @@ export async function createAppointmentFromVoice(args: Args) {
 
     if (!squareMapping.ok) {
       throw new Error(`SQUARE_SERVICE_MAPPING_FAILED:${squareMapping.error}`);
+    }
+
+    const depositPolicy = resolveBookingDepositPolicyFromExternalMetadata(
+      squareMapping.mapping.externalMetadata
+    );
+
+    if (depositPolicy.required) {
+      const depositError = new Error("BOOKING_REQUIRES_DEPOSIT") as Error & {
+        code?: string;
+        serviceName?: string;
+        amountCents?: number | null;
+        currency?: string;
+        paymentUrl?: string | null;
+        policyText?: string | null;
+      };
+
+      depositError.code = "BOOKING_REQUIRES_DEPOSIT";
+      depositError.serviceName = serviceName;
+      depositError.amountCents = depositPolicy.amountCents;
+      depositError.currency = depositPolicy.currency;
+      depositError.paymentUrl = depositPolicy.paymentUrl;
+      depositError.policyText = depositPolicy.policyText;
+
+      throw depositError;
     }
 
     providerPayload = {

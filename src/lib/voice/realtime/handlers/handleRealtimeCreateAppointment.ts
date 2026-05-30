@@ -364,6 +364,91 @@ export async function handleRealtimeCreateAppointment(
         suggestedStarts?: string[];
     };
 
+    if (
+      err.message === "BOOKING_REQUIRES_DEPOSIT" ||
+      (err as any).code === "BOOKING_REQUIRES_DEPOSIT"
+    ) {
+      const depositAmountCents =
+        typeof (err as any).amountCents === "number"
+          ? (err as any).amountCents
+          : null;
+
+      const depositCurrency = clean((err as any).currency || "USD") || "USD";
+      const depositPaymentUrl = clean((err as any).paymentUrl);
+      const depositPolicyText = clean((err as any).policyText);
+      const depositServiceName =
+        clean((err as any).serviceName) || clean(answersBySlot.service);
+
+      const depositState: CallState = {
+        ...bookingContext.state,
+        bookingData: {
+          ...(bookingContext.state.bookingData || {}),
+          ...answersBySlot,
+          booking_outcome: "requires_deposit",
+          deposit_required: "true",
+          deposit_service_name: depositServiceName,
+          deposit_amount_cents:
+            depositAmountCents && depositAmountCents > 0
+              ? String(depositAmountCents)
+              : "",
+          deposit_currency: depositCurrency,
+          deposit_payment_url: depositPaymentUrl,
+          deposit_policy_text: depositPolicyText,
+        },
+      };
+
+      Object.assign(bookingContext.state, depositState);
+
+      await upsertVoiceCallState({
+        callSid: bookingContext.callSid,
+        tenantId,
+        lang: depositState.lang ?? bookingContext.currentLocale,
+        turn: depositState.turn ?? 0,
+        awaiting: false,
+        pendingType: null,
+        awaitingNumber: false,
+        altDest: depositState.altDest ?? null,
+        smsSent: depositState.smsSent ?? false,
+        bookingStepIndex: null,
+        bookingData: depositState.bookingData || {},
+      });
+
+      const bookingState = buildRealtimeBookingState({
+        steps,
+        state: depositState,
+        explicitCurrentIndex: null,
+        finalConfirmationGranted: true,
+        readyToCreate: false,
+      });
+
+      return {
+        ok: false,
+        error: "BOOKING_REQUIRES_DEPOSIT",
+        booking_outcome: "requires_deposit",
+        customer_action_required: true,
+        provider: "square",
+
+        deposit_required: true,
+        deposit_service_name: depositServiceName,
+        deposit_amount_cents: depositAmountCents,
+        deposit_currency: depositCurrency,
+        deposit_payment_url: depositPaymentUrl || null,
+        deposit_policy_text: depositPolicyText || null,
+
+        /**
+         * Important:
+         * No user-facing hardcoded copy here.
+         * The assistant should speak using configured deposit_policy_text
+         * from service mapping metadata or a tenant-level renderer/template.
+         */
+        message: depositPolicyText,
+        assistant_prompt: depositPolicyText,
+
+        booking_state: bookingState,
+        next_required_step: null,
+      };
+    }
+
     if (err.error === "SLOT_BUSY" || err.message.startsWith("SLOT_BUSY:")) {
       const busyRecovered = await executeCanonicalBookingSlotBusyRecovery({
         flow: steps as any,
