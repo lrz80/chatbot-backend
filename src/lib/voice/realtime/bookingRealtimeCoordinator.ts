@@ -252,20 +252,11 @@ export function createBookingRealtimeCoordinator(
       return;
     }
 
-    const shouldAllowTranscriptNudgeForStep =
-      pendingBookingStepKey === "service" ||
-      pendingBookingStepKey === "datetime";
+    if (lastBookingTranscriptNudgeSeq === lastUserTranscriptSeq) {
+      return;
+    }
 
-    if (!shouldAllowTranscriptNudgeForStep) {
-      console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_NUDGE_SKIPPED]", {
-        callSid: params.getCallSid(),
-        reason: "STEP_NOT_NUDGE_ELIGIBLE",
-        pendingBookingStepKey,
-        lastUserTranscript,
-        lastUserTranscriptSeq,
-        pendingBookingStepPromptAnchorSeq,
-      });
-
+    if (!lastUserTranscript) {
       return;
     }
 
