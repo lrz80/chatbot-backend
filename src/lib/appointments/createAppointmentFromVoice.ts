@@ -7,6 +7,7 @@ import { resolveTenantBookingProvider } from "./booking/providers/resolveTenantB
 import { resolveSquareServiceMappingFromDbForTenant } from "../integrations/square/resolveSquareServiceMappingFromDbForTenant";
 import type { CreateExternalBookingInput } from "./booking/providers/types";
 import { resolveBookingDepositPolicyFromExternalMetadata } from "./resolveBookingDepositPolicy";
+import { createPendingDepositPaymentRequest } from "./deposits/createPendingDepositPaymentRequest";
 
 type AppointmentSettings = {
   default_duration_min: number;
@@ -161,6 +162,13 @@ export async function createAppointmentFromVoice(args: Args) {
   const requestedStaffMemberId = cleanString(args.answersBySlot.staff_member_id);
   const requestedStaffMemberName = cleanString(args.answersBySlot.staff_member_name);
 
+  const duration = args.settings.default_duration_min;
+  const end = new Date(start.getTime() + duration * 60 * 1000);
+
+  const idempotencyKey =
+    args.idempotencyKey ||
+    `voice:${args.tenantId}:${customerPhone || "unknown"}:${start.toISOString()}`;
+
   if (activeProvider === "square") {
     const squareMapping = await resolveSquareServiceMappingFromDbForTenant({
       tenantId: args.tenantId,
@@ -176,6 +184,53 @@ export async function createAppointmentFromVoice(args: Args) {
     );
 
     if (depositPolicy.required) {
+      if (!depositPolicy.amountCents || depositPolicy.amountCents <= 0) {
+        throw new Error("DEPOSIT_AMOUNT_NOT_CONFIGURED");
+      }
+
+      if (!squareMapping.mapping.externalLocationId) {
+        throw new Error("DEPOSIT_SQUARE_LOCATION_NOT_CONFIGURED");
+      }
+
+      const pendingPayment = await createPendingDepositPaymentRequest({
+        tenantId: args.tenantId,
+        channel: "voice",
+
+        customerName,
+        customerPhone: customerPhone ? String(customerPhone) : null,
+        customerEmail: customerEmail ? String(customerEmail) : null,
+
+        serviceName,
+        startISO: start.toISOString(),
+        endISO: end.toISOString(),
+        timeZone,
+
+        staffMemberId: requestedStaffMemberId || null,
+        staffMemberName: requestedStaffMemberName || null,
+
+        depositAmountCents: depositPolicy.amountCents,
+        depositCurrency: depositPolicy.currency,
+        depositPolicyText: depositPolicy.policyText,
+
+        squareLocationId: squareMapping.mapping.externalLocationId,
+        providerPayload: {
+          square: {
+            locationId: squareMapping.mapping.externalLocationId,
+            serviceVariationId: squareMapping.mapping.externalServiceId,
+            serviceVariationVersion:
+              squareMapping.mapping.externalServiceVersion ??
+              squareMapping.service.variationVersion,
+            teamMemberId: requestedStaffMemberId || undefined,
+          },
+        },
+        answersBySlot: args.answersBySlot,
+        idempotencyKey,
+      });
+
+      if (!pendingPayment.ok) {
+        throw new Error(`DEPOSIT_PAYMENT_LINK_FAILED:${pendingPayment.error}`);
+      }
+
       const depositError = new Error("BOOKING_REQUIRES_DEPOSIT") as Error & {
         code?: string;
         serviceName?: string;
@@ -183,14 +238,20 @@ export async function createAppointmentFromVoice(args: Args) {
         currency?: string;
         paymentUrl?: string | null;
         policyText?: string | null;
+        paymentRequestId?: string;
+        squarePaymentLinkId?: string;
+        squareOrderId?: string | null;
       };
 
       depositError.code = "BOOKING_REQUIRES_DEPOSIT";
       depositError.serviceName = serviceName;
       depositError.amountCents = depositPolicy.amountCents;
       depositError.currency = depositPolicy.currency;
-      depositError.paymentUrl = depositPolicy.paymentUrl;
+      depositError.paymentUrl = pendingPayment.paymentLinkUrl;
       depositError.policyText = depositPolicy.policyText;
+      depositError.paymentRequestId = pendingPayment.paymentRequestId;
+      depositError.squarePaymentLinkId = pendingPayment.squarePaymentLinkId;
+      depositError.squareOrderId = pendingPayment.squareOrderId;
 
       throw depositError;
     }
@@ -206,13 +267,6 @@ export async function createAppointmentFromVoice(args: Args) {
       },
     };
   }
-
-  const duration = args.settings.default_duration_min;
-  const end = new Date(start.getTime() + duration * 60 * 1000);
-
-  const idempotencyKey =
-    args.idempotencyKey ||
-    `voice:${args.tenantId}:${customerPhone || "unknown"}:${start.toISOString()}`;
 
   const extraDescriptionLines = buildExtraBookingDescriptionLines(
     args.answersBySlot,
