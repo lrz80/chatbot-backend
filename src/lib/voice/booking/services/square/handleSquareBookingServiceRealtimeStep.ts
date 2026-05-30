@@ -310,6 +310,10 @@ export async function handleSquareBookingServiceRealtimeStep(
   let match: ReturnType<typeof resolveSquareServiceFromInput> | null = null;
   let matchedInput = value;
 
+  let resolvedByCatalogContext = false;
+  let catalogContextResolvedName = "";
+  let catalogContextConfidence = 0;
+
   for (const candidate of serviceInputCandidates) {
     const candidateMatch = resolveSquareServiceFromInput({
       input: candidate,
@@ -347,6 +351,10 @@ export async function handleSquareBookingServiceRealtimeStep(
       if (contextCandidateMatch.kind === "resolved") {
         match = contextCandidateMatch;
         matchedInput = contextMatch.matchedName;
+
+        resolvedByCatalogContext = true;
+        catalogContextResolvedName = contextMatch.matchedName;
+        catalogContextConfidence = contextMatch.confidence;
       } else {
         console.warn("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_NOT_RESOLVED_BY_MATCHER]", {
           tenantId,
@@ -440,7 +448,21 @@ export async function handleSquareBookingServiceRealtimeStep(
       resolvedServiceName,
     });
 
-    if (!exactResolvedCandidate) {
+    const highConfidenceCatalogContextResolution =
+      resolvedByCatalogContext &&
+      catalogContextResolvedName === resolvedServiceName &&
+      catalogContextConfidence >= 0.9;
+
+    if (highConfidenceCatalogContextResolution) {
+      console.log("[VOICE_BOOKING][SQUARE_SERVICE_AMBIGUITY_GUARD_SKIPPED_CONTEXT_CONFIDENCE]", {
+        tenantId,
+        locale: currentLocale,
+        originalInput: value,
+        resolvedServiceName,
+        catalogContextConfidence,
+        matchedInput,
+      });
+    } else if (!exactResolvedCandidate) {
       const ambiguityGuard = findSquareServiceAmbiguityFromInput({
         services: servicesResult.services,
         inputCandidates: serviceInputCandidates,
