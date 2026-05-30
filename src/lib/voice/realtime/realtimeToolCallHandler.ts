@@ -174,6 +174,7 @@ export async function handleRealtimeToolCall(
 
   const toolName = clean(event.name || "");
   const callId = clean(event.call_id || "");
+  const isSyntheticToolCall = event?.synthetic === true;
 
   let toolArgs: Record<string, any> = {};
 
@@ -729,14 +730,24 @@ export async function handleRealtimeToolCall(
       next_required_step: toolResult?.next_required_step,
     });
 
-    sendJson(openAiSocket, {
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: callId,
-        output: JSON.stringify(toolResult),
-      },
-    });
+    if (!isSyntheticToolCall) {
+      sendJson(openAiSocket, {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify(toolResult),
+        },
+      });
+    } else {
+      console.log("[VOICE_REALTIME][SYNTHETIC_TOOL_OUTPUT_NOT_SENT_TO_OPENAI]", {
+        callSid,
+        toolName,
+        callId,
+        ok: toolResult?.ok,
+        error: toolResult?.error,
+      });
+    }
 
     const followupInstructions = resolveRealtimeToolFollowupInstructions({
       toolName,
