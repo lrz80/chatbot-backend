@@ -16,6 +16,7 @@ import { handleBlockedSubmitBookingStep } from "./toolGuards/handleBlockedSubmit
 import { applyBookingRuntimeStateAfterToolResult } from "./bookingRuntimeState";
 import { canSubmitBookingStepNow } from "./bookingTurnState";
 import { guardGetBookingFlowIntent } from "./toolGuards/guardGetBookingFlowIntent";
+import { bootstrapSubmitBookingStepAfterFlowLoad } from "./toolGuards/bootstrapSubmitBookingStepAfterFlowLoad";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -403,6 +404,39 @@ export async function handleRealtimeToolCall(
       callEnding: sendBookingSmsGuard.callEnding,
       resetLastUserDigits: sendBookingSmsGuard.resetLastUserDigits,
     };
+  }
+
+  if (toolName === "submit_booking_step" && !bookingFlowLoaded) {
+    const bootstrapResult = await bootstrapSubmitBookingStepAfterFlowLoad({
+      toolArgs,
+      callId,
+      callSid,
+      openAiSocket,
+      requestRealtimeResponse,
+      tenantId: resolvedTenantId,
+      callerPhone,
+      didNumber,
+      tenant: realtimeTenant,
+      cfg: realtimeCfg,
+      realtimeState,
+      currentLocale,
+      callEnding,
+      lastUserTranscript,
+      lastUserDigits,
+      isSyntheticToolCall,
+    });
+
+    if (bootstrapResult.handled) {
+      return {
+        consumed: true,
+        result: bootstrapResult.result,
+        realtimeState: bootstrapResult.realtimeState,
+        bookingFlowLoaded: bootstrapResult.bookingFlowLoaded,
+        hangupRequestedByTool: bootstrapResult.hangupRequestedByTool,
+        callEnding: bootstrapResult.callEnding,
+        resetLastUserDigits: bootstrapResult.resetLastUserDigits,
+      };
+    }
   }
 
   const bookingFlowLoadedGuard = guardSubmitBookingStepFlowLoaded({
