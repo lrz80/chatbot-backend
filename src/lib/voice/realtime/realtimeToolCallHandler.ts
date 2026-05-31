@@ -478,13 +478,41 @@ export async function handleRealtimeToolCall(
           : -1,
     });
 
+    const submittedStepKey = clean(toolArgs.step_key);
+    const modelValue = clean(toolArgs.value);
+
+    const pendingStepKey = clean((realtimeState as any).pendingBookingStepKey);
+
+    const currentTranscriptSeq =
+      typeof realtimeState.lastUserTranscriptSeq === "number"
+        ? realtimeState.lastUserTranscriptSeq
+        : -1;
+
+    const promptAnchorSeq =
+      typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
+        ? realtimeState.pendingBookingStepPromptAnchorSeq
+        : -1;
+
+    const isSubmittingCurrentPendingStep =
+      submittedStepKey &&
+      pendingStepKey &&
+      submittedStepKey === pendingStepKey;
+
+    const hasHumanTranscriptAfterAnchor =
+      currentTranscriptSeq > promptAnchorSeq;
+
     const canBypassTurnGateForTranscriptRace =
       !turnGate.ok &&
       turnGate.reason === "NO_NEW_USER_ANSWER" &&
       freshness.canAcceptModelValueDuringTranscriptRace;
 
-    const submittedStepKey = clean(toolArgs.step_key);
-    const modelValue = clean(toolArgs.value);
+    const canBypassTurnGateForEarlyAnswerDuringAssistantPrompt =
+      !turnGate.ok &&
+      turnGate.reason === "ASSISTANT_PROMPT_NOT_COMPLETED" &&
+      isSubmittingCurrentPendingStep &&
+      Boolean(modelValue) &&
+      hasHumanTranscriptAfterAnchor;
+
     const currentTranscript = clean(lastUserTranscript);
 
     const hasNoAcceptedHumanTranscript =
@@ -550,7 +578,11 @@ export async function handleRealtimeToolCall(
       };
     }
 
-    if (!turnGate.ok && !canBypassTurnGateForTranscriptRace) {
+    if (
+      !turnGate.ok &&
+      !canBypassTurnGateForTranscriptRace &&
+      !canBypassTurnGateForEarlyAnswerDuringAssistantPrompt
+    ) {
       const blockedResult: RealtimeToolResult = {
         ok: false,
         error: "BOOKING_STEP_NOT_READY_FOR_SUBMIT",
@@ -619,6 +651,18 @@ export async function handleRealtimeToolCall(
         callEnding,
         resetLastUserDigits: false,
       };
+    }
+
+    if (canBypassTurnGateForEarlyAnswerDuringAssistantPrompt) {
+      console.warn("[VOICE_REALTIME][BOOKING_SUBMIT_ACCEPTED_EARLY_DURING_ASSISTANT_PROMPT]", {
+        callSid,
+        submittedStepKey,
+        pendingStepKey,
+        modelValue,
+        lastUserTranscript,
+        currentTranscriptSeq,
+        promptAnchorSeq,
+      });
     }
 
     if (!freshness.ok && !freshness.canAcceptModelValueDuringTranscriptRace) {
