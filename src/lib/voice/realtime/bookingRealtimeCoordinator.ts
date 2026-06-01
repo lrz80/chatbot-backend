@@ -55,6 +55,28 @@ function getDeferredSubmittedStepKey(
   return clean(args.step_key);
 }
 
+function wasLatestTranscriptAlreadySubmittedForStep(params: {
+  realtimeState: CallState;
+  pendingBookingStepKey: string;
+  lastUserTranscript: string;
+  lastUserTranscriptSeq: number;
+}): boolean {
+  const state = params.realtimeState as any;
+
+  const lastSubmittedStepKey = clean(state.lastSubmittedStepKey);
+  const lastSubmittedTranscript = clean(state.lastSubmittedTranscript);
+  const lastSubmittedTranscriptSeq =
+    typeof state.lastSubmittedTranscriptSeq === "number"
+      ? state.lastSubmittedTranscriptSeq
+      : -1;
+
+  return (
+    lastSubmittedStepKey === params.pendingBookingStepKey &&
+    lastSubmittedTranscriptSeq === params.lastUserTranscriptSeq &&
+    lastSubmittedTranscript === clean(params.lastUserTranscript)
+  );
+}
+
 export function createBookingRealtimeCoordinator(
   params: BookingRealtimeCoordinatorParams
 ) {
@@ -388,6 +410,26 @@ export function createBookingRealtimeCoordinator(
       console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_SKIPPED]", {
         callSid: params.getCallSid(),
         reason: "DEFERRED_SUBMIT_ALREADY_PENDING",
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq,
+      });
+
+      return;
+    }
+
+    if (
+      wasLatestTranscriptAlreadySubmittedForStep({
+        realtimeState,
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+      })
+    ) {
+      console.warn("[VOICE_REALTIME][BOOKING_EARLY_ANSWER_CATCHUP_SKIPPED]", {
+        callSid: params.getCallSid(),
+        reason: "TRANSCRIPT_ALREADY_SUBMITTED_FOR_STEP",
         pendingBookingStepKey,
         lastUserTranscript,
         lastUserTranscriptSeq,
