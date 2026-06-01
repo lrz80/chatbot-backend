@@ -282,6 +282,12 @@ export function applyBookingRuntimeStateAfterToolResult(params: {
         stepKey: nextStepKey,
         prompt: nextPrompt,
       });
+
+      nextState = {
+        ...nextState,
+        pendingBookingStepPromptAnchorSeq: lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorTranscript: clean(lastUserTranscript),
+      } as CallState;
     }
   }
 
