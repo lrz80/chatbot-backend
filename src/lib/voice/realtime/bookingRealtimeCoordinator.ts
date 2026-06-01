@@ -320,6 +320,18 @@ export function createBookingRealtimeCoordinator(
       pendingBookingStepPromptAnchorSeq,
     });
 
+    if (pendingBookingStepKey === "service") {
+      console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_NUDGE_SKIPPED]", {
+        callSid: params.getCallSid(),
+        reason: "SERVICE_STEP_REQUIRES_MODEL_OR_SERVICE_RESOLVER",
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+      });
+
+      return;
+    }
+
     params.enqueueSubmitBookingStepFromTranscript({
       stepKey: pendingBookingStepKey,
       value: lastUserTranscript,
