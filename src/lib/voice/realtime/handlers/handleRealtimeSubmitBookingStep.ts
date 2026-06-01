@@ -10,6 +10,7 @@ import { advanceRealtimeBookingStep } from "../bookingStep/advanceRealtimeBookin
 import { prepareRealtimeStepSubmission } from "../bookingStep/prepareRealtimeStepSubmission";
 import { executeRealtimeStepRoute } from "../bookingStep/executeRealtimeStepRoute";
 import { validateSubmitBookingStepFreshness } from "../toolGuards/validateSubmitBookingStepFreshness";
+import { resolveConfiguredServiceOptionCandidate } from "../bookingStep/resolveConfiguredServiceOptionCandidate";
 
 type RealtimeBookingContext = {
   tenant: any;
@@ -262,6 +263,21 @@ function buildSubmitValueCandidates(params: {
       source,
       value,
     });
+  }
+
+  if (isServiceStep) {
+    const configuredOptionCandidate = resolveConfiguredServiceOptionCandidate({
+      currentStep,
+      values: [
+        primaryValue,
+        transcriptValue,
+        ...parsedCandidates.map((candidate) => candidate.value),
+      ],
+    });
+
+    if (configuredOptionCandidate) {
+      orderedCandidates.push(configuredOptionCandidate);
+    }
   }
 
   const seen = new Set<string>();

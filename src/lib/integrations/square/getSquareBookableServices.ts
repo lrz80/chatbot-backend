@@ -139,28 +139,6 @@ function buildSquareBookableService(params: {
   const availableForBooking = variationData?.available_for_booking === true;
   const durationMinutes = toMinutesFromMs(variationData?.service_duration);
 
-  if (
-    process.env.SQUARE_DEBUG_BOOKABLE_SERVICES === "true" &&
-    serviceNameDebugShouldLog({
-      itemName,
-      variationName,
-      variationId,
-    })
-  ) {
-    console.warn("[SQUARE][RAW_BOOKABLE_SERVICE_DEBUG]", {
-      itemId,
-      itemName,
-      variationId,
-      variationName,
-      variationVersion,
-      availableForBooking,
-      durationMinutes,
-      rawItem: item,
-      rawVariation: variation,
-      rawVariationData: variationData,
-    });
-  }
-
   if (!itemId || !variationId || !itemName) {
     return null;
   }

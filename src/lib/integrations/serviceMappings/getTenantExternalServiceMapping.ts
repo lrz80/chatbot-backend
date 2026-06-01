@@ -62,6 +62,31 @@ function normalizeMetadata(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function mergeMetadataPreservingNestedObjects(
+  existingMetadata: Record<string, unknown>,
+  incomingMetadata: Record<string, unknown>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {
+    ...existingMetadata,
+    ...incomingMetadata,
+  };
+
+  const existingDeposit = normalizeMetadata(existingMetadata.deposit);
+  const incomingDeposit = normalizeMetadata(incomingMetadata.deposit);
+
+  if (
+    Object.keys(existingDeposit).length > 0 ||
+    Object.keys(incomingDeposit).length > 0
+  ) {
+    merged.deposit = {
+      ...existingDeposit,
+      ...incomingDeposit,
+    };
+  }
+
+  return merged;
+}
+
 function normalizeNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -229,6 +254,11 @@ export async function upsertTenantExternalServiceMapping(
   });
 
   if (existingResult.ok) {
+    const mergedMetadata = mergeMetadataPreservingNestedObjects(
+      existingResult.mapping.externalMetadata || {},
+      externalMetadata || {}
+    );
+
     const { rows } = await pool.query(
       `
       UPDATE tenant_external_service_mappings
@@ -264,7 +294,7 @@ export async function upsertTenantExternalServiceMapping(
         externalServiceId,
         externalServiceVersion,
         externalLocationId,
-        JSON.stringify(externalMetadata),
+        JSON.stringify(mergedMetadata),
         isActive,
       ]
     );

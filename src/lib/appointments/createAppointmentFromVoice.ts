@@ -183,6 +183,15 @@ export async function createAppointmentFromVoice(args: Args) {
       squareMapping.mapping.externalMetadata
     );
 
+    console.log("[VOICE][DEPOSIT_POLICY_RESOLVED]", {
+      tenantId: args.tenantId,
+      serviceName,
+      externalServiceId: squareMapping.mapping.externalServiceId,
+      externalLocationId: squareMapping.mapping.externalLocationId,
+      externalMetadata: squareMapping.mapping.externalMetadata,
+      depositPolicy,
+    });
+
     if (depositPolicy.required) {
       if (!depositPolicy.amountCents || depositPolicy.amountCents <= 0) {
         throw new Error("DEPOSIT_AMOUNT_NOT_CONFIGURED");
