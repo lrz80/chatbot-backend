@@ -108,6 +108,20 @@ function buildSquareServiceSearchText(params: {
     .join(" | ");
 }
 
+function serviceNameDebugShouldLog(params: {
+  itemName: string;
+  variationName: string;
+  variationId: string;
+}): boolean {
+  const debugServiceId = clean(process.env.SQUARE_DEBUG_SERVICE_VARIATION_ID);
+
+  if (debugServiceId) {
+    return clean(params.variationId) === debugServiceId;
+  }
+
+  return true;
+}
+
 function buildSquareBookableService(params: {
   item: SquareCatalogObject;
   variation: SquareCatalogObject;
@@ -124,6 +138,28 @@ function buildSquareBookableService(params: {
   const variationVersion = Number(variation.version || 0);
   const availableForBooking = variationData?.available_for_booking === true;
   const durationMinutes = toMinutesFromMs(variationData?.service_duration);
+
+  if (
+    process.env.SQUARE_DEBUG_BOOKABLE_SERVICES === "true" &&
+    serviceNameDebugShouldLog({
+      itemName,
+      variationName,
+      variationId,
+    })
+  ) {
+    console.warn("[SQUARE][RAW_BOOKABLE_SERVICE_DEBUG]", {
+      itemId,
+      itemName,
+      variationId,
+      variationName,
+      variationVersion,
+      availableForBooking,
+      durationMinutes,
+      rawItem: item,
+      rawVariation: variation,
+      rawVariationData: variationData,
+    });
+  }
 
   if (!itemId || !variationId || !itemName) {
     return null;
