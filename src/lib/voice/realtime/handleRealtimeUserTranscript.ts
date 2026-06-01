@@ -121,8 +121,11 @@ function uniqueLetterRatio(value: string): number {
   return new Set(letters).size / letters.length;
 }
 
-function isLikelyNoiseTranscript(transcript: string): boolean {
-  const cleaned = clean(transcript);
+function isLikelyNoiseTranscript(params: {
+  transcript: string;
+  allowLowVarietyHeuristic: boolean;
+}): boolean {
+  const cleaned = clean(params.transcript);
 
   if (!cleaned) return true;
 
@@ -135,10 +138,15 @@ function isLikelyNoiseTranscript(transcript: string): boolean {
   if (letters === 0 && digits === 0) return true;
 
   /**
-   * Texto largo con poquísima variedad de letras suele ser ruido/transcripción mala.
-   * Esta regla es agnóstica al idioma y no depende del negocio.
+   * Esta heurística sirve para filtrar ruido fuera del booking flow.
+   * Pero dentro de un booking step pendiente, una respuesta válida puede ser
+   * una dirección, teléfono, nombre, peso o fecha con baja variedad de caracteres.
    */
-  if (letters >= 6 && uniqueLetterRatio(cleaned) < 0.28) {
+  if (
+    params.allowLowVarietyHeuristic &&
+    letters >= 6 &&
+    uniqueLetterRatio(cleaned) < 0.28
+  ) {
     return true;
   }
 
@@ -233,7 +241,16 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     };
   }
 
-  if (isLikelyNoiseTranscript(transcript)) {
+  const isWaitingForBookingAnswer =
+    clean(params.bookingTurnStatus) === "waiting_user_answer" &&
+    !!clean(params.pendingBookingStepKey);
+
+  if (
+    isLikelyNoiseTranscript({
+      transcript,
+      allowLowVarietyHeuristic: !isWaitingForBookingAnswer,
+    })
+  ) {
     return {
       ignore: true,
       interruptAssistant: false,
@@ -255,11 +272,6 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
       msSinceAssistantAudioDone: null,
     };
   }
-
-  const isWaitingForBookingAnswer =
-    clean(params.bookingTurnStatus) === "waiting_user_answer" &&
-    !!clean(params.pendingBookingStepKey);
-
   /**
    * En booking NO debemos aceptar cualquier transcript mientras Aamy habla.
    * Short answers can be valid after a direct question,
