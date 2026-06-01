@@ -85,7 +85,7 @@ export function getStepSlot(step: BookingFlowStepLike): string {
   const validationConfig = getValidationConfig(step);
   const configuredSlot = clean(validationConfig?.slot);
 
-  if (configuredSlot) {
+  if (configuredSlot && configuredSlot !== "none") {
     return configuredSlot;
   }
 
@@ -99,7 +99,7 @@ export function getStepAliases(step: BookingFlowStepLike): string[] {
   const canonicalSlot = getStepSlot(step);
 
   if (stepKey) aliases.add(stepKey);
-  if (canonicalSlot) aliases.add(canonicalSlot);
+  if (canonicalSlot && canonicalSlot !== "none") aliases.add(canonicalSlot);
 
   return Array.from(aliases);
 }
@@ -442,19 +442,20 @@ export function buildBookingPromptTemplateValues(
 ): Record<string, string> {
   const slots = bookingState.collected_slots || {};
 
-  const values: Record<string, string> = {
-    appointment_type: clean(slots.appointment_type),
-    service: clean(slots.service),
-    datetime: clean(slots.datetime),
-    customer_name: clean(slots.customer_name),
-    customer_phone: clean(slots.customer_phone),
-    customer_email: clean(slots.customer_email),
-    confirmation: clean(slots.confirmation),
-    customer_subject: clean(slots.customer_subject),
-    subject_detail: clean(slots.subject_detail),
-    location_detail: clean(slots.location_detail),
-    notes: clean(slots.notes),
-  };
+const values: Record<string, string> = {
+  appointment_type: clean(slots.appointment_type),
+  service: clean(slots.service),
+  service_address: clean(slots.service_address),
+  datetime: clean(slots.datetime),
+  customer_name: clean(slots.customer_name),
+  customer_phone: clean(slots.customer_phone),
+  customer_email: clean(slots.customer_email),
+  confirmation: clean(slots.confirmation),
+  customer_subject: clean(slots.customer_subject),
+  subject_detail: clean(slots.subject_detail),
+  location_detail: clean(slots.location_detail),
+  notes: clean(slots.notes),
+};
 
   for (const key of Object.keys(values)) {
     values[`${key}_display`] = values[key] || "";
