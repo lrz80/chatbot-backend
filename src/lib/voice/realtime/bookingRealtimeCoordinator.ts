@@ -7,6 +7,7 @@ import {
   shouldDeferSubmitBookingStepUntilTranscript,
   type DeferredSubmitBookingStepState,
 } from "./deferredSubmitBookingStep";
+import { requestServiceStepModelResolution } from "./bookingStep/requestServiceStepModelResolution";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,
@@ -282,14 +283,6 @@ export function createBookingRealtimeCoordinator(
       return;
     }
 
-    if (lastBookingTranscriptNudgeSeq === lastUserTranscriptSeq) {
-      return;
-    }
-
-    if (!lastUserTranscript) {
-      return;
-    }
-
     clearDeferredSubmitIfLatestTranscriptBelongsToCurrentStep({
       source: "booking_step_transcript_nudge",
       pendingBookingStepKey,
@@ -321,12 +314,14 @@ export function createBookingRealtimeCoordinator(
     });
 
     if (pendingBookingStepKey === "service") {
-      console.warn("[VOICE_REALTIME][BOOKING_STEP_TRANSCRIPT_NUDGE_SKIPPED]", {
+      requestServiceStepModelResolution({
         callSid: params.getCallSid(),
-        reason: "SERVICE_STEP_REQUIRES_MODEL_OR_SERVICE_RESOLVER",
+        source: "booking_step_transcript_nudge",
         pendingBookingStepKey,
         lastUserTranscript,
         lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq,
+        requestRealtimeResponse: params.requestRealtimeResponse,
       });
 
       return;
@@ -460,6 +455,20 @@ export function createBookingRealtimeCoordinator(
       lastUserTranscriptSeq,
       pendingBookingStepPromptAnchorSeq,
     });
+
+    if (pendingBookingStepKey === "service") {
+      requestServiceStepModelResolution({
+        callSid: params.getCallSid(),
+        source: "booking_step_early_answer_catchup",
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq,
+        requestRealtimeResponse: params.requestRealtimeResponse,
+      });
+
+      return;
+    }
 
     params.enqueueSubmitBookingStepFromTranscript({
       stepKey: pendingBookingStepKey,
