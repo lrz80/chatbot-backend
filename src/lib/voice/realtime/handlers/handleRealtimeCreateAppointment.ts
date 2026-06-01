@@ -8,14 +8,13 @@ import {
   clean,
   getConfirmationLikeStep,
   getStepIndexByKey,
-  sortFlowSteps,
   buildAnswersBySlot,
   normalizeAnswersToCanonicalSlots,
-  buildCanonicalCallState,
   parseJsonStringArray,
   type BookingFlowStepLike,
   type BookingState,
 } from "../realtimeBookingFlowUtils";
+import { resolvePostCreateBookingTransition } from "../bookingStep/resolvePostCreateBookingTransition";
 
 type RealtimeBookingContext = {
   tenant: any;
@@ -265,38 +264,32 @@ export async function handleRealtimeCreateAppointment(
       },
     };
 
-    const successIndex =
-      currentIndex + 1 < steps.length ? currentIndex + 1 : null;
+    const postCreateTransition = resolvePostCreateBookingTransition({
+      steps,
+      confirmationStepKey,
+    });
 
-        const successBookingState =
-      successIndex === null
+    const informationalBookingState =
+      postCreateTransition.informationalStepIndex === null
         ? null
         : buildRealtimeBookingState({
             steps,
             state: baseCreatedState,
-            explicitCurrentIndex: successIndex,
+            explicitCurrentIndex: postCreateTransition.informationalStepIndex,
+            finalConfirmationGranted: true,
+            readyToCreate: false,
           });
 
-    const successStep =
-      successBookingState === null
+    const informationalStep =
+      informationalBookingState === null
         ? null
         : buildNextRequiredStep({
             steps,
-            bookingState: successBookingState,
+            bookingState: informationalBookingState,
             locale: bookingContext.currentLocale,
           });
 
-    const successIsInformational =
-      successStep &&
-      successStep.required !== true &&
-      clean(successStep.slot) === "none" &&
-      clean(successStep.expected_type) !== "confirmation";
-
-    const nextIndex = successIsInformational
-      ? successIndex !== null && successIndex + 1 < steps.length
-        ? successIndex + 1
-        : null
-      : successIndex;
+    const nextIndex = postCreateTransition.actionableStepIndex;
 
     const createdState: CallState = {
       ...baseCreatedState,
@@ -348,16 +341,19 @@ export async function handleRealtimeCreateAppointment(
             locale: bookingContext.currentLocale,
           });
 
-    return {
+      return {
         ok: true,
-        message: clean(successStep?.prompt || ""),
-        assistant_prompt: [clean(successStep?.prompt || ""), clean(nextRequiredStep?.prompt || "")]
-        .filter(Boolean)
-        .join(" "),
-        booking_outcome: "confirmed",
+        message: clean(informationalStep?.prompt || ""),
+        assistant_prompt: [
+          clean(informationalStep?.prompt || ""),
+          clean(nextRequiredStep?.prompt || ""),
+        ]
+          .filter(Boolean)
+          .join(" "),
+        booking_outcome: nextRequiredStep ? "confirmed_next_action" : "confirmed",
         booking_state: nextBookingState,
         next_required_step: nextRequiredStep,
-    };
+      };
     } catch (error) {
     const err = error as Error & {
         error?: string;

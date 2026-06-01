@@ -270,10 +270,18 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
    * Esto evita que brisa/eco/ruido avance steps.
    */
   if (params.assistantSpeaking) {
+    if (isWaitingForBookingAnswer) {
+      return {
+        ignore: true,
+        interruptAssistant: false,
+        reason: "ASSISTANT_AUDIO_ACTIVE",
+        msSinceAssistantAudioDone: null,
+      };
+    }
+
     return {
-      ignore: true,
-      interruptAssistant: false,
-      reason: "ASSISTANT_AUDIO_ACTIVE",
+      ignore: false,
+      interruptAssistant: true,
       msSinceAssistantAudioDone: null,
     };
   }
@@ -408,6 +416,14 @@ export async function handleRealtimeUserTranscript(params: {
     };
   }
 
+  if (preGuard.interruptAssistant) {
+    cancelActiveAssistantAudio({
+      openAiSocket: params.openAiSocket,
+      callSid: params.callSid,
+      transcript: rawTranscript,
+    });
+  }
+
   const runtimeResult = await handleUserTranscriptCompleted({
     event: params.event,
     callSid: params.callSid,
@@ -438,14 +454,6 @@ export async function handleRealtimeUserTranscript(params: {
       localeLocked: params.localeLocked,
       tenantId: params.tenantId,
     };
-  }
-
-  if (preGuard.interruptAssistant) {
-    cancelActiveAssistantAudio({
-      openAiSocket: params.openAiSocket,
-      callSid: params.callSid,
-      transcript: rawTranscript,
-    });
   }
 
   console.log("[VOICE_REALTIME][USER_TRANSCRIPT_ACCEPTED]", {
