@@ -827,9 +827,16 @@ export async function handleRealtimeToolCall(
       });
     }
 
+    const followupLocale = String(
+      (nextRealtimeState as any)?.lang ||
+        (realtimeState as any)?.lang ||
+        ""
+    ).trim();
+
     const followupInstructions = resolveRealtimeToolFollowupInstructions({
       toolName,
       toolResult: (toolResult || {}) as RealtimeToolResult,
+      currentLocale: followupLocale,
     });
 
     requestRealtimeResponse(

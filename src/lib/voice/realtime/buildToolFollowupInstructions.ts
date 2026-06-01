@@ -19,6 +19,7 @@ function getObject(value: unknown): Record<string, unknown> | null {
 function buildNaturalPromptInstruction(params: {
   sourceText: string;
   purpose: string;
+  activeLocale?: string;
   mustAskConfirmation?: boolean;
   mustAskSmsOffer?: boolean;
   mustWaitForAnswer?: boolean;
@@ -27,6 +28,7 @@ function buildNaturalPromptInstruction(params: {
   const {
     sourceText,
     purpose,
+    activeLocale = "",
     mustAskConfirmation = false,
     mustAskSmsOffer = false,
     mustWaitForAnswer = true,
@@ -35,6 +37,9 @@ function buildNaturalPromptInstruction(params: {
 
   return [
     "Use only the tool result as source of truth.",
+    activeLocale
+      ? `Respond in the active call language: ${activeLocale}. Do not switch languages unless the caller clearly switches languages in a later user turn.`
+      : "",
     `${purpose}: ${sourceText}`,
     "Do not invent booking details, prices, dates, times, services, names, phone numbers, or policies.",
     "Do not read the configured text like an IVR, form, or answering machine.",
@@ -56,8 +61,10 @@ function buildNaturalPromptInstruction(params: {
 export function buildToolFollowupInstructions(params: {
   toolName: string;
   toolResult: RealtimeToolResult;
+  currentLocale?: string;
 }): string {
   const { toolName, toolResult } = params;
+  const activeLocale = clean(params.currentLocale || "");
 
   const ok = toolResult?.ok === true;
   const error = clean(toolResult?.error || "");
@@ -124,6 +131,7 @@ export function buildToolFollowupInstructions(params: {
     return buildNaturalPromptInstruction({
       sourceText: primaryPrompt,
       purpose: "Ask the SMS offer question using this configured meaning",
+      activeLocale,
       mustAskSmsOffer: true,
       mustWaitForAnswer: true,
       blockEndCall: true,
@@ -138,6 +146,7 @@ export function buildToolFollowupInstructions(params: {
     return buildNaturalPromptInstruction({
       sourceText: primaryPrompt,
       purpose: "Ask the booking confirmation question using this configured meaning",
+      activeLocale,
       mustAskConfirmation: true,
       mustWaitForAnswer: true,
       blockEndCall: true,
@@ -166,6 +175,7 @@ export function buildToolFollowupInstructions(params: {
         primaryPrompt ||
         "Ask which phone number should receive the booking details by SMS.",
       purpose: "Ask for the SMS destination phone number",
+      activeLocale,
       mustWaitForAnswer: true,
       blockEndCall: true,
     });
@@ -177,6 +187,7 @@ export function buildToolFollowupInstructions(params: {
         primaryPrompt ||
         "Ask which phone number should receive the booking details by SMS.",
       purpose: "Ask for the SMS destination phone number",
+      activeLocale,
       mustWaitForAnswer: true,
       blockEndCall: true,
     });
@@ -185,6 +196,9 @@ export function buildToolFollowupInstructions(params: {
   if (bookingOutcome === "confirmed" || bookingOutcome === "cancelled") {
     return [
       "Use only the tool result as source of truth.",
+      activeLocale
+        ? `Respond in the active call language: ${activeLocale}. Do not switch languages unless the caller clearly switches languages in a later user turn.`
+        : "",
       primaryPrompt
         ? `Use this result message as the factual source: ${primaryPrompt}`
         : "Give the caller a brief booking status update.",
@@ -193,13 +207,16 @@ export function buildToolFollowupInstructions(params: {
       "After that, ask briefly if the caller needs anything else.",
       "If the caller asks for something else, continue helping.",
       "If the caller says no or the conversation is complete, you may end the call.",
-    ].join(" ");
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
 
   if (assistantPrompt) {
     return buildNaturalPromptInstruction({
       sourceText: assistantPrompt,
       purpose: "Respond using this server-generated message as the factual source",
+      activeLocale,
       mustWaitForAnswer: false,
       blockEndCall: nextStepRequired,
     });
@@ -209,6 +226,7 @@ export function buildToolFollowupInstructions(params: {
     return buildNaturalPromptInstruction({
       sourceText: nextStepPrompt,
       purpose: "Ask the next booking question using this configured meaning",
+      activeLocale,
       mustWaitForAnswer: true,
       blockEndCall: nextStepRequired,
     });
@@ -229,11 +247,18 @@ export function buildToolFollowupInstructions(params: {
   if (toolName === "get_booking_flow") {
     return [
       "Use only the tool result as source of truth.",
-      "Ask the next required booking question in a natural human phone-call style.",
+      activeLocale
+        ? `Respond in the active call language: ${activeLocale}. Do not switch languages unless the caller clearly switches languages in a later user turn.`
+        : "",
+      nextStepPrompt
+        ? `Ask this next required booking question using this configured meaning: ${nextStepPrompt}`
+        : "Ask the next required booking question in a natural human phone-call style.",
       "Preserve the configured options and required slot.",
       "Ask one short question only.",
       "Do not call end_call while the booking flow is still active.",
-    ].join(" ");
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
 
   return [
