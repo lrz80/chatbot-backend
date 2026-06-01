@@ -9,6 +9,7 @@ import { resolveRealtimeTextValue } from "./resolvers/resolveRealtimeTextValue";
 import { resolveRealtimeDatetimeValue } from "./resolvers/resolveRealtimeDatetimeValue";
 import { resolveRealtimeNumberValue } from "./resolvers/resolveRealtimeNumberValue";
 import { resolveRealtimeChoiceValue } from "./resolvers/resolveRealtimeChoiceValue";
+import { resolveRealtimeStructuredValue } from "./resolvers/resolveRealtimeStructuredValue";
 
 export type RealtimeSubmittedStepValueSource =
   | "model"
@@ -70,6 +71,14 @@ function resolveValidationConfigType(step: BookingFlowStepLike): string {
     : "";
 }
 
+function resolveValidationConfigKind(step: BookingFlowStepLike): string {
+  const validationConfig = getValidationConfig(step);
+
+  return typeof validationConfig.kind === "string"
+    ? clean(validationConfig.kind).toLowerCase()
+    : "";
+}
+
 function isDatetimeStep(step: BookingFlowStepLike): boolean {
   const stepKey = clean(step.step_key).toLowerCase();
   const slot = getValidationSlot(step).toLowerCase();
@@ -92,6 +101,7 @@ export function resolveRealtimeSubmittedStepValue(params: {
   const value = clean(params.value || params.modelValue || "");
   const expectedType = resolveExpectedType(step);
   const validationType = resolveValidationConfigType(step);
+  const validationKind = resolveValidationConfigKind(step);
   const slot = getStepSlot(step);
 
   if (slot === "customer_phone" || expectedType === "phone") {
@@ -117,6 +127,21 @@ export function resolveRealtimeSubmittedStepValue(params: {
       rawTranscriptValue,
       modelValue,
       source: "none",
+    };
+  }
+
+  if (validationKind === "structured") {
+    const structuredResult = resolveRealtimeStructuredValue({
+      step,
+      value,
+      rawTranscriptValue,
+      modelValue,
+    });
+
+    return {
+      ...structuredResult,
+      rawTranscriptValue,
+      modelValue,
     };
   }
 
