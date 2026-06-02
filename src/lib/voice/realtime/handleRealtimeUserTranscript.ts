@@ -201,6 +201,44 @@ function cancelActiveAssistantAudio(params: {
  * This layer only decides whether the transcript is safe to accept as human input.
  * Meaning/intent/slot validation belongs to booking/service resolvers.
  */
+
+function canAcceptEarlyBookingAnswer(params: {
+  bookingTurnStatus: string;
+  pendingBookingStepKey: string;
+  transcript: string;
+}): boolean {
+  const bookingTurnStatus = clean(params.bookingTurnStatus);
+  const pendingBookingStepKey = clean(params.pendingBookingStepKey);
+  const transcript = clean(params.transcript);
+
+  if (!pendingBookingStepKey || !transcript) {
+    return false;
+  }
+
+  if (bookingTurnStatus === "waiting_user_answer") {
+    return true;
+  }
+
+  if (bookingTurnStatus !== "waiting_assistant_prompt") {
+    return false;
+  }
+
+  /**
+   * These are short confirmation-style steps where callers commonly answer
+   * while Aamy is still finishing the prompt.
+   *
+   * This guard does not decide the meaning of "sí", "no", etc.
+   * It only allows the transcript to reach the booking validator.
+   */
+  const earlyAnswerAllowedSteps = new Set([
+    "phone",
+    "confirm",
+    "offer_booking_sms",
+  ]);
+
+  return earlyAnswerAllowedSteps.has(pendingBookingStepKey);
+}
+
 function shouldIgnoreTranscriptBeforeRuntime(params: {
   callEnding: boolean;
   rawTranscript: string;
@@ -244,8 +282,12 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   }
 
   const isWaitingForBookingAnswer =
-    clean(params.bookingTurnStatus) === "waiting_user_answer" &&
-    !!clean(params.pendingBookingStepKey);
+    !!clean(params.pendingBookingStepKey) &&
+    canAcceptEarlyBookingAnswer({
+      bookingTurnStatus: clean(params.bookingTurnStatus),
+      pendingBookingStepKey: clean(params.pendingBookingStepKey),
+      transcript,
+    });
 
   const hasPendingBookingStep = !!clean(params.pendingBookingStepKey);
 
@@ -258,10 +300,17 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
    * Esto evita que ruido/eco capturado mientras Aamy está cambiando de prompt
    * se convierta en respuesta del próximo step.
    */
+  const canAcceptEarlyAnswer = canAcceptEarlyBookingAnswer({
+    bookingTurnStatus,
+    pendingBookingStepKey: params.pendingBookingStepKey,
+    transcript,
+  });
+
   if (
     hasPendingBookingStep &&
     bookingTurnStatus &&
-    bookingTurnStatus !== "waiting_user_answer"
+    bookingTurnStatus !== "waiting_user_answer" &&
+    !canAcceptEarlyAnswer
   ) {
     return {
       ignore: true,
