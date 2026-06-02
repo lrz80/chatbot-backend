@@ -1,6 +1,20 @@
 // src/lib/voice/realtime/bookingStep/resolvers/resolveRealtimeNumberValue.ts
 import { clean } from "../../realtimeBookingFlowUtils";
 
+type NumberValueSource = "model" | "transcript";
+
+type NumberCandidateSelection =
+  | {
+      ok: true;
+      value: string;
+      source: NumberValueSource;
+    }
+  | {
+      ok: false;
+      value: "";
+      source: "none";
+    };
+
 function hasDigit(value: string): boolean {
   return /\d/.test(value);
 }
@@ -9,16 +23,14 @@ function selectBestNumberCandidate(params: {
   value: string;
   rawTranscriptValue: string;
   modelValue: string;
-}): {
-  value: string;
-  source: "model" | "transcript" | "none";
-} {
+}): NumberCandidateSelection {
   const value = clean(params.value);
   const rawTranscriptValue = clean(params.rawTranscriptValue);
   const modelValue = clean(params.modelValue);
 
   if (modelValue && hasDigit(modelValue)) {
     return {
+      ok: true,
       value: modelValue,
       source: "model",
     };
@@ -26,6 +38,7 @@ function selectBestNumberCandidate(params: {
 
   if (value && hasDigit(value)) {
     return {
+      ok: true,
       value,
       source: modelValue && value === modelValue ? "model" : "transcript",
     };
@@ -33,12 +46,14 @@ function selectBestNumberCandidate(params: {
 
   if (rawTranscriptValue && hasDigit(rawTranscriptValue)) {
     return {
+      ok: true,
       value: rawTranscriptValue,
       source: "transcript",
     };
   }
 
   return {
+    ok: false,
     value: "",
     source: "none",
   };
@@ -70,7 +85,7 @@ export function resolveRealtimeNumberValue(params: {
     modelValue,
   });
 
-  if (!selected.value) {
+  if (!selected.ok) {
     return {
       ok: false as const,
       error: "INCOMPATIBLE_NUMBER_VALUE" as const,

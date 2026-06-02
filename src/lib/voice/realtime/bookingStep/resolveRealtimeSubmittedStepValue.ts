@@ -96,9 +96,10 @@ export function resolveRealtimeSubmittedStepValue(params: {
 }): RealtimeSubmittedStepValueResult {
   const { step, timeZone } = params;
 
-  const rawTranscriptValue = clean(params.rawTranscriptValue || "");
-  const modelValue = clean(params.modelValue || params.value || "");
-  const value = clean(params.value || params.modelValue || "");
+  const rawTranscriptValue = clean(params.rawTranscriptValue);
+  const modelValue = clean(params.modelValue);
+  const value = clean(params.value);
+
   const expectedType = resolveExpectedType(step);
   const validationType = resolveValidationConfigType(step);
   const validationKind = resolveValidationConfigKind(step);
@@ -119,7 +120,7 @@ export function resolveRealtimeSubmittedStepValue(params: {
     };
   }
 
-  if (!value && !rawTranscriptValue) {
+  if (!value && !rawTranscriptValue && !modelValue) {
     return {
       ok: false,
       error: "EMPTY_SUBMITTED_VALUE",
