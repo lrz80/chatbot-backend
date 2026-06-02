@@ -7,6 +7,85 @@ type BuildOpenAiRealtimeSessionUpdateParams = {
   model: string;
 };
 
+function numberFromEnv(params: {
+  key: string;
+  fallback: number;
+  min: number;
+  max: number;
+}): number {
+  const raw = process.env[params.key];
+  const parsed = Number(raw);
+
+  if (!Number.isFinite(parsed)) {
+    return params.fallback;
+  }
+
+  return Math.min(params.max, Math.max(params.min, parsed));
+}
+
+function booleanFromEnv(params: {
+  key: string;
+  fallback: boolean;
+}): boolean {
+  const raw = String(process.env[params.key] ?? "").trim().toLowerCase();
+
+  if (!raw) return params.fallback;
+  if (raw === "true" || raw === "1" || raw === "yes") return true;
+  if (raw === "false" || raw === "0" || raw === "no") return false;
+
+  return params.fallback;
+}
+
+function buildRealtimeTurnDetection(): Record<string, unknown> {
+  return {
+    type: "server_vad",
+
+    /**
+     * Higher = less sensitive.
+     * Speakerphone/echo needs a stricter threshold than headphones.
+     */
+    threshold: numberFromEnv({
+      key: "OPENAI_REALTIME_VAD_THRESHOLD",
+      fallback: 0.9,
+      min: 0.5,
+      max: 0.98,
+    }),
+
+    /**
+     * Keeps a small amount of audio before speech starts,
+     * so words are not clipped when the caller really speaks.
+     */
+    prefix_padding_ms: numberFromEnv({
+      key: "OPENAI_REALTIME_VAD_PREFIX_PADDING_MS",
+      fallback: 450,
+      min: 100,
+      max: 1000,
+    }),
+
+    /**
+     * Requires longer silence before considering the user turn complete.
+     * This reduces false turns from short speaker noise.
+     */
+    silence_duration_ms: numberFromEnv({
+      key: "OPENAI_REALTIME_VAD_SILENCE_DURATION_MS",
+      fallback: 1300,
+      min: 500,
+      max: 2500,
+    }),
+
+    interrupt_response: false,
+
+    /**
+     * Keep this false because your server already controls when responses
+     * are created through requestRealtimeResponse().
+     */
+    create_response: booleanFromEnv({
+      key: "OPENAI_REALTIME_VAD_CREATE_RESPONSE",
+      fallback: false,
+    }),
+  };
+}
+
 export function buildOpenAiRealtimeSessionUpdate(
   params: BuildOpenAiRealtimeSessionUpdateParams
 ): Record<string, unknown> {
@@ -64,14 +143,7 @@ export function buildOpenAiRealtimeSessionUpdate(
           transcription: {
             model: "gpt-4o-mini-transcribe",
           },
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.82,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 1100,
-            interrupt_response: false,
-            create_response: true,
-          },
+          turn_detection: buildRealtimeTurnDetection(),
         },
         output: {
           format: {
