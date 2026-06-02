@@ -8,6 +8,7 @@ import {
   type DeferredSubmitBookingStepState,
 } from "./deferredSubmitBookingStep";
 import { requestServiceStepModelResolution } from "./bookingStep/requestServiceStepModelResolution";
+import { requestNumberStepModelResolution } from "./bookingStep/requestNumberStepModelResolution";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,
@@ -38,6 +39,28 @@ function getPendingBookingStepKey(realtimeState: CallState): string {
 
 function getBookingTurnStatus(realtimeState: CallState): string {
   return clean((realtimeState as any).bookingTurnStatus);
+}
+
+function hasDigit(value: string): boolean {
+  return /\d/.test(value);
+}
+
+function getPendingBookingStepExpectedType(realtimeState: CallState): string {
+  return clean((realtimeState as any).pendingBookingStepExpectedType).toLowerCase();
+}
+
+function shouldRequestNumberModelResolution(params: {
+  realtimeState: CallState;
+  lastUserTranscript: string;
+}): boolean {
+  const expectedType = getPendingBookingStepExpectedType(params.realtimeState);
+  const lastUserTranscript = clean(params.lastUserTranscript);
+
+  return (
+    expectedType === "number" &&
+    !!lastUserTranscript &&
+    !hasDigit(lastUserTranscript)
+  );
 }
 
 function getPendingBookingStepPromptAnchorSeq(realtimeState: CallState): number {
@@ -83,6 +106,7 @@ export function createBookingRealtimeCoordinator(
 ) {
   let lastBookingTranscriptNudgeSeq = 0;
   let lastBookingEarlyAnswerCatchupKey = "";
+  let lastBookingNumberModelResolutionKey = "";
 
   let deferredSubmitBookingStep: DeferredSubmitBookingStepState = {
     event: null,
@@ -92,6 +116,7 @@ export function createBookingRealtimeCoordinator(
   function reset(): void {
     lastBookingTranscriptNudgeSeq = 0;
     lastBookingEarlyAnswerCatchupKey = "";
+    lastBookingNumberModelResolutionKey = "";
     deferredSubmitBookingStep = {
       event: null,
       reason: null,
@@ -250,6 +275,40 @@ export function createBookingRealtimeCoordinator(
     return false;
   }
 
+  function requestNumberResolutionOnce(paramsForResolution: {
+    source: string;
+    pendingBookingStepKey: string;
+    lastUserTranscript: string;
+    lastUserTranscriptSeq: number;
+    pendingBookingStepPromptAnchorSeq: number;
+  }): boolean {
+    const resolutionKey = [
+      params.getCallSid() || "",
+      paramsForResolution.source,
+      paramsForResolution.pendingBookingStepKey,
+      String(paramsForResolution.lastUserTranscriptSeq),
+    ].join(":");
+
+    if (lastBookingNumberModelResolutionKey === resolutionKey) {
+      return true;
+    }
+
+    lastBookingNumberModelResolutionKey = resolutionKey;
+
+    requestNumberStepModelResolution({
+      callSid: params.getCallSid(),
+      source: paramsForResolution.source,
+      pendingBookingStepKey: paramsForResolution.pendingBookingStepKey,
+      lastUserTranscript: paramsForResolution.lastUserTranscript,
+      lastUserTranscriptSeq: paramsForResolution.lastUserTranscriptSeq,
+      pendingBookingStepPromptAnchorSeq:
+        paramsForResolution.pendingBookingStepPromptAnchorSeq,
+      requestRealtimeResponse: params.requestRealtimeResponse,
+    });
+
+    return true;
+  }
+
   function nudgeBookingStepProcessingAfterTranscript(): void {
     const realtimeState = params.getRealtimeState();
     const lastUserTranscript = params.getLastUserTranscript();
@@ -322,6 +381,23 @@ export function createBookingRealtimeCoordinator(
         lastUserTranscriptSeq,
         pendingBookingStepPromptAnchorSeq,
         requestRealtimeResponse: params.requestRealtimeResponse,
+      });
+
+      return;
+    }
+
+    if (
+      shouldRequestNumberModelResolution({
+        realtimeState,
+        lastUserTranscript,
+      })
+    ) {
+      requestNumberResolutionOnce({
+        source: "booking_step_transcript_nudge",
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq,
       });
 
       return;
@@ -465,6 +541,23 @@ export function createBookingRealtimeCoordinator(
         lastUserTranscriptSeq,
         pendingBookingStepPromptAnchorSeq,
         requestRealtimeResponse: params.requestRealtimeResponse,
+      });
+
+      return;
+    }
+
+    if (
+      shouldRequestNumberModelResolution({
+        realtimeState,
+        lastUserTranscript,
+      })
+    ) {
+      requestNumberResolutionOnce({
+        source: "booking_step_early_answer_catchup",
+        pendingBookingStepKey,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq,
       });
 
       return;
