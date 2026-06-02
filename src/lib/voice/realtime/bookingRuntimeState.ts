@@ -56,6 +56,14 @@ function resolveConsumedBookingSubmitValue(params: {
   );
 }
 
+function isBookingRuntimeTool(toolName: string): boolean {
+  return (
+    toolName === "get_booking_flow" ||
+    toolName === "submit_booking_step" ||
+    toolName === "create_appointment"
+  );
+}
+
 export function attachLatestUserTranscriptSeq(params: {
   realtimeState: CallState;
   lastUserTranscriptSeq: number;
@@ -258,10 +266,7 @@ export function applyBookingRuntimeStateAfterToolResult(params: {
     });
   }
 
-  if (
-    (toolName === "get_booking_flow" || toolName === "submit_booking_step") &&
-    toolResult?.next_required_step
-  ) {
+  if (isBookingRuntimeTool(toolName) && toolResult?.next_required_step) {
     const nextStep = toolResult.next_required_step;
     const nextStepKey = clean(nextStep?.step_key);
     const nextPrompt = clean(nextStep?.prompt);
@@ -292,7 +297,7 @@ export function applyBookingRuntimeStateAfterToolResult(params: {
   }
 
   if (
-    (toolName === "get_booking_flow" || toolName === "submit_booking_step") &&
+    isBookingRuntimeTool(toolName) &&
     toolResult?.ok === true &&
     !toolResult?.next_required_step
   ) {
