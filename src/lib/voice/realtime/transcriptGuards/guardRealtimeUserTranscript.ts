@@ -1,4 +1,4 @@
-//src/lib/voice/realtime/transcriptGuards/guardRealtimeUserTranscript.ts
+// src/lib/voice/realtime/transcriptGuards/guardRealtimeUserTranscript.ts
 import type { CallState } from "../../types";
 
 export type RealtimeTranscriptGuardResult =
@@ -34,6 +34,57 @@ function getWordCount(value: string): number {
   return normalizeForTranscriptGuard(value).split(/\s+/).filter(Boolean).length;
 }
 
+function isPendingBookingAnswerWindow(state: any): boolean {
+  const bookingTurnStatus = clean(state.bookingTurnStatus);
+  const pendingBookingStepKey = clean(state.pendingBookingStepKey);
+
+  if (!pendingBookingStepKey) {
+    return false;
+  }
+
+  return (
+    bookingTurnStatus === "waiting_user_answer" ||
+    bookingTurnStatus === "waiting_assistant_prompt"
+  );
+}
+
+function isShortBookingAnswerAllowed(params: {
+  state: any;
+  wordCount: number;
+}): boolean {
+  const { state, wordCount } = params;
+
+  if (wordCount < 1 || wordCount > 4) {
+    return false;
+  }
+
+  if (!isPendingBookingAnswerWindow(state)) {
+    return false;
+  }
+
+  const expectedType = clean(state.pendingBookingStepExpectedType).toLowerCase();
+  const pendingStepKey = clean(state.pendingBookingStepKey);
+  const pendingSlot = clean(state.pendingBookingStepSlot);
+  const validationMode = clean(
+    state.pendingBookingStepValidationConfig?.mode
+  ).toLowerCase();
+
+  /**
+   * Do not decide here whether the answer means yes/no/phone/etc.
+   * This guard only decides whether the transcript should be allowed into
+   * the booking pipeline. The actual step validator/tool resolver remains
+   * the source of truth.
+   */
+  return (
+    expectedType === "confirmation" ||
+    expectedType === "phone" ||
+    validationMode === "confirm_or_replace" ||
+    pendingSlot === "confirmation" ||
+    pendingSlot === "customer_phone" ||
+    pendingStepKey === "offer_booking_sms"
+  );
+}
+
 export function guardRealtimeUserTranscript(params: {
   transcript: string;
   realtimeState: CallState;
@@ -45,8 +96,8 @@ export function guardRealtimeUserTranscript(params: {
 
   const state = realtimeState as any;
 
-  const bookingTurnStatus = String(state.bookingTurnStatus ?? "");
-  const pendingBookingStepKey = String(state.pendingBookingStepKey ?? "");
+  const bookingTurnStatus = clean(state.bookingTurnStatus);
+  const pendingBookingStepKey = clean(state.pendingBookingStepKey);
   const pendingBookingStepPrompt = normalizeForTranscriptGuard(
     state.pendingBookingStepPrompt ?? ""
   );
@@ -63,6 +114,19 @@ export function guardRealtimeUserTranscript(params: {
     normalizedTranscript === pendingBookingStepPrompt
   ) {
     return { ok: false, reason: "MATCHES_PENDING_ASSISTANT_PROMPT" };
+  }
+
+  const allowShortBookingAnswerDuringAssistantAudio =
+    assistantIsSpeaking &&
+    bookingTurnStatus !== "waiting_user_answer" &&
+    pendingBookingStepKey &&
+    isShortBookingAnswerAllowed({
+      state,
+      wordCount,
+    });
+
+  if (allowShortBookingAnswerDuringAssistantAudio) {
+    return { ok: true, reason: "ACCEPTED" };
   }
 
   if (

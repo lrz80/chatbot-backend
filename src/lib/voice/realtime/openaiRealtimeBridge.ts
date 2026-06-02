@@ -37,6 +37,7 @@ import {
 } from "./openAiRealtimeEvents";
 import { createRealtimeToolCallQueue } from "./realtimeToolCallQueue";
 import { createUserTranscriptFollowupController } from "./userTranscriptFollowupController";
+import { createRealtimeBargeInController } from "./realtimeBargeInController";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -103,6 +104,23 @@ export async function createOpenAiRealtimeBridge({
     twilioSocket,
     getCallSid: () => callSid,
     getStreamSid: () => streamSid,
+  });
+
+  const bargeInController = createRealtimeBargeInController({
+    openAiSocket,
+    twilioSocket,
+    responseController,
+    getCallSid: () => callSid,
+    getStreamSid: () => streamSid,
+    getCallEnding: () => callEnding,
+    getAssistantSpeaking: () => assistantSpeaking,
+    setAssistantSpeaking: (value) => {
+      assistantSpeaking = value;
+    },
+    getLastAssistantAudioDeltaAtMs: () => lastAssistantAudioDeltaAtMs,
+    setLastAssistantAudioDoneAtMs: (value) => {
+      lastAssistantAudioDoneAtMs = value;
+    },
   });
 
   const toolCallQueue = createRealtimeToolCallQueue({
@@ -316,6 +334,13 @@ export async function createOpenAiRealtimeBridge({
 
     if (!event) return;
 
+    if (event.type === "input_audio_buffer.speech_started") {
+      bargeInController.interruptAssistantAudio(
+        "input_audio_buffer.speech_started"
+      );
+      return;
+    }
+
     if (event.type === "response.created") {
       const responseState = responseController.markResponseCreated({
         responseId: event.response?.id || null,
@@ -395,7 +420,13 @@ export async function createOpenAiRealtimeBridge({
     if (event.type === "conversation.item.input_audio_transcription.completed") {
       const assistantAudioActive =
         lastAssistantAudioDeltaAtMs > 0 &&
-        Date.now() - lastAssistantAudioDeltaAtMs < 450;
+        Date.now() - lastAssistantAudioDeltaAtMs < 1500;
+
+      if (assistantAudioActive || assistantSpeaking) {
+        bargeInController.interruptAssistantAudio(
+          "conversation.item.input_audio_transcription.completed"
+        );
+      }
 
       handleRealtimeUserTranscript({
         event,
@@ -580,6 +611,7 @@ export async function createOpenAiRealtimeBridge({
       lastAssistantAudioDeltaAtMs = 0;
       lastAssistantAudioDoneAtMs = 0;
       lastAssistantTranscript = "";
+      bargeInController.reset();
 
       console.log("[VOICE_REALTIME][TWILIO_START]", {
         callSid,

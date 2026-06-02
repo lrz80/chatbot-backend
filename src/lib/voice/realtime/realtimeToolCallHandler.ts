@@ -715,29 +715,50 @@ export async function handleRealtimeToolCall(
       promptAnchorSeq,
     });
 
-    const isServiceStep =
-      clean(effectiveToolArgs.step_key || toolArgs.step_key) === "service";
+    const stepKey = clean(effectiveToolArgs.step_key || toolArgs.step_key);
+    const expectedType = clean((realtimeState as any).pendingBookingStepExpectedType).toLowerCase();
+    const slot = clean((realtimeState as any).pendingBookingStepSlot);
 
-    const candidates = [
-      isServiceStep && transcriptValue && forwardedValue === transcriptValue
-        ? {
-            source: "transcript",
-            value: transcriptValue,
-          }
-        : null,
-      !isServiceStep && transcriptValue
-        ? {
-            source: "transcript",
-            value: transcriptValue,
-          }
-        : null,
-      modelValue
-        ? {
-            source: "model",
-            value: modelValue,
-          }
-        : null,
-    ].filter(Boolean);
+    const prefersModelCandidate =
+      stepKey === "service" ||
+      stepKey === "datetime" ||
+      expectedType === "datetime" ||
+      expectedType === "number" ||
+      expectedType === "phone" ||
+      expectedType === "email" ||
+      slot === "service_address" ||
+      slot === "customer_phone" ||
+      slot === "customer_email";
+
+    const candidates = prefersModelCandidate
+      ? [
+          modelValue
+            ? {
+                source: "model",
+                value: modelValue,
+              }
+            : null,
+          transcriptValue && forwardedValue === transcriptValue
+            ? {
+                source: "transcript",
+                value: transcriptValue,
+              }
+            : null,
+        ].filter(Boolean)
+      : [
+          transcriptValue
+            ? {
+                source: "transcript",
+                value: transcriptValue,
+              }
+            : null,
+          modelValue
+            ? {
+                source: "model",
+                value: modelValue,
+              }
+            : null,
+        ].filter(Boolean);
 
     effectiveToolArgs.value = forwardedValue;
     effectiveToolArgs.model_value = modelValue;
