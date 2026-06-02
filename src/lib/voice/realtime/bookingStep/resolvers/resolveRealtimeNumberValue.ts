@@ -11,7 +11,7 @@ function selectBestNumberCandidate(params: {
   modelValue: string;
 }): {
   value: string;
-  source: "model" | "value" | "transcript" | "none";
+  source: "model" | "transcript" | "none";
 } {
   const value = clean(params.value);
   const rawTranscriptValue = clean(params.rawTranscriptValue);
@@ -27,7 +27,7 @@ function selectBestNumberCandidate(params: {
   if (value && hasDigit(value)) {
     return {
       value,
-      source: "value",
+      source: modelValue && value === modelValue ? "model" : "transcript",
     };
   }
 
