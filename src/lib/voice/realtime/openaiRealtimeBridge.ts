@@ -510,11 +510,49 @@ export async function createOpenAiRealtimeBridge({
 
       const completedResponseSource = responseStateBeforeDone.activeResponseSource;
 
-      const isBookingAssistantPromptResponse =
+      const pendingBookingStepKey = clean(
+        (realtimeState as any).pendingBookingStepKey
+      );
+
+      const bookingTurnStatus = clean(
+        (realtimeState as any).bookingTurnStatus
+      );
+
+      const isToolFollowupResponse =
         typeof completedResponseSource === "string" &&
-        completedResponseSource.startsWith("tool_followup:") &&
-        (realtimeState as any).bookingTurnStatus === "waiting_assistant_prompt" &&
-        clean((realtimeState as any).pendingBookingStepKey);
+        completedResponseSource.startsWith("tool_followup:");
+
+      const hasPendingBookingStep = !!pendingBookingStepKey;
+
+      /**
+       * A tool follow-up can create or continue a booking prompt.
+       *
+       * Do not require bookingTurnStatus === "waiting_assistant_prompt" here,
+       * because some tools, like create_appointment, can return a next_required_step
+       * after completing a side effect. In that case the pending step may already
+       * exist, but the runtime status can still be stale.
+       */
+      const isBookingAssistantPromptResponse =
+        isToolFollowupResponse && hasPendingBookingStep;
+
+      if (
+        isBookingAssistantPromptResponse &&
+        bookingTurnStatus !== "waiting_assistant_prompt" &&
+        bookingTurnStatus !== "waiting_user_answer"
+      ) {
+        realtimeState = {
+          ...realtimeState,
+          bookingTurnStatus: "waiting_assistant_prompt",
+        } as CallState;
+
+        console.log("[VOICE_REALTIME][BOOKING_PROMPT_STATUS_NORMALIZED_ON_RESPONSE_DONE]", {
+          callSid,
+          completedResponseSource,
+          pendingBookingStepKey,
+          previousBookingTurnStatus: bookingTurnStatus,
+          nextBookingTurnStatus: "waiting_assistant_prompt",
+        });
+      }
 
       const responseDoneAnchorSeq = isBookingAssistantPromptResponse
         ? responseStateBeforeDone.activeResponseStartedAtUserTranscriptSeq
