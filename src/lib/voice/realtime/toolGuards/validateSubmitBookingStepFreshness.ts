@@ -97,6 +97,10 @@ function isSameOrNearSameHumanAnswer(a: unknown, b: unknown): boolean {
   return textRatio >= 0.82 || overlapRatio >= 0.75;
 }
 
+function isModelValueRaceEligibleStep(stepKey: string): boolean {
+  return stepKey === "datetime";
+}
+
 export type SubmitBookingStepFreshnessResult =
   | {
       ok: true;
@@ -221,7 +225,16 @@ export function validateSubmitBookingStepFreshness(params: {
     Boolean(submittedValue) &&
     !sameComparableText(submittedValue, currentTranscript);
 
-  const canAcceptModelValueDuringTranscriptRace = false;
+  const canAcceptModelValueDuringTranscriptRace =
+    isSubmittingExpectedPendingStep &&
+    isModelValueRaceEligibleStep(submittedStepKey) &&
+    Boolean(submittedValue) &&
+    submittedValueDiffersFromCurrentTranscript &&
+    currentTranscriptSeq >= 0 &&
+    promptAnchorSeq >= 0 &&
+    currentTranscriptSeq <= promptAnchorSeq &&
+    !isDuplicateSubmit &&
+    !isReusedTranscriptFromPreviousStep;
 
   const base = {
     submittedStepKey,
