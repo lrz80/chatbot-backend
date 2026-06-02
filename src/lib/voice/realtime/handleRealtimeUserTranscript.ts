@@ -14,6 +14,7 @@ export type HandleRealtimeUserTranscriptResult = {
     | "ASSISTANT_ECHO"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO"
     | "NOISE_LIKE_TRANSCRIPT"
+    | "BOOKING_NOT_READY_FOR_USER_ANSWER"
     | "RUNTIME_NOT_CONSUMED";
   lastUserTranscript: string;
   lastUserTranscriptSeq: number;
@@ -218,7 +219,8 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     | "ASSISTANT_AUDIO_ACTIVE"
     | "ASSISTANT_ECHO"
     | "TOO_CLOSE_TO_ASSISTANT_AUDIO"
-    | "NOISE_LIKE_TRANSCRIPT";
+    | "NOISE_LIKE_TRANSCRIPT"
+    | "BOOKING_NOT_READY_FOR_USER_ANSWER";
   msSinceAssistantAudioDone: number | null;
 } {
   const transcript = clean(params.rawTranscript);
@@ -244,6 +246,30 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   const isWaitingForBookingAnswer =
     clean(params.bookingTurnStatus) === "waiting_user_answer" &&
     !!clean(params.pendingBookingStepKey);
+
+  const hasPendingBookingStep = !!clean(params.pendingBookingStepKey);
+
+  const bookingTurnStatus = clean(params.bookingTurnStatus);
+
+  /**
+   * Si ya hay un step pendiente, pero el sistema todavía no abrió
+   * formalmente el turno para escuchar al usuario, no aceptamos transcript.
+   *
+   * Esto evita que ruido/eco capturado mientras Aamy está cambiando de prompt
+   * se convierta en respuesta del próximo step.
+   */
+  if (
+    hasPendingBookingStep &&
+    bookingTurnStatus &&
+    bookingTurnStatus !== "waiting_user_answer"
+  ) {
+    return {
+      ignore: true,
+      interruptAssistant: false,
+      reason: "BOOKING_NOT_READY_FOR_USER_ANSWER",
+      msSinceAssistantAudioDone: null,
+    };
+  }
 
   if (
     isLikelyNoiseTranscript({
@@ -328,6 +354,20 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
         ignore: true,
         interruptAssistant: false,
         reason: "ASSISTANT_ECHO",
+        msSinceAssistantAudioDone,
+      };
+    }
+
+    /**
+     * En booking, cualquier transcript demasiado cerca del audio de Aamy
+     * es de alto riesgo: eco, ruido, barge-in falso o corte de audio.
+     * No debe alimentar lastUserTranscript ni avanzar steps.
+     */
+    if (isWaitingForBookingAnswer) {
+      return {
+        ignore: true,
+        interruptAssistant: false,
+        reason: "TOO_CLOSE_TO_ASSISTANT_AUDIO",
         msSinceAssistantAudioDone,
       };
     }

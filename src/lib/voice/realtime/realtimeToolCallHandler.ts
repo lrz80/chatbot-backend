@@ -57,12 +57,16 @@ function clean(value: unknown): string {
 
 function resolveSubmitBookingStepForwardedValue(params: {
   stepKey: string;
+  expectedType?: unknown;
+  slot?: unknown;
   modelValue: unknown;
   transcriptValue: unknown;
   currentTranscriptSeq: number;
   promptAnchorSeq: number;
 }): string {
   const stepKey = clean(params.stepKey);
+  const expectedType = clean(params.expectedType).toLowerCase();
+  const slot = clean(params.slot);
   const modelValue = clean(params.modelValue);
   const transcriptValue = clean(params.transcriptValue);
 
@@ -76,37 +80,39 @@ function resolveSubmitBookingStepForwardedValue(params: {
   }
 
   /**
-   * service:
-   * El modelo puede normalizar el nombre del servicio para resolverlo contra
-   * catálogo/provider. La protección contra adelantos ya está en deferredSubmit.
+   * These step/value types are normalization-sensitive.
+   *
+   * The human transcript is still preserved as transcript_value for auditing,
+   * but the forwarded value should be the model-normalized value when present.
+   *
+   * This is generic and multitenant:
+   * - service names may need canonical/provider resolution
+   * - datetime needs parser-friendly text
+   * - number may convert "veinte libras" -> "20 libras"
+   * - phone may convert "sí" -> "__USE_CALLER_PHONE__" or a normalized phone
+   * - email may fix spelling/punctuation
+   * - service_address may convert spoken numbers into address digits
    */
-  if (stepKey === "service") {
+  const shouldPreferModelValue =
+    stepKey === "service" ||
+    stepKey === "datetime" ||
+    expectedType === "datetime" ||
+    expectedType === "number" ||
+    expectedType === "phone" ||
+    expectedType === "email" ||
+    slot === "service_address" ||
+    slot === "customer_phone" ||
+    slot === "customer_email";
+
+  if (shouldPreferModelValue) {
     if (modelValue) return modelValue;
     if (transcriptIsAfterPrompt) return transcriptValue;
     return "";
   }
 
   /**
-   * datetime:
-   * No hacemos detección por palabras ni regex.
-   * No decidimos aquí si algo "parece fecha".
-   *
-   * Regla:
-   * - Si el modelo ya produjo un valor para datetime, se lo dejamos al parser.
-   * - El parser de datetime es quien debe validar si sirve o no.
-   *
-   * Esto evita que un transcript posterior como "Hola" pise:
-   * modelValue = "hoy a las 10 de la mañana".
-   */
-  if (stepKey === "datetime") {
-    if (modelValue) return modelValue;
-    if (transcriptIsAfterPrompt) return transcriptValue;
-    return "";
-  }
-
-  /**
-   * Resto de steps:
-   * preferimos el transcript humano nuevo.
+   * For normal free-text fields, prefer the accepted human transcript.
+   * Example: customer_name, notes, custom tenant questions.
    */
   if (transcriptIsAfterPrompt && transcriptValue) {
     return transcriptValue;
@@ -701,6 +707,8 @@ export async function handleRealtimeToolCall(
 
     const forwardedValue = resolveSubmitBookingStepForwardedValue({
       stepKey: clean(effectiveToolArgs.step_key || toolArgs.step_key),
+      expectedType: (realtimeState as any).pendingBookingStepExpectedType,
+      slot: (realtimeState as any).pendingBookingStepSlot,
       modelValue,
       transcriptValue,
       currentTranscriptSeq,
