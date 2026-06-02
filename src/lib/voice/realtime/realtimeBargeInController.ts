@@ -32,32 +32,40 @@ function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
 export function createRealtimeBargeInController(
   params: RealtimeBargeInControllerParams
 ): {
-  interruptAssistantAudio: (source: string) => void;
+  interruptAssistantAudio: (source: string) => boolean;
+  wasRecentlyInterrupted: (windowMs?: number) => boolean;
   reset: () => void;
 } {
   let lastBargeInAtMs = 0;
 
-  function interruptAssistantAudio(source: string): void {
-    if (params.getCallEnding()) return;
+  function interruptAssistantAudio(source: string): boolean {
+    if (params.getCallEnding()) {
+      return false;
+    }
 
     const now = Date.now();
 
-    // Evita ráfagas repetidas de cancel/clear por el mismo corte.
+    /**
+     * Evita ráfagas repetidas de cancel/clear por el mismo corte.
+     * Esto protege contra eventos duplicados de speech_started/transcript_completed.
+     */
     if (now - lastBargeInAtMs < 300) {
-      return;
+      return false;
     }
 
     const responseState = params.responseController.getState();
     const activeResponseId = clean(responseState.activeResponseId);
     const lastAssistantAudioDeltaAtMs = params.getLastAssistantAudioDeltaAtMs();
 
+    const assistantSpeaking = params.getAssistantSpeaking();
+
     const hasAssistantAudioRecently =
-      params.getAssistantSpeaking() ||
+      assistantSpeaking ||
       (lastAssistantAudioDeltaAtMs > 0 &&
         now - lastAssistantAudioDeltaAtMs < 1500);
 
     if (!hasAssistantAudioRecently && !activeResponseId) {
-      return;
+      return false;
     }
 
     lastBargeInAtMs = now;
@@ -70,7 +78,7 @@ export function createRealtimeBargeInController(
       streamSid,
       source,
       activeResponseId: activeResponseId || null,
-      assistantSpeaking: params.getAssistantSpeaking(),
+      assistantSpeaking,
       msSinceLastAssistantAudio:
         lastAssistantAudioDeltaAtMs > 0
           ? now - lastAssistantAudioDeltaAtMs
@@ -93,6 +101,16 @@ export function createRealtimeBargeInController(
 
     params.setAssistantSpeaking(false);
     params.setLastAssistantAudioDoneAtMs(now);
+
+    return true;
+  }
+
+  function wasRecentlyInterrupted(windowMs = 2500): boolean {
+    if (lastBargeInAtMs <= 0) {
+      return false;
+    }
+
+    return Date.now() - lastBargeInAtMs <= windowMs;
   }
 
   function reset(): void {
@@ -101,6 +119,7 @@ export function createRealtimeBargeInController(
 
   return {
     interruptAssistantAudio,
+    wasRecentlyInterrupted,
     reset,
   };
 }

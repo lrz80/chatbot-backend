@@ -422,11 +422,16 @@ export async function createOpenAiRealtimeBridge({
         lastAssistantAudioDeltaAtMs > 0 &&
         Date.now() - lastAssistantAudioDeltaAtMs < 1500;
 
-      if (assistantAudioActive || assistantSpeaking) {
-        bargeInController.interruptAssistantAudio(
-          "conversation.item.input_audio_transcription.completed"
-        );
-      }
+      const didInterruptForTranscript =
+        assistantAudioActive || assistantSpeaking
+          ? bargeInController.interruptAssistantAudio(
+              "conversation.item.input_audio_transcription.completed"
+            )
+          : false;
+
+      const isBargeInTranscript =
+        didInterruptForTranscript ||
+        bargeInController.wasRecentlyInterrupted(2500);
 
       handleRealtimeUserTranscript({
         event,
