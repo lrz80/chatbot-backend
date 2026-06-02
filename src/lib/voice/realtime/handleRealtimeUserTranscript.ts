@@ -44,6 +44,32 @@ function normalizedCharCount(value: string): number {
   return clean(value).replace(/\s+/g, "").length;
 }
 
+function getPendingBookingStepExpectedType(realtimeState: CallState): string {
+  return clean((realtimeState as any)?.pendingBookingStepExpectedType)
+    .toLowerCase();
+}
+
+function getPendingBookingStepValidationMode(realtimeState: CallState): string {
+  return clean(
+    (realtimeState as any)?.pendingBookingStepValidationConfig?.mode
+  ).toLowerCase();
+}
+
+function isShortSemanticBookingAnswerAllowed(params: {
+  realtimeState: CallState;
+  pendingBookingStepKey: string;
+}): boolean {
+  const expectedType = getPendingBookingStepExpectedType(params.realtimeState);
+  const validationMode = getPendingBookingStepValidationMode(
+    params.realtimeState
+  );
+
+  return (
+    expectedType === "confirmation" ||
+    validationMode === "confirm_or_replace"
+  );
+}
+
 function normalizeForEchoComparison(value: unknown): string {
   return String(value ?? "")
     .trim()
@@ -125,6 +151,7 @@ function uniqueLetterRatio(value: string): number {
 function isLikelyNoiseTranscript(params: {
   transcript: string;
   allowLowVarietyHeuristic: boolean;
+  allowShortSemanticAnswer: boolean;
 }): boolean {
   const cleaned = clean(params.transcript);
 
@@ -134,9 +161,11 @@ function isLikelyNoiseTranscript(params: {
   const digits = digitCount(cleaned);
   const chars = normalizedCharCount(cleaned);
 
-  if (chars <= 1) return true;
-
   if (letters === 0 && digits === 0) return true;
+
+  if (chars <= 1 && !params.allowShortSemanticAnswer) {
+    return true;
+  }
 
   /**
    * Esta heurística sirve para filtrar ruido fuera del booking flow.
@@ -247,6 +276,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   minMsAfterAssistantAudio: number;
   bookingTurnStatus: string;
   pendingBookingStepKey: string;
+  realtimeState: CallState;
   lastAssistantTranscript?: string | null;
 }): {
   ignore: boolean;
@@ -320,10 +350,18 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     };
   }
 
+  const allowShortSemanticAnswer =
+    isWaitingForBookingAnswer &&
+    isShortSemanticBookingAnswerAllowed({
+      realtimeState: params.realtimeState,
+      pendingBookingStepKey: clean(params.pendingBookingStepKey),
+    });
+
   if (
     isLikelyNoiseTranscript({
       transcript,
       allowLowVarietyHeuristic: !isWaitingForBookingAnswer,
+      allowShortSemanticAnswer,
     })
   ) {
     return {
@@ -489,6 +527,7 @@ export async function handleRealtimeUserTranscript(params: {
     pendingBookingStepKey: clean(
       (params.realtimeState as any)?.pendingBookingStepKey
     ),
+    realtimeState: params.realtimeState,
     lastAssistantTranscript: params.lastAssistantTranscript,
   });
 
