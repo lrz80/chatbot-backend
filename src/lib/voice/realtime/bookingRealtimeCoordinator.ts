@@ -63,6 +63,23 @@ function getPendingBookingStepPromptAnchorSeq(realtimeState: CallState): number 
     : -1;
 }
 
+function canProcessEarlyAnswerForPendingStep(params: {
+  bookingTurnStatus: string;
+  pendingBookingStepKey: string;
+}): boolean {
+  if (params.bookingTurnStatus !== "waiting_assistant_prompt") {
+    return false;
+  }
+
+  const earlyAnswerAllowedSteps = new Set([
+    "phone",
+    "confirm",
+    "offer_booking_sms",
+  ]);
+
+  return earlyAnswerAllowedSteps.has(params.pendingBookingStepKey);
+}
+
 function shouldRequestNumberModelResolution(params: {
   realtimeState: CallState;
   lastUserTranscript: string;
@@ -436,12 +453,21 @@ export function createBookingRealtimeCoordinator(
     const pendingBookingStepPromptAnchorSeq =
       getPendingBookingStepPromptAnchorSeq(realtimeState);
 
-    const hasPendingBookingAnswer =
-      bookingTurnStatus === "waiting_user_answer" &&
+    const hasFreshTranscriptForPendingStep =
       !!pendingBookingStepKey &&
       lastUserTranscriptSeq > pendingBookingStepPromptAnchorSeq;
 
-    if (!hasPendingBookingAnswer) {
+    const canProcessRegularAnswer =
+      bookingTurnStatus === "waiting_user_answer" &&
+      hasFreshTranscriptForPendingStep;
+
+    const canProcessEarlyAnswer =
+      canProcessEarlyAnswerForPendingStep({
+        bookingTurnStatus,
+        pendingBookingStepKey,
+      }) && hasFreshTranscriptForPendingStep;
+
+    if (!canProcessRegularAnswer && !canProcessEarlyAnswer) {
       return;
     }
 
@@ -530,11 +556,18 @@ export function createBookingRealtimeCoordinator(
     const pendingBookingStepPromptAnchorSeq =
       getPendingBookingStepPromptAnchorSeq(realtimeState);
 
-    const hasEarlyCallerAnswer =
-      bookingTurnStatus === "waiting_user_answer" &&
+    const hasFreshTranscriptForPendingStep =
       !!pendingBookingStepKey &&
       !!lastUserTranscript &&
       lastUserTranscriptSeq > pendingBookingStepPromptAnchorSeq;
+
+    const hasEarlyCallerAnswer =
+      hasFreshTranscriptForPendingStep &&
+      (bookingTurnStatus === "waiting_user_answer" ||
+        canProcessEarlyAnswerForPendingStep({
+          bookingTurnStatus,
+          pendingBookingStepKey,
+        }));
 
     if (!hasEarlyCallerAnswer) {
       return;
@@ -547,6 +580,7 @@ export function createBookingRealtimeCoordinator(
       "name",
       "phone",
       "confirm",
+      "offer_booking_sms",
       "service_address",
       "customer_email",
     ]);
