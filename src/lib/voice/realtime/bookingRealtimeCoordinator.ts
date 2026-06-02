@@ -1,4 +1,4 @@
-//src/lib/voice/realtime/bookingRealtimeCoordinator.ts
+// src/lib/voice/realtime/bookingRealtimeCoordinator.ts
 import type { CallState } from "../types";
 import {
   canFlushDeferredSubmitBookingStep,
@@ -9,6 +9,7 @@ import {
 } from "./deferredSubmitBookingStep";
 import { requestServiceStepModelResolution } from "./bookingStep/requestServiceStepModelResolution";
 import { requestNumberStepModelResolution } from "./bookingStep/requestNumberStepModelResolution";
+import { requestNormalizedStepModelResolution } from "./bookingStep/requestNormalizedStepModelResolution";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,
@@ -33,10 +34,6 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function getPendingBookingStepKey(realtimeState: CallState): string {
-  return clean((realtimeState as any).pendingBookingStepKey);
-}
-
 function getBookingTurnStatus(realtimeState: CallState): string {
   return clean((realtimeState as any).bookingTurnStatus);
 }
@@ -47,6 +44,23 @@ function hasDigit(value: string): boolean {
 
 function getPendingBookingStepExpectedType(realtimeState: CallState): string {
   return clean((realtimeState as any).pendingBookingStepExpectedType).toLowerCase();
+}
+
+function getPendingBookingStepSlot(realtimeState: CallState): string {
+  return clean((realtimeState as any).pendingBookingStepSlot).toLowerCase();
+}
+
+function getPendingBookingStepValidationMode(realtimeState: CallState): string {
+  return clean(
+    (realtimeState as any).pendingBookingStepValidationConfig?.mode
+  ).toLowerCase();
+}
+
+function getPendingBookingStepPromptAnchorSeq(realtimeState: CallState): number {
+  return typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq ===
+    "number"
+    ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
+    : -1;
 }
 
 function shouldRequestNumberModelResolution(params: {
@@ -63,11 +77,25 @@ function shouldRequestNumberModelResolution(params: {
   );
 }
 
-function getPendingBookingStepPromptAnchorSeq(realtimeState: CallState): number {
-  return typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq ===
-    "number"
-    ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
-    : -1;
+function shouldRequestNormalizedModelResolution(params: {
+  realtimeState: CallState;
+  lastUserTranscript: string;
+}): boolean {
+  const lastUserTranscript = clean(params.lastUserTranscript);
+  if (!lastUserTranscript) return false;
+
+  const expectedType = getPendingBookingStepExpectedType(params.realtimeState);
+  const slot = getPendingBookingStepSlot(params.realtimeState);
+  const validationMode = getPendingBookingStepValidationMode(params.realtimeState);
+
+  return (
+    slot === "service_address" ||
+    slot === "customer_phone" ||
+    slot === "customer_email" ||
+    expectedType === "phone" ||
+    expectedType === "email" ||
+    validationMode === "confirm_or_replace"
+  );
 }
 
 function getDeferredSubmittedStepKey(
@@ -107,6 +135,7 @@ export function createBookingRealtimeCoordinator(
   let lastBookingTranscriptNudgeSeq = 0;
   let lastBookingEarlyAnswerCatchupKey = "";
   let lastBookingNumberModelResolutionKey = "";
+  let lastBookingNormalizedModelResolutionKey = "";
 
   let deferredSubmitBookingStep: DeferredSubmitBookingStepState = {
     event: null,
@@ -117,6 +146,7 @@ export function createBookingRealtimeCoordinator(
     lastBookingTranscriptNudgeSeq = 0;
     lastBookingEarlyAnswerCatchupKey = "";
     lastBookingNumberModelResolutionKey = "";
+    lastBookingNormalizedModelResolutionKey = "";
     deferredSubmitBookingStep = {
       event: null,
       reason: null,
@@ -287,6 +317,7 @@ export function createBookingRealtimeCoordinator(
       paramsForResolution.source,
       paramsForResolution.pendingBookingStepKey,
       String(paramsForResolution.lastUserTranscriptSeq),
+      "number",
     ].join(":");
 
     if (lastBookingNumberModelResolutionKey === resolutionKey) {
@@ -309,6 +340,89 @@ export function createBookingRealtimeCoordinator(
     return true;
   }
 
+  function requestNormalizedResolutionOnce(paramsForResolution: {
+    source: string;
+    pendingBookingStepKey: string;
+    lastUserTranscript: string;
+    lastUserTranscriptSeq: number;
+    pendingBookingStepPromptAnchorSeq: number;
+  }): boolean {
+    const realtimeState = params.getRealtimeState();
+
+    const resolutionKey = [
+      params.getCallSid() || "",
+      paramsForResolution.source,
+      paramsForResolution.pendingBookingStepKey,
+      String(paramsForResolution.lastUserTranscriptSeq),
+      "normalized",
+    ].join(":");
+
+    if (lastBookingNormalizedModelResolutionKey === resolutionKey) {
+      return true;
+    }
+
+    lastBookingNormalizedModelResolutionKey = resolutionKey;
+
+    requestNormalizedStepModelResolution({
+      callSid: params.getCallSid(),
+      source: paramsForResolution.source,
+      pendingBookingStepKey: paramsForResolution.pendingBookingStepKey,
+      pendingSlot: getPendingBookingStepSlot(realtimeState),
+      expectedType: getPendingBookingStepExpectedType(realtimeState),
+      validationMode: getPendingBookingStepValidationMode(realtimeState),
+      lastUserTranscript: paramsForResolution.lastUserTranscript,
+      lastUserTranscriptSeq: paramsForResolution.lastUserTranscriptSeq,
+      pendingBookingStepPromptAnchorSeq:
+        paramsForResolution.pendingBookingStepPromptAnchorSeq,
+      requestRealtimeResponse: params.requestRealtimeResponse,
+    });
+
+    return true;
+  }
+
+  function maybeRequestModelResolutionBeforeRawSubmit(paramsForResolution: {
+    source: string;
+    realtimeState: CallState;
+    pendingBookingStepKey: string;
+    lastUserTranscript: string;
+    lastUserTranscriptSeq: number;
+    pendingBookingStepPromptAnchorSeq: number;
+  }): boolean {
+    if (
+      shouldRequestNumberModelResolution({
+        realtimeState: paramsForResolution.realtimeState,
+        lastUserTranscript: paramsForResolution.lastUserTranscript,
+      })
+    ) {
+      return requestNumberResolutionOnce({
+        source: paramsForResolution.source,
+        pendingBookingStepKey: paramsForResolution.pendingBookingStepKey,
+        lastUserTranscript: paramsForResolution.lastUserTranscript,
+        lastUserTranscriptSeq: paramsForResolution.lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq:
+          paramsForResolution.pendingBookingStepPromptAnchorSeq,
+      });
+    }
+
+    if (
+      shouldRequestNormalizedModelResolution({
+        realtimeState: paramsForResolution.realtimeState,
+        lastUserTranscript: paramsForResolution.lastUserTranscript,
+      })
+    ) {
+      return requestNormalizedResolutionOnce({
+        source: paramsForResolution.source,
+        pendingBookingStepKey: paramsForResolution.pendingBookingStepKey,
+        lastUserTranscript: paramsForResolution.lastUserTranscript,
+        lastUserTranscriptSeq: paramsForResolution.lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq:
+          paramsForResolution.pendingBookingStepPromptAnchorSeq,
+      });
+    }
+
+    return false;
+  }
+
   function nudgeBookingStepProcessingAfterTranscript(): void {
     const realtimeState = params.getRealtimeState();
     const lastUserTranscript = params.getLastUserTranscript();
@@ -320,10 +434,7 @@ export function createBookingRealtimeCoordinator(
     );
 
     const pendingBookingStepPromptAnchorSeq =
-      typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq ===
-      "number"
-        ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
-        : -1;
+      getPendingBookingStepPromptAnchorSeq(realtimeState);
 
     const hasPendingBookingAnswer =
       bookingTurnStatus === "waiting_user_answer" &&
@@ -387,19 +498,15 @@ export function createBookingRealtimeCoordinator(
     }
 
     if (
-      shouldRequestNumberModelResolution({
-        realtimeState,
-        lastUserTranscript,
-      })
-    ) {
-      requestNumberResolutionOnce({
+      maybeRequestModelResolutionBeforeRawSubmit({
         source: "booking_step_transcript_nudge",
+        realtimeState,
         pendingBookingStepKey,
         lastUserTranscript,
         lastUserTranscriptSeq,
         pendingBookingStepPromptAnchorSeq,
-      });
-
+      })
+    ) {
       return;
     }
 
@@ -421,10 +528,7 @@ export function createBookingRealtimeCoordinator(
     );
 
     const pendingBookingStepPromptAnchorSeq =
-      typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq ===
-      "number"
-        ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
-        : -1;
+      getPendingBookingStepPromptAnchorSeq(realtimeState);
 
     const hasEarlyCallerAnswer =
       bookingTurnStatus === "waiting_user_answer" &&
@@ -443,6 +547,8 @@ export function createBookingRealtimeCoordinator(
       "name",
       "phone",
       "confirm",
+      "service_address",
+      "customer_email",
     ]);
 
     if (!catchupAllowedSteps.has(pendingBookingStepKey)) {
@@ -547,19 +653,15 @@ export function createBookingRealtimeCoordinator(
     }
 
     if (
-      shouldRequestNumberModelResolution({
-        realtimeState,
-        lastUserTranscript,
-      })
-    ) {
-      requestNumberResolutionOnce({
+      maybeRequestModelResolutionBeforeRawSubmit({
         source: "booking_step_early_answer_catchup",
+        realtimeState,
         pendingBookingStepKey,
         lastUserTranscript,
         lastUserTranscriptSeq,
         pendingBookingStepPromptAnchorSeq,
-      });
-
+      })
+    ) {
       return;
     }
 
