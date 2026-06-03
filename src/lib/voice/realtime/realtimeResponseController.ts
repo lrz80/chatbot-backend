@@ -1,4 +1,4 @@
-//src/lib/voice/realtime/realtimeResponseController.ts
+// src/lib/voice/realtime/realtimeResponseController.ts
 import WebSocket from "ws";
 
 type ResponseControllerParams = {
@@ -24,9 +24,33 @@ type ResponseControllerState = {
   awaitingResponseSource: string | null;
 };
 
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
 function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
   if (socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify(payload));
+}
+
+function shouldSupersedeActiveResponse(params: {
+  source: string;
+  shouldInterruptActiveResponse: boolean;
+}): boolean {
+  const source = clean(params.source);
+
+  if (params.shouldInterruptActiveResponse) {
+    return true;
+  }
+
+  /**
+   * Tool followups are not casual assistant chatter.
+   * They are runtime-controlled responses to a completed tool result.
+   *
+   * If they remain queued behind an active/stale response, the caller hears silence.
+   * This is generic runtime policy, not tenant/business-specific logic.
+   */
+  return source.startsWith("tool_followup:");
 }
 
 export function createRealtimeResponseController(
@@ -61,6 +85,11 @@ export function createRealtimeResponseController(
     const callSid = params.getCallSid();
     const streamSid = params.getStreamSid();
 
+    const shouldSupersede = shouldSupersedeActiveResponse({
+      source,
+      shouldInterruptActiveResponse,
+    });
+
     if (activeResponseId) {
       pendingResponseCreate = event;
       pendingResponseSource = source;
@@ -69,11 +98,13 @@ export function createRealtimeResponseController(
         callSid,
         source,
         activeResponseId,
+        activeResponseSource,
         shouldInterruptActiveResponse,
+        shouldSupersede,
       });
 
       if (
-        shouldInterruptActiveResponse &&
+        shouldSupersede &&
         params.openAiSocket.readyState === WebSocket.OPEN
       ) {
         console.warn("[VOICE_REALTIME][ACTIVE_RESPONSE_CANCEL_REQUESTED]", {
@@ -100,6 +131,14 @@ export function createRealtimeResponseController(
 
     activeResponseStartedAtUserTranscriptSeq = startedAtUserTranscriptSeq;
     awaitingResponseSource = source;
+
+    console.warn("[VOICE_REALTIME][RESPONSE_CREATE_REQUESTED]", {
+      callSid,
+      source,
+      startedAtUserTranscriptSeq,
+      hasPendingResponseCreate: Boolean(pendingResponseCreate),
+    });
+
     sendJson(params.openAiSocket, event);
   }
 
@@ -108,12 +147,19 @@ export function createRealtimeResponseController(
     if (activeResponseId) return false;
     if (params.openAiSocket.readyState !== WebSocket.OPEN) return false;
 
+    const callSid = params.getCallSid();
+
     const event = pendingResponseCreate;
     const source = pendingResponseSource;
 
     pendingResponseCreate = null;
     pendingResponseSource = null;
     awaitingResponseSource = source;
+
+    console.warn("[VOICE_REALTIME][PENDING_RESPONSE_CREATE_FLUSHED]", {
+      callSid,
+      source,
+    });
 
     sendJson(params.openAiSocket, event);
     return true;
@@ -139,6 +185,8 @@ export function createRealtimeResponseController(
     activeResponseSource = null;
     activeResponseStartedAtUserTranscriptSeq =
       paramsForResponse.lastUserTranscriptSeq;
+
+    flushPendingRealtimeResponse();
 
     return getState();
   }
