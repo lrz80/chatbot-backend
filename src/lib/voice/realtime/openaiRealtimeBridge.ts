@@ -52,6 +52,43 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function resolveGoodbyeHangupFallbackMs(transcript: string): number {
+  const configured = Number(process.env.REALTIME_GOODBYE_HANGUP_FALLBACK_MS);
+
+  if (Number.isFinite(configured) && configured >= 2000) {
+    return Math.min(configured, 15000);
+  }
+
+  const words = clean(transcript).split(/\s+/).filter(Boolean).length;
+
+  /**
+   * Approximate spoken goodbye duration.
+   * This is only a fallback. The primary signal is Twilio's mark event.
+   */
+  const estimatedSpeechMs = Math.ceil((words / 2.4) * 1000);
+
+  return Math.min(Math.max(estimatedSpeechMs + 1800, 3500), 10000);
+}
+
+function sendTwilioMark(params: {
+  twilioSocket: WebSocket;
+  streamSid: string | null;
+  markName: string;
+}): boolean {
+  if (!params.streamSid) return false;
+  if (params.twilioSocket.readyState !== WebSocket.OPEN) return false;
+
+  sendJson(params.twilioSocket, {
+    event: "mark",
+    streamSid: params.streamSid,
+    mark: {
+      name: params.markName,
+    },
+  });
+
+  return true;
+}
+
 export async function createOpenAiRealtimeBridge({
   twilioSocket,
 }: BridgeParams): Promise<void> {
@@ -85,6 +122,9 @@ export async function createOpenAiRealtimeBridge({
   let hangupRequestedByTool = false;
   let endCallGoodbyeRequested = false;
   let endCallGoodbyeResponseId: string | null = null;
+
+  let goodbyePlaybackMarkName: string | null = null;
+  let goodbyeHangupFallbackTimer: NodeJS.Timeout | null = null;
 
   let callEnding = false;
 
@@ -179,31 +219,70 @@ export async function createOpenAiRealtimeBridge({
       requestRealtimeResponse,
     });
 
+  function performTwilioHangup(source: string): void {
+    if (goodbyeHangupFallbackTimer) {
+      clearTimeout(goodbyeHangupFallbackTimer);
+      goodbyeHangupFallbackTimer = null;
+    }
+
+    if (!callEnding) {
+      callEnding = true;
+    }
+
+    console.log("[VOICE_REALTIME][TWILIO_HANGUP_EXECUTING]", {
+      callSid,
+      source,
+    });
+
+    endTwilioCall({
+      callSid,
+      accountSid: twilioAccountSid,
+    }).catch((error) => {
+      console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
+        callSid,
+        accountSid: twilioAccountSid,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
   function scheduleTwilioHangupAfterGoodbye(source: string): void {
     if (callEnding) return;
 
     hangupRequestedByTool = false;
     endCallGoodbyeRequested = false;
     endCallGoodbyeResponseId = null;
-    callEnding = true;
+
+    const markName = `goodbye:${Date.now()}`;
+    goodbyePlaybackMarkName = markName;
+
+    const markSent = sendTwilioMark({
+      twilioSocket,
+      streamSid,
+      markName,
+    });
+
+    const fallbackMs = resolveGoodbyeHangupFallbackMs(lastAssistantTranscript);
 
     console.log("[VOICE_REALTIME][TWILIO_HANGUP_SCHEDULED_AFTER_GOODBYE]", {
       callSid,
       source,
+      markName,
+      markSent,
+      fallbackMs,
+      lastAssistantTranscript,
     });
 
-    setTimeout(() => {
-      endTwilioCall({
-        callSid,
-        accountSid: twilioAccountSid,
-      }).catch((error) => {
-        console.error("[VOICE_REALTIME][TWILIO_HANGUP_ERROR]", {
-          callSid,
-          accountSid: twilioAccountSid,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }, 1200);
+    goodbyeHangupFallbackTimer = setTimeout(() => {
+      performTwilioHangup("goodbye_mark_fallback_timeout");
+    }, fallbackMs);
+
+    /**
+     * Do not set callEnding=true yet.
+     * Twilio may still be playing the goodbye audio already queued.
+     * We only mark callEnding when Twilio confirms playback via mark,
+     * or when the fallback timeout fires.
+     */
   }
 
   function requestRealtimeResponse(
@@ -628,6 +707,27 @@ export async function createOpenAiRealtimeBridge({
 
     if (!event) return;
 
+    if ((event as any).event === "mark") {
+      const markName = clean((event as any)?.mark?.name || "");
+
+      console.log("[VOICE_REALTIME][TWILIO_MARK_RECEIVED]", {
+        callSid,
+        streamSid,
+        markName,
+        goodbyePlaybackMarkName,
+      });
+
+      if (
+        goodbyePlaybackMarkName &&
+        markName === goodbyePlaybackMarkName
+      ) {
+        goodbyePlaybackMarkName = null;
+        performTwilioHangup("twilio_goodbye_mark_received");
+      }
+
+      return;
+    }
+
     if (isTwilioStartEvent(event)) {
       streamSid = event.start.streamSid;
       callSid = event.start.callSid || null;
@@ -638,6 +738,13 @@ export async function createOpenAiRealtimeBridge({
 
       hangupRequestedByTool = false;
       callEnding = false;
+      goodbyePlaybackMarkName = null;
+
+      if (goodbyeHangupFallbackTimer) {
+        clearTimeout(goodbyeHangupFallbackTimer);
+        goodbyeHangupFallbackTimer = null;
+      }
+
       twilioAccountSid = clean((event as any)?.start?.accountSid || "") || null;
       localeLocked = false;
 

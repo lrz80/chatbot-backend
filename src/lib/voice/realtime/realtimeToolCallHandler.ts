@@ -17,6 +17,7 @@ import { applyBookingRuntimeStateAfterToolResult } from "./bookingRuntimeState";
 import { canSubmitBookingStepNow } from "./bookingTurnState";
 import { guardGetBookingFlowIntent } from "./toolGuards/guardGetBookingFlowIntent";
 import { bootstrapSubmitBookingStepAfterFlowLoad } from "./toolGuards/bootstrapSubmitBookingStepAfterFlowLoad";
+import { isStaleAlreadyHandledSubmitBlockedByTurnState } from "./toolGuards/isStaleAlreadyHandledSubmitBlockedByTurnState";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -634,9 +635,47 @@ export async function handleRealtimeToolCall(
        */
       const shouldSilentlyIgnoreBlockedSubmit =
         turnGate.reason === "NO_NEW_USER_ANSWER" ||
-        turnGate.reason === "ASSISTANT_PROMPT_NOT_COMPLETED";
+        turnGate.reason === "ASSISTANT_PROMPT_NOT_COMPLETED" ||
+        isStaleAlreadyHandledSubmitBlockedByTurnState({
+          reason: turnGate.reason,
+          submittedStepKey: clean(toolArgs.step_key),
+          pendingStepKey: realtimeState.pendingBookingStepKey || "",
+          bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
+          lastUserTranscript,
+          lastUserTranscriptSeq:
+            typeof realtimeState.lastUserTranscriptSeq === "number"
+              ? realtimeState.lastUserTranscriptSeq
+              : -1,
+          lastSubmittedBookingStepKey:
+            realtimeState.lastSubmittedBookingStepKey || "",
+          lastSubmittedBookingTranscript:
+            realtimeState.lastSubmittedBookingTranscript || "",
+          lastSubmittedBookingTranscriptSeq:
+            typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
+              ? realtimeState.lastSubmittedBookingTranscriptSeq
+              : -1,
+        });
 
-      if (!shouldSilentlyIgnoreBlockedSubmit) {
+      if (shouldSilentlyIgnoreBlockedSubmit) {
+        console.warn("[VOICE_REALTIME][BOOKING_BLOCKED_SUBMIT_SILENTLY_IGNORED]", {
+          callSid,
+          reason: turnGate.reason,
+          submittedStepKey: clean(toolArgs.step_key),
+          pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
+          bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
+          lastUserTranscript,
+          lastUserTranscriptSeq:
+            typeof realtimeState.lastUserTranscriptSeq === "number"
+              ? realtimeState.lastUserTranscriptSeq
+              : null,
+          lastSubmittedBookingStepKey:
+            realtimeState.lastSubmittedBookingStepKey || "",
+          lastSubmittedBookingTranscriptSeq:
+            typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
+              ? realtimeState.lastSubmittedBookingTranscriptSeq
+              : null,
+        });
+      } else {
         requestRealtimeResponse(
           {
             instructions: buildSubmitBookingStepNotReadyInstructions({
