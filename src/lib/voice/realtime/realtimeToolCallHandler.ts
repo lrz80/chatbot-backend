@@ -19,6 +19,7 @@ import { guardGetBookingFlowIntent } from "./toolGuards/guardGetBookingFlowInten
 import { bootstrapSubmitBookingStepAfterFlowLoad } from "./toolGuards/bootstrapSubmitBookingStepAfterFlowLoad";
 import { isStaleAlreadyHandledSubmitBlockedByTurnState } from "./toolGuards/isStaleAlreadyHandledSubmitBlockedByTurnState";
 import { buildSyntheticBookingStepFollowupInstructions } from "./toolFollowup/buildSyntheticBookingStepFollowupInstructions";
+import { handleStaleSubmitBookingStepPrompt } from "./toolGuards/handleStaleSubmitBookingStepPrompt";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -658,23 +659,13 @@ export async function handleRealtimeToolCall(
         });
 
       if (shouldSilentlyIgnoreBlockedSubmit) {
-        console.warn("[VOICE_REALTIME][BOOKING_BLOCKED_SUBMIT_SILENTLY_IGNORED]", {
+        handleStaleSubmitBookingStepPrompt({
           callSid,
-          reason: turnGate.reason,
+          realtimeState,
+          turnGateReason: turnGate.reason || "UNKNOWN",
           submittedStepKey: clean(toolArgs.step_key),
-          pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
-          bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
           lastUserTranscript,
-          lastUserTranscriptSeq:
-            typeof realtimeState.lastUserTranscriptSeq === "number"
-              ? realtimeState.lastUserTranscriptSeq
-              : null,
-          lastSubmittedBookingStepKey:
-            realtimeState.lastSubmittedBookingStepKey || "",
-          lastSubmittedBookingTranscriptSeq:
-            typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
-              ? realtimeState.lastSubmittedBookingTranscriptSeq
-              : null,
+          requestRealtimeResponse,
         });
       } else {
         requestRealtimeResponse(
