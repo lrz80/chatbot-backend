@@ -24,7 +24,7 @@ import { clean } from "./utils/clean";
 import { sendRealtimeJson } from "./socket/sendRealtimeJson";
 import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBookingStepEffectiveArgs";
 import { buildSubmitBookingStepNotReadyInstructions } from "./toolFollowup/buildSubmitBookingStepNotReadyInstructions";
-import { resolveSyntheticSubmitBookingStepFollowup } from "./toolFollowup/resolveSyntheticSubmitBookingStepFollowup";
+import { resolveSyntheticDirectBookingFollowup } from "./toolFollowup/resolveSyntheticDirectBookingFollowup";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -777,36 +777,34 @@ export async function handleRealtimeToolCall(
         nextRequiredPrompt: clean(toolResult?.next_required_step?.prompt || ""),
       });
 
-      const syntheticDirectInstructions =
-        resolveSyntheticSubmitBookingStepFollowup({
-          toolName,
-          toolResult,
-          currentLocale:
-            clean((nextRealtimeState as any)?.lang) ||
-            clean((realtimeState as any)?.lang) ||
-            currentLocale,
-        });
+      const syntheticDirectFollowup = resolveSyntheticDirectBookingFollowup({
+        toolName,
+        callId,
+        toolResult: (toolResult || {}) as RealtimeToolResult,
+        nextRealtimeState,
+        currentLocale:
+          clean((nextRealtimeState as any)?.lang) ||
+          clean((realtimeState as any)?.lang) ||
+          currentLocale,
+      });
 
-      if (syntheticDirectInstructions) {
+      if (syntheticDirectFollowup?.shouldForceDirectFollowup) {
         console.log("[VOICE_REALTIME][SYNTHETIC_DIRECT_FOLLOWUP_FORCED]", {
           callSid,
-          toolName,
-          callId,
-          nextRequiredStepKey: clean(toolResult?.next_required_step?.step_key || ""),
-          source: `tool_followup:${toolName}:synthetic_direct`,
+          ...syntheticDirectFollowup.logPayload,
         });
 
         requestRealtimeResponse(
           {
-            instructions: syntheticDirectInstructions,
+            instructions: syntheticDirectFollowup.instructions,
           },
-          `tool_followup:${toolName}:synthetic_direct`
+          syntheticDirectFollowup.source
         );
 
         return {
           consumed: true,
           result: toolResult as RealtimeToolResult,
-          realtimeState: nextRealtimeState,
+          realtimeState: syntheticDirectFollowup.nextRealtimeState,
           bookingFlowLoaded: nextBookingFlowLoaded,
           hangupRequestedByTool,
           callEnding: nextCallEnding,
