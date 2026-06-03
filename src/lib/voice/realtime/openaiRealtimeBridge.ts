@@ -674,8 +674,15 @@ export async function createOpenAiRealtimeBridge({
 
       bookingCoordinator.flushDeferredSubmitBookingStepIfReady("response_done");
 
-      if (responseDoneResult.shouldFlushPendingResponse) {
+      const flushedPendingResponse =
         responseController.flushPendingRealtimeResponse();
+
+      if (flushedPendingResponse) {
+        console.log("[VOICE_REALTIME][PENDING_RESPONSE_FLUSHED_AFTER_RESPONSE_DONE]", {
+          callSid,
+          completedResponseSource,
+          pendingResponseSource: responseStateBeforeDone.pendingResponseSource,
+        });
       }
 
       return;
