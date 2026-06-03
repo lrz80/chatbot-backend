@@ -544,27 +544,73 @@ export async function handleRealtimeToolCall(
        * If the issue is simply that there is no new transcript yet, do not create
        * another assistant response and do not interrupt active audio.
        */
+      const submittedStepKeyForBlockedSubmit = clean(toolArgs.step_key);
+
+      const lastUserTranscriptSeqForBlockedSubmit =
+        typeof realtimeState.lastUserTranscriptSeq === "number"
+          ? realtimeState.lastUserTranscriptSeq
+          : -1;
+
+      const lastSubmittedBookingTranscriptSeqForBlockedSubmit =
+        typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
+          ? realtimeState.lastSubmittedBookingTranscriptSeq
+          : -1;
+
+      const lastSubmittedBookingStepKeyForBlockedSubmit = clean(
+        realtimeState.lastSubmittedBookingStepKey || ""
+      );
+
+      const isAlreadyHandledSubmitForSameTranscriptSeq =
+        submittedStepKeyForBlockedSubmit &&
+        lastSubmittedBookingStepKeyForBlockedSubmit &&
+        submittedStepKeyForBlockedSubmit === lastSubmittedBookingStepKeyForBlockedSubmit &&
+        lastUserTranscriptSeqForBlockedSubmit >= 0 &&
+        lastSubmittedBookingTranscriptSeqForBlockedSubmit ===
+          lastUserTranscriptSeqForBlockedSubmit;
+
+      const isStaleToolCallDuringAssistantPrompt =
+        turnGate.reason === "ASSISTANT_PROMPT_NOT_COMPLETED" &&
+        isAlreadyHandledSubmitForSameTranscriptSeq;
+
+      if (isStaleToolCallDuringAssistantPrompt) {
+        console.warn("[VOICE_REALTIME][BOOKING_STALE_TOOL_CALL_IGNORED_DURING_ASSISTANT_PROMPT]", {
+          callSid,
+          reason: turnGate.reason,
+          submittedStepKey: submittedStepKeyForBlockedSubmit,
+          pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
+          bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
+          lastUserTranscript,
+          lastUserTranscriptSeq: lastUserTranscriptSeqForBlockedSubmit,
+          lastSubmittedBookingStepKey: lastSubmittedBookingStepKeyForBlockedSubmit,
+          lastSubmittedBookingTranscriptSeq:
+            lastSubmittedBookingTranscriptSeqForBlockedSubmit,
+        });
+
+        return {
+          consumed: true,
+          result: blockedResult,
+          realtimeState,
+          bookingFlowLoaded,
+          hangupRequestedByTool: false,
+          callEnding,
+          resetLastUserDigits: false,
+        };
+      }
+
       const shouldSilentlyIgnoreBlockedSubmit =
         turnGate.reason === "NO_NEW_USER_ANSWER" ||
-        turnGate.reason === "ASSISTANT_PROMPT_NOT_COMPLETED" ||
         isStaleAlreadyHandledSubmitBlockedByTurnState({
           reason: turnGate.reason,
-          submittedStepKey: clean(toolArgs.step_key),
+          submittedStepKey: submittedStepKeyForBlockedSubmit,
           pendingStepKey: realtimeState.pendingBookingStepKey || "",
           bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
           lastUserTranscript,
-          lastUserTranscriptSeq:
-            typeof realtimeState.lastUserTranscriptSeq === "number"
-              ? realtimeState.lastUserTranscriptSeq
-              : -1,
-          lastSubmittedBookingStepKey:
-            realtimeState.lastSubmittedBookingStepKey || "",
+          lastUserTranscriptSeq: lastUserTranscriptSeqForBlockedSubmit,
+          lastSubmittedBookingStepKey: lastSubmittedBookingStepKeyForBlockedSubmit,
           lastSubmittedBookingTranscript:
             realtimeState.lastSubmittedBookingTranscript || "",
           lastSubmittedBookingTranscriptSeq:
-            typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
-              ? realtimeState.lastSubmittedBookingTranscriptSeq
-              : -1,
+            lastSubmittedBookingTranscriptSeqForBlockedSubmit,
         });
 
       if (shouldSilentlyIgnoreBlockedSubmit) {
@@ -572,7 +618,7 @@ export async function handleRealtimeToolCall(
           callSid,
           realtimeState,
           turnGateReason: turnGate.reason || "UNKNOWN",
-          submittedStepKey: clean(toolArgs.step_key),
+          submittedStepKey: submittedStepKeyForBlockedSubmit,
           lastUserTranscript,
           requestRealtimeResponse,
         });
