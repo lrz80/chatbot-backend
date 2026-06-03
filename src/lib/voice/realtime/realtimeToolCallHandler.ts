@@ -24,6 +24,7 @@ import { clean } from "./utils/clean";
 import { sendRealtimeJson } from "./socket/sendRealtimeJson";
 import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBookingStepEffectiveArgs";
 import { buildSubmitBookingStepNotReadyInstructions } from "./toolFollowup/buildSubmitBookingStepNotReadyInstructions";
+import { resolveSyntheticSubmitBookingStepFollowup } from "./toolFollowup/resolveSyntheticSubmitBookingStepFollowup";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -735,13 +736,23 @@ export async function handleRealtimeToolCall(
         ""
     ).trim();
 
-    const syntheticFollowupInstructions = isSyntheticToolCall
-      ? buildSyntheticBookingStepFollowupInstructions({
+    const syntheticSubmitBookingStepFollowupInstructions = isSyntheticToolCall
+      ? resolveSyntheticSubmitBookingStepFollowup({
           toolName,
           toolResult,
-          currentLocale: followupLocale,
+          currentLocale: followupLocale || currentLocale,
         })
       : "";
+
+    const syntheticFollowupInstructions =
+      syntheticSubmitBookingStepFollowupInstructions ||
+      (isSyntheticToolCall
+        ? buildSyntheticBookingStepFollowupInstructions({
+            toolName,
+            toolResult,
+            currentLocale: followupLocale || currentLocale,
+          })
+        : "");
 
     const resolvedFollowupInstructions = resolveRealtimeToolFollowupInstructions({
       toolName,
