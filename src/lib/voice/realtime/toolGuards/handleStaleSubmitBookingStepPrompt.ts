@@ -1,3 +1,4 @@
+// src/lib/voice/realtime/toolGuards/handleStaleSubmitBookingStepPrompt.ts
 import type { CallState } from "../../types";
 
 type HandleStaleSubmitBookingStepPromptParams = {
@@ -16,11 +17,16 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function getNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : -1;
+}
+
 export function handleStaleSubmitBookingStepPrompt(
   params: HandleStaleSubmitBookingStepPromptParams
 ): {
   forcedCurrentStepPrompt: boolean;
   ignoredAlreadyHandledDuplicate: boolean;
+  rejectedModelCorrectionDuringRetry: boolean;
 } {
   const {
     callSid,
@@ -39,33 +45,33 @@ export function handleStaleSubmitBookingStepPrompt(
     realtimeState.lastSubmittedBookingStepKey
   );
 
-  const lastUserTranscriptSeq =
-    typeof realtimeState.lastUserTranscriptSeq === "number"
-      ? realtimeState.lastUserTranscriptSeq
-      : -1;
+  const lastUserTranscriptSeq = getNumber(realtimeState.lastUserTranscriptSeq);
 
-  const lastSubmittedBookingTranscriptSeq =
-    typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
-      ? realtimeState.lastSubmittedBookingTranscriptSeq
-      : -1;
+  const lastSubmittedBookingTranscriptSeq = getNumber(
+    realtimeState.lastSubmittedBookingTranscriptSeq
+  );
+
+  const sameTranscriptAlreadySubmitted =
+    lastUserTranscriptSeq > -1 &&
+    lastSubmittedBookingTranscriptSeq > -1 &&
+    lastSubmittedBookingTranscriptSeq === lastUserTranscriptSeq;
 
   /**
-   * This is the common OpenAI realtime race:
-   * 1. Server synthetic submit already processed the user's answer.
-   * 2. Runtime advanced to the next step.
-   * 3. OpenAI later emits a stale submit_booking_step for the old step.
+   * Case 1:
+   * The server already processed this user's answer and advanced to another step.
+   * OpenAI later emits the same old submit_booking_step.
    *
-   * In this case we should not force another assistant prompt, because the
-   * normal tool follow-up for the current step is already responsible for
-   * speaking the next configured prompt.
+   * Example:
+   * - submittedStepKey: datetime
+   * - pendingStepKey: name
+   *
+   * This should be ignored. Do not create another response.
    */
   const isAlreadyHandledDuplicateSubmit =
     turnGateReason === "WRONG_STEP" &&
     submittedStepKey &&
     submittedStepKey === lastSubmittedBookingStepKey &&
-    lastUserTranscriptSeq > -1 &&
-    lastSubmittedBookingTranscriptSeq > -1 &&
-    lastSubmittedBookingTranscriptSeq === lastUserTranscriptSeq;
+    sameTranscriptAlreadySubmitted;
 
   if (isAlreadyHandledDuplicateSubmit) {
     console.warn("[VOICE_REALTIME][BOOKING_BLOCKED_SUBMIT_SILENTLY_IGNORED]", {
@@ -80,14 +86,79 @@ export function handleStaleSubmitBookingStepPrompt(
       lastSubmittedBookingTranscriptSeq,
       forcedCurrentStepPrompt: false,
       ignoredAlreadyHandledDuplicate: true,
+      rejectedModelCorrectionDuringRetry: false,
     });
 
     return {
       forcedCurrentStepPrompt: false,
       ignoredAlreadyHandledDuplicate: true,
+      rejectedModelCorrectionDuringRetry: false,
     };
   }
 
+  /**
+   * Case 2:
+   * The server tried to resolve the user's answer for the same step,
+   * but the value was not reliable enough. While the assistant is supposed
+   * to ask the retry prompt, OpenAI may try to submit an inferred value.
+   *
+   * Example:
+   * - human transcript: "a day eleven a.m."
+   * - model tool value: "Friday 11 a.m."
+   *
+   * That is not safe. We reject it and force the configured retry prompt.
+   */
+  const shouldRejectModelCorrectionDuringRetry =
+    turnGateReason === "ASSISTANT_PROMPT_NOT_COMPLETED" &&
+    bookingTurnStatus === "waiting_assistant_prompt" &&
+    pendingPrompt &&
+    pendingStepKey &&
+    submittedStepKey &&
+    submittedStepKey === pendingStepKey &&
+    submittedStepKey === lastSubmittedBookingStepKey &&
+    sameTranscriptAlreadySubmitted;
+
+  if (shouldRejectModelCorrectionDuringRetry) {
+    console.warn("[VOICE_REALTIME][BOOKING_MODEL_CORRECTION_REJECTED_RETRY_REQUIRED]", {
+      callSid,
+      reason: turnGateReason,
+      submittedStepKey,
+      pendingBookingStepKey: pendingStepKey,
+      bookingTurnStatus,
+      lastUserTranscript,
+      lastUserTranscriptSeq,
+      lastSubmittedBookingStepKey,
+      lastSubmittedBookingTranscriptSeq,
+      forcedCurrentStepPrompt: true,
+      ignoredAlreadyHandledDuplicate: false,
+      rejectedModelCorrectionDuringRetry: true,
+    });
+
+    requestRealtimeResponse(
+      {
+        instructions: [
+          "The previous submitted value for this booking step was not reliable enough to use.",
+          `Ask the caller this configured retry question now: ${pendingPrompt}`,
+          "Ask only this one question.",
+          "Do not infer, guess, or replace the caller's answer.",
+          "Do not submit another booking step until the caller gives a new answer.",
+        ].join(" "),
+      },
+      "tool_guard:model_correction_rejected_retry_required"
+    );
+
+    return {
+      forcedCurrentStepPrompt: true,
+      ignoredAlreadyHandledDuplicate: false,
+      rejectedModelCorrectionDuringRetry: true,
+    };
+  }
+
+  /**
+   * Case 3:
+   * Stale submit for a different step, and the system is waiting for the
+   * assistant to speak the current configured prompt.
+   */
   const shouldForceCurrentStepPrompt =
     turnGateReason === "WRONG_STEP" &&
     pendingPrompt &&
@@ -112,12 +183,14 @@ export function handleStaleSubmitBookingStepPrompt(
         : null,
     forcedCurrentStepPrompt: shouldForceCurrentStepPrompt,
     ignoredAlreadyHandledDuplicate: false,
+    rejectedModelCorrectionDuringRetry: false,
   });
 
   if (!shouldForceCurrentStepPrompt) {
     return {
       forcedCurrentStepPrompt: false,
       ignoredAlreadyHandledDuplicate: false,
+      rejectedModelCorrectionDuringRetry: false,
     };
   }
 
@@ -138,5 +211,6 @@ export function handleStaleSubmitBookingStepPrompt(
   return {
     forcedCurrentStepPrompt: true,
     ignoredAlreadyHandledDuplicate: false,
+    rejectedModelCorrectionDuringRetry: false,
   };
 }
