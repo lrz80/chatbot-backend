@@ -4,7 +4,6 @@ import { upsertVoiceCallState } from "./upsertVoiceCallState";
 import {
   resolveBookingFlowSpeech,
   resolveBookingRetryText,
-  resolveBookingPromptText,
 } from "./voiceBookingHelpers";
 import { twoSentencesMax } from "./speechFormatting";
 import type { CallState, VoiceLocale } from "./types";
@@ -84,6 +83,61 @@ function findDatetimeStepIndex(flow: BookingFlowStep[]): number {
   });
 }
 
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function resolveLocalizedValidationText(params: {
+  locale: VoiceLocale;
+  baseText?: unknown;
+  translations?: unknown;
+}): string {
+  const locale = clean(params.locale);
+  const baseText = clean(params.baseText);
+
+  const translations =
+    params.translations &&
+    typeof params.translations === "object" &&
+    !Array.isArray(params.translations)
+      ? (params.translations as Record<string, unknown>)
+      : null;
+
+  const exactTranslation = clean(translations?.[locale]);
+
+  if (exactTranslation) {
+    return exactTranslation;
+  }
+
+  const localePrefix = locale.split("-")[0]?.toLowerCase() || "";
+
+  const sameLanguageTranslation = translations
+    ? Object.entries(translations).find(([key, value]) => {
+        const keyPrefix = clean(key).split("-")[0]?.toLowerCase() || "";
+        return keyPrefix && keyPrefix === localePrefix && clean(value);
+      })
+    : null;
+
+  if (sameLanguageTranslation) {
+    return clean(sameLanguageTranslation[1]);
+  }
+
+  /**
+   * Legacy safety:
+   * The base validation_config.unavailable_prompt may be stored in the tenant's
+   * original dashboard language. Do not leak that base text into a different
+   * runtime locale. For Spanish calls we keep the base field because existing
+   * flows commonly store this unavailable prompt in Spanish.
+   *
+   * For non-Spanish calls, caller-facing fallback copy is generated below using
+   * currentLocale, service, and suggested times.
+   */
+  if (localePrefix === "es") {
+    return baseText;
+  }
+
+  return "";
+}
+
 function formatSuggestedStartForVoice(
   dateISO: string,
   locale: VoiceLocale,
@@ -154,14 +208,10 @@ export async function executeCanonicalBookingSlotBusyRecovery(
 
   const datetimeStep = flow[datetimeStepIndex];
 
-  const unavailablePromptText = resolveBookingPromptText({
+  const unavailablePromptText = resolveLocalizedValidationText({
     locale: currentLocale,
-    prompt:
-      typeof datetimeStep.validation_config?.unavailable_prompt === "string"
-        ? datetimeStep.validation_config.unavailable_prompt
-        : "",
-    promptTranslations:
-      datetimeStep.validation_config?.unavailable_prompt_translations || null,
+    baseText: datetimeStep.validation_config?.unavailable_prompt,
+    translations: datetimeStep.validation_config?.unavailable_prompt_translations,
   });
 
   const datetimeRetryText = resolveBookingRetryText({
