@@ -1,4 +1,3 @@
-//src/lib/voice/realtime/toolGuards/handleStaleSubmitBookingStepPrompt.ts
 import type { CallState } from "../../types";
 
 type HandleStaleSubmitBookingStepPromptParams = {
@@ -21,6 +20,7 @@ export function handleStaleSubmitBookingStepPrompt(
   params: HandleStaleSubmitBookingStepPromptParams
 ): {
   forcedCurrentStepPrompt: boolean;
+  ignoredAlreadyHandledDuplicate: boolean;
 } {
   const {
     callSid,
@@ -34,6 +34,59 @@ export function handleStaleSubmitBookingStepPrompt(
   const pendingStepKey = clean(realtimeState.pendingBookingStepKey);
   const pendingPrompt = clean(realtimeState.pendingBookingStepPrompt);
   const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
+
+  const lastSubmittedBookingStepKey = clean(
+    realtimeState.lastSubmittedBookingStepKey
+  );
+
+  const lastUserTranscriptSeq =
+    typeof realtimeState.lastUserTranscriptSeq === "number"
+      ? realtimeState.lastUserTranscriptSeq
+      : -1;
+
+  const lastSubmittedBookingTranscriptSeq =
+    typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
+      ? realtimeState.lastSubmittedBookingTranscriptSeq
+      : -1;
+
+  /**
+   * This is the common OpenAI realtime race:
+   * 1. Server synthetic submit already processed the user's answer.
+   * 2. Runtime advanced to the next step.
+   * 3. OpenAI later emits a stale submit_booking_step for the old step.
+   *
+   * In this case we should not force another assistant prompt, because the
+   * normal tool follow-up for the current step is already responsible for
+   * speaking the next configured prompt.
+   */
+  const isAlreadyHandledDuplicateSubmit =
+    turnGateReason === "WRONG_STEP" &&
+    submittedStepKey &&
+    submittedStepKey === lastSubmittedBookingStepKey &&
+    lastUserTranscriptSeq > -1 &&
+    lastSubmittedBookingTranscriptSeq > -1 &&
+    lastSubmittedBookingTranscriptSeq === lastUserTranscriptSeq;
+
+  if (isAlreadyHandledDuplicateSubmit) {
+    console.warn("[VOICE_REALTIME][BOOKING_BLOCKED_SUBMIT_SILENTLY_IGNORED]", {
+      callSid,
+      reason: turnGateReason,
+      submittedStepKey,
+      pendingBookingStepKey: pendingStepKey,
+      bookingTurnStatus,
+      lastUserTranscript,
+      lastUserTranscriptSeq,
+      lastSubmittedBookingStepKey,
+      lastSubmittedBookingTranscriptSeq,
+      forcedCurrentStepPrompt: false,
+      ignoredAlreadyHandledDuplicate: true,
+    });
+
+    return {
+      forcedCurrentStepPrompt: false,
+      ignoredAlreadyHandledDuplicate: true,
+    };
+  }
 
   const shouldForceCurrentStepPrompt =
     turnGateReason === "WRONG_STEP" &&
@@ -51,28 +104,27 @@ export function handleStaleSubmitBookingStepPrompt(
     bookingTurnStatus,
     lastUserTranscript,
     lastUserTranscriptSeq:
-      typeof realtimeState.lastUserTranscriptSeq === "number"
-        ? realtimeState.lastUserTranscriptSeq
-        : null,
-    lastSubmittedBookingStepKey:
-      realtimeState.lastSubmittedBookingStepKey || "",
+      lastUserTranscriptSeq > -1 ? lastUserTranscriptSeq : null,
+    lastSubmittedBookingStepKey,
     lastSubmittedBookingTranscriptSeq:
-      typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
-        ? realtimeState.lastSubmittedBookingTranscriptSeq
+      lastSubmittedBookingTranscriptSeq > -1
+        ? lastSubmittedBookingTranscriptSeq
         : null,
     forcedCurrentStepPrompt: shouldForceCurrentStepPrompt,
+    ignoredAlreadyHandledDuplicate: false,
   });
 
   if (!shouldForceCurrentStepPrompt) {
     return {
       forcedCurrentStepPrompt: false,
+      ignoredAlreadyHandledDuplicate: false,
     };
   }
 
   requestRealtimeResponse(
     {
       instructions: [
-        "The previous booking step submission was already handled by the server.",
+        "The previous booking step submission was stale and does not match the current booking step.",
         `The current pending booking step is: ${pendingStepKey}.`,
         `Ask the caller this configured booking question now: ${pendingPrompt}`,
         "Ask only this one question.",
@@ -85,5 +137,6 @@ export function handleStaleSubmitBookingStepPrompt(
 
   return {
     forcedCurrentStepPrompt: true,
+    ignoredAlreadyHandledDuplicate: false,
   };
 }
