@@ -56,16 +56,17 @@ export function handleStaleSubmitBookingStepPrompt(
     lastSubmittedBookingTranscriptSeq > -1 &&
     lastSubmittedBookingTranscriptSeq === lastUserTranscriptSeq;
 
-  /**
+   /**
    * Case 1:
    * The server already processed this user's answer and advanced to another step.
    * OpenAI later emits the same old submit_booking_step.
    *
    * Example:
-   * - submittedStepKey: datetime
-   * - pendingStepKey: name
+   * - submittedStepKey: staff
+   * - pendingStepKey: datetime
    *
-   * This should be ignored. Do not create another response.
+   * This stale submit must not change booking state, but it also must not leave
+   * the caller without the current configured prompt.
    */
   const isAlreadyHandledDuplicateSubmit =
     turnGateReason === "WRONG_STEP" &&
@@ -74,6 +75,13 @@ export function handleStaleSubmitBookingStepPrompt(
     sameTranscriptAlreadySubmitted;
 
   if (isAlreadyHandledDuplicateSubmit) {
+    const shouldForceCurrentStepPromptAfterDuplicate =
+      pendingPrompt &&
+      pendingStepKey &&
+      submittedStepKey !== pendingStepKey &&
+      (bookingTurnStatus === "waiting_user_answer" ||
+        bookingTurnStatus === "waiting_assistant_prompt");
+
     console.warn("[VOICE_REALTIME][BOOKING_BLOCKED_SUBMIT_SILENTLY_IGNORED]", {
       callSid,
       reason: turnGateReason,
@@ -84,10 +92,33 @@ export function handleStaleSubmitBookingStepPrompt(
       lastUserTranscriptSeq,
       lastSubmittedBookingStepKey,
       lastSubmittedBookingTranscriptSeq,
-      forcedCurrentStepPrompt: false,
+      forcedCurrentStepPrompt: Boolean(shouldForceCurrentStepPromptAfterDuplicate),
       ignoredAlreadyHandledDuplicate: true,
       rejectedModelCorrectionDuringRetry: false,
     });
+
+    if (shouldForceCurrentStepPromptAfterDuplicate) {
+      requestRealtimeResponse(
+        {
+          instructions: [
+            "A stale booking step submission was already handled by the server.",
+            "Do not change the booking state.",
+            `The current pending booking step is: ${pendingStepKey}.`,
+            `Ask the caller this configured booking question now: ${pendingPrompt}`,
+            "Ask only this one question.",
+            "Do not repeat, reinterpret, or modify already collected booking details.",
+            "Do not submit another booking step until the caller answers this current question.",
+          ].join(" "),
+        },
+        "tool_guard:duplicate_stale_submit_force_current_step_prompt"
+      );
+
+      return {
+        forcedCurrentStepPrompt: true,
+        ignoredAlreadyHandledDuplicate: true,
+        rejectedModelCorrectionDuringRetry: false,
+      };
+    }
 
     return {
       forcedCurrentStepPrompt: false,
