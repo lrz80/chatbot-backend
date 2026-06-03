@@ -10,6 +10,7 @@ import {
 import { requestServiceStepModelResolution } from "./bookingStep/requestServiceStepModelResolution";
 import { requestNumberStepModelResolution } from "./bookingStep/requestNumberStepModelResolution";
 import { requestNormalizedStepModelResolution } from "./bookingStep/requestNormalizedStepModelResolution";
+import { handleStaleSubmitBookingStepPrompt } from "./toolGuards/handleStaleSubmitBookingStepPrompt";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,
@@ -300,10 +301,12 @@ export function createBookingRealtimeCoordinator(
         lastUserTranscriptSeq,
       })
     ) {
+      const submittedStepKey = clean(args.step_key);
+
       console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_STALE_DROPPED_INSTEAD_OF_DEFERRED]", {
         callSid: params.getCallSid(),
         toolName: getRealtimeToolName(event),
-        submittedStepKey: clean(args.step_key),
+        submittedStepKey,
         pendingBookingStepKey: clean(
           (realtimeState as any).pendingBookingStepKey
         ),
@@ -323,6 +326,15 @@ export function createBookingRealtimeCoordinator(
           "number"
             ? (realtimeState as any).lastSubmittedBookingTranscriptSeq
             : null,
+      });
+
+      handleStaleSubmitBookingStepPrompt({
+        callSid: params.getCallSid(),
+        realtimeState,
+        turnGateReason: "STALE_DUPLICATE_SUBMIT",
+        submittedStepKey,
+        lastUserTranscript,
+        requestRealtimeResponse: params.requestRealtimeResponse,
       });
 
       return true;

@@ -69,7 +69,8 @@ export function handleStaleSubmitBookingStepPrompt(
    * the caller without the current configured prompt.
    */
   const isAlreadyHandledDuplicateSubmit =
-    turnGateReason === "WRONG_STEP" &&
+    (turnGateReason === "WRONG_STEP" ||
+        turnGateReason === "STALE_DUPLICATE_SUBMIT") &&
     submittedStepKey &&
     submittedStepKey === lastSubmittedBookingStepKey &&
     sameTranscriptAlreadySubmitted;
