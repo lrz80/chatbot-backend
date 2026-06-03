@@ -727,7 +727,46 @@ export async function handleRealtimeToolCall(
         callId,
         ok: toolResult?.ok,
         error: toolResult?.error,
+        nextRequiredStepKey: clean(toolResult?.next_required_step?.step_key || ""),
+        nextRequiredPrompt: clean(toolResult?.next_required_step?.prompt || ""),
       });
+
+      const syntheticDirectInstructions =
+        resolveSyntheticSubmitBookingStepFollowup({
+          toolName,
+          toolResult,
+          currentLocale:
+            clean((nextRealtimeState as any)?.lang) ||
+            clean((realtimeState as any)?.lang) ||
+            currentLocale,
+        });
+
+      if (syntheticDirectInstructions) {
+        console.log("[VOICE_REALTIME][SYNTHETIC_DIRECT_FOLLOWUP_FORCED]", {
+          callSid,
+          toolName,
+          callId,
+          nextRequiredStepKey: clean(toolResult?.next_required_step?.step_key || ""),
+          source: `tool_followup:${toolName}:synthetic_direct`,
+        });
+
+        requestRealtimeResponse(
+          {
+            instructions: syntheticDirectInstructions,
+          },
+          `tool_followup:${toolName}:synthetic_direct`
+        );
+
+        return {
+          consumed: true,
+          result: toolResult as RealtimeToolResult,
+          realtimeState: nextRealtimeState,
+          bookingFlowLoaded: nextBookingFlowLoaded,
+          hangupRequestedByTool,
+          callEnding: nextCallEnding,
+          resetLastUserDigits: true,
+        };
+      }
     }
 
     const followupLocale = String(
@@ -736,23 +775,13 @@ export async function handleRealtimeToolCall(
         ""
     ).trim();
 
-    const syntheticSubmitBookingStepFollowupInstructions = isSyntheticToolCall
-      ? resolveSyntheticSubmitBookingStepFollowup({
+    const syntheticFollowupInstructions = isSyntheticToolCall
+      ? buildSyntheticBookingStepFollowupInstructions({
           toolName,
           toolResult,
           currentLocale: followupLocale || currentLocale,
         })
       : "";
-
-    const syntheticFollowupInstructions =
-      syntheticSubmitBookingStepFollowupInstructions ||
-      (isSyntheticToolCall
-        ? buildSyntheticBookingStepFollowupInstructions({
-            toolName,
-            toolResult,
-            currentLocale: followupLocale || currentLocale,
-          })
-        : "");
 
     const resolvedFollowupInstructions = resolveRealtimeToolFollowupInstructions({
       toolName,
