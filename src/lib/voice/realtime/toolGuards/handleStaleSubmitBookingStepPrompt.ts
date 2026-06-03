@@ -76,9 +76,8 @@ export function handleStaleSubmitBookingStepPrompt(
 
   if (isAlreadyHandledDuplicateSubmit) {
     const shouldForceCurrentStepPromptAfterDuplicate =
-      pendingPrompt &&
-      pendingStepKey &&
-      submittedStepKey !== pendingStepKey &&
+      Boolean(pendingPrompt) &&
+      Boolean(pendingStepKey) &&
       (bookingTurnStatus === "waiting_user_answer" ||
         bookingTurnStatus === "waiting_assistant_prompt");
 
