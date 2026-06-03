@@ -20,6 +20,10 @@ import { bootstrapSubmitBookingStepAfterFlowLoad } from "./toolGuards/bootstrapS
 import { isStaleAlreadyHandledSubmitBlockedByTurnState } from "./toolGuards/isStaleAlreadyHandledSubmitBlockedByTurnState";
 import { buildSyntheticBookingStepFollowupInstructions } from "./toolFollowup/buildSyntheticBookingStepFollowupInstructions";
 import { handleStaleSubmitBookingStepPrompt } from "./toolGuards/handleStaleSubmitBookingStepPrompt";
+import { clean } from "./utils/clean";
+import { sendRealtimeJson } from "./socket/sendRealtimeJson";
+import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBookingStepEffectiveArgs";
+import { buildSubmitBookingStepNotReadyInstructions } from "./toolFollowup/buildSubmitBookingStepNotReadyInstructions";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -53,102 +57,6 @@ type HandleRealtimeToolCallResult = {
   callEnding: boolean;
   resetLastUserDigits: boolean;
 };
-
-function clean(value: unknown): string {
-  return String(value ?? "").trim();
-}
-
-function resolveSubmitBookingStepForwardedValue(params: {
-  stepKey: string;
-  expectedType?: unknown;
-  slot?: unknown;
-  modelValue: unknown;
-  transcriptValue: unknown;
-  currentTranscriptSeq: number;
-  promptAnchorSeq: number;
-}): string {
-  const stepKey = clean(params.stepKey);
-  const expectedType = clean(params.expectedType).toLowerCase();
-  const slot = clean(params.slot);
-  const modelValue = clean(params.modelValue);
-  const transcriptValue = clean(params.transcriptValue);
-
-  const transcriptIsAfterPrompt =
-    Number.isFinite(params.currentTranscriptSeq) &&
-    Number.isFinite(params.promptAnchorSeq) &&
-    params.currentTranscriptSeq > params.promptAnchorSeq;
-
-  if (!modelValue && !transcriptValue) {
-    return "";
-  }
-
-  /**
-   * These step/value types are normalization-sensitive.
-   *
-   * The human transcript is still preserved as transcript_value for auditing,
-   * but the forwarded value should be the model-normalized value when present.
-   *
-   * This is generic and multitenant:
-   * - service names may need canonical/provider resolution
-   * - datetime needs parser-friendly text
-   * - number may convert "veinte libras" -> "20 libras"
-   * - phone may convert "sí" -> "__USE_CALLER_PHONE__" or a normalized phone
-   * - email may fix spelling/punctuation
-   * - service_address may convert spoken numbers into address digits
-   */
-  const shouldPreferModelValue =
-    stepKey === "service" ||
-    stepKey === "datetime" ||
-    expectedType === "datetime" ||
-    expectedType === "number" ||
-    expectedType === "phone" ||
-    expectedType === "email" ||
-    slot === "service_address" ||
-    slot === "customer_phone" ||
-    slot === "customer_email";
-
-  if (shouldPreferModelValue) {
-    if (modelValue) return modelValue;
-    if (transcriptIsAfterPrompt) return transcriptValue;
-    return "";
-  }
-
-  /**
-   * For normal free-text fields, prefer the accepted human transcript.
-   * Example: customer_name, notes, custom tenant questions.
-   */
-  if (transcriptIsAfterPrompt && transcriptValue) {
-    return transcriptValue;
-  }
-
-  if (modelValue) {
-    return modelValue;
-  }
-
-  return transcriptValue;
-}
-
-function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
-  if (socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify(payload));
-}
-
-function buildSubmitBookingStepNotReadyInstructions(params: {
-  realtimeState: CallState;
-  reason: string;
-}): string {
-  const pendingPrompt = clean(params.realtimeState.pendingBookingStepPrompt);
-
-  return [
-    "The booking step is not ready to accept a submitted answer yet.",
-    `Reason: ${params.reason}.`,
-    pendingPrompt
-      ? `Ask the caller the pending booking question using this configured prompt as source of truth: ${pendingPrompt}`
-      : "Ask the caller the pending booking question again using the current booking flow state.",
-    "Do not invent booking details, services, dates, times, names, phone numbers, or policies.",
-    "Ask only one question.",
-  ].join(" ");
-}
 
 export async function handleRealtimeToolCall(
   params: HandleRealtimeToolCallParams
@@ -194,7 +102,7 @@ export async function handleRealtimeToolCall(
       error: "CALL_ENDING",
     };
 
-    sendJson(openAiSocket, {
+    sendRealtimeJson(openAiSocket, {
       type: "conversation.item.create",
       item: {
         type: "function_call_output",
@@ -238,7 +146,7 @@ export async function handleRealtimeToolCall(
         endCallGuard.logPayload
       );
 
-      sendJson(openAiSocket, {
+      sendRealtimeJson(openAiSocket, {
         type: "conversation.item.create",
         item: {
           type: "function_call_output",
@@ -363,7 +271,7 @@ export async function handleRealtimeToolCall(
           : null,
     });
 
-    sendJson(openAiSocket, {
+    sendRealtimeJson(openAiSocket, {
       type: "conversation.item.create",
       item: {
         type: "function_call_output",
@@ -567,7 +475,7 @@ export async function handleRealtimeToolCall(
             : null,
       });
 
-      sendJson(openAiSocket, {
+      sendRealtimeJson(openAiSocket, {
         type: "conversation.item.create",
         item: {
           type: "function_call_output",
@@ -622,7 +530,7 @@ export async function handleRealtimeToolCall(
             : null,
       });
 
-      sendJson(openAiSocket, {
+      sendRealtimeJson(openAiSocket, {
         type: "conversation.item.create",
         item: {
           type: "function_call_output",
@@ -716,85 +624,19 @@ export async function handleRealtimeToolCall(
     }
   }
 
-  const effectiveToolArgs = buildEffectiveRealtimeToolArgs({
+  let effectiveToolArgs = buildEffectiveRealtimeToolArgs({
     toolName,
     toolArgs,
     lastUserTranscript,
   });
 
   if (toolName === "submit_booking_step") {
-    const modelValue = clean(toolArgs.value);
-    const transcriptValue = clean(lastUserTranscript);
-
-    const currentTranscriptSeq =
-      typeof realtimeState.lastUserTranscriptSeq === "number"
-        ? realtimeState.lastUserTranscriptSeq
-        : -1;
-
-    const promptAnchorSeq =
-      typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
-        ? realtimeState.pendingBookingStepPromptAnchorSeq
-        : -1;
-
-    const forwardedValue = resolveSubmitBookingStepForwardedValue({
-      stepKey: clean(effectiveToolArgs.step_key || toolArgs.step_key),
-      expectedType: (realtimeState as any).pendingBookingStepExpectedType,
-      slot: (realtimeState as any).pendingBookingStepSlot,
-      modelValue,
-      transcriptValue,
-      currentTranscriptSeq,
-      promptAnchorSeq,
+    effectiveToolArgs = applySubmitBookingStepEffectiveArgs({
+      effectiveToolArgs,
+      rawToolArgs: toolArgs,
+      realtimeState,
+      lastUserTranscript,
     });
-
-    const stepKey = clean(effectiveToolArgs.step_key || toolArgs.step_key);
-    const expectedType = clean((realtimeState as any).pendingBookingStepExpectedType).toLowerCase();
-    const slot = clean((realtimeState as any).pendingBookingStepSlot);
-
-    const prefersModelCandidate =
-      stepKey === "service" ||
-      stepKey === "datetime" ||
-      expectedType === "datetime" ||
-      expectedType === "number" ||
-      expectedType === "phone" ||
-      expectedType === "email" ||
-      slot === "service_address" ||
-      slot === "customer_phone" ||
-      slot === "customer_email";
-
-    const candidates = prefersModelCandidate
-      ? [
-          modelValue
-            ? {
-                source: "model",
-                value: modelValue,
-              }
-            : null,
-          transcriptValue && forwardedValue === transcriptValue
-            ? {
-                source: "transcript",
-                value: transcriptValue,
-              }
-            : null,
-        ].filter(Boolean)
-      : [
-          transcriptValue
-            ? {
-                source: "transcript",
-                value: transcriptValue,
-              }
-            : null,
-          modelValue
-            ? {
-                source: "model",
-                value: modelValue,
-              }
-            : null,
-        ].filter(Boolean);
-
-    effectiveToolArgs.value = forwardedValue;
-    effectiveToolArgs.model_value = modelValue;
-    effectiveToolArgs.transcript_value = transcriptValue;
-    effectiveToolArgs.value_candidates = candidates;
   }
 
   if (toolName === "submit_booking_step") {
@@ -869,7 +711,7 @@ export async function handleRealtimeToolCall(
     });
 
     if (!isSyntheticToolCall) {
-      sendJson(openAiSocket, {
+      sendRealtimeJson(openAiSocket, {
         type: "conversation.item.create",
         item: {
           type: "function_call_output",
