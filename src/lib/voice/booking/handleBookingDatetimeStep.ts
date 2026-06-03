@@ -19,6 +19,7 @@ type BookingStepLike = {
   validation_config?: {
     slot?: string;
     unavailable_prompt?: string;
+    unavailable_prompt_translations?: Record<string, string> | null;
   } | null;
 };
 
@@ -155,6 +156,33 @@ function formatSuggestedStartForVoice(
 
 function clean(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function resolveLocalizedUnavailablePrompt(input: {
+  currentStep: BookingStepLike;
+  currentLocale: VoiceLocale;
+}): string {
+  const { currentStep, currentLocale } = input;
+
+  const locale = clean(currentLocale) || "en-US";
+
+  const translatedUnavailablePrompt = clean(
+    currentStep.validation_config?.unavailable_prompt_translations?.[locale]
+  );
+
+  if (translatedUnavailablePrompt) {
+    return translatedUnavailablePrompt;
+  }
+
+  const baseUnavailablePrompt = clean(
+    currentStep.validation_config?.unavailable_prompt
+  );
+
+  if (baseUnavailablePrompt) {
+    return baseUnavailablePrompt;
+  }
+
+  return "";
 }
 
 function parseJsonStringArray(value: unknown): string[] {
@@ -421,10 +449,10 @@ export async function executeCanonicalBookingDatetimeStep(
       bookingData: bookingDataWithSuggestedStarts,
     });
 
-    const unavailablePrompt =
-      typeof currentStep.validation_config?.unavailable_prompt === "string"
-        ? currentStep.validation_config.unavailable_prompt.trim()
-        : "";
+    const unavailablePrompt = resolveLocalizedUnavailablePrompt({
+      currentStep,
+      currentLocale,
+    });
 
     const localizedRetryBase = resolveBookingRetryText({
       locale: currentLocale,
