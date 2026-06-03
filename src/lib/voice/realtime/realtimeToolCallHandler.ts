@@ -18,6 +18,7 @@ import { canSubmitBookingStepNow } from "./bookingTurnState";
 import { guardGetBookingFlowIntent } from "./toolGuards/guardGetBookingFlowIntent";
 import { bootstrapSubmitBookingStepAfterFlowLoad } from "./toolGuards/bootstrapSubmitBookingStepAfterFlowLoad";
 import { isStaleAlreadyHandledSubmitBlockedByTurnState } from "./toolGuards/isStaleAlreadyHandledSubmitBlockedByTurnState";
+import { buildSyntheticBookingStepFollowupInstructions } from "./toolFollowup/buildSyntheticBookingStepFollowupInstructions";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -901,11 +902,21 @@ export async function handleRealtimeToolCall(
         ""
     ).trim();
 
-    const followupInstructions = resolveRealtimeToolFollowupInstructions({
-      toolName,
-      toolResult: (toolResult || {}) as RealtimeToolResult,
-      currentLocale: followupLocale,
-    });
+    const syntheticFollowupInstructions = isSyntheticToolCall
+      ? buildSyntheticBookingStepFollowupInstructions({
+          toolName,
+          toolResult,
+          currentLocale: followupLocale,
+        })
+      : "";
+
+    const followupInstructions =
+      syntheticFollowupInstructions ||
+      resolveRealtimeToolFollowupInstructions({
+        toolName,
+        toolResult: (toolResult || {}) as RealtimeToolResult,
+        currentLocale: followupLocale,
+      });
 
     requestRealtimeResponse(
       {
