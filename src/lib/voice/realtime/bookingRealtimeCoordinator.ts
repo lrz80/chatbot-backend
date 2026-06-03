@@ -124,6 +124,59 @@ function getDeferredSubmittedStepKey(
   return clean(args.step_key);
 }
 
+function shouldDropStaleSubmitBookingStepInsteadOfDeferring(params: {
+  event: any;
+  realtimeState: CallState;
+  lastUserTranscriptSeq: number;
+}): boolean {
+  const toolName = getRealtimeToolName(params.event);
+
+  if (toolName !== "submit_booking_step") {
+    return false;
+  }
+
+  const args = parseRealtimeToolArgs(params.event);
+
+  const submittedStepKey = clean(args.step_key);
+  const pendingBookingStepKey = clean(
+    (params.realtimeState as any).pendingBookingStepKey
+  );
+
+  const bookingTurnStatus = getBookingTurnStatus(params.realtimeState);
+
+  const pendingBookingStepPromptAnchorSeq =
+    getPendingBookingStepPromptAnchorSeq(params.realtimeState);
+
+  const lastSubmittedBookingStepKey = clean(
+    (params.realtimeState as any).lastSubmittedBookingStepKey
+  );
+
+  const lastSubmittedBookingTranscriptSeq =
+    typeof (params.realtimeState as any).lastSubmittedBookingTranscriptSeq ===
+    "number"
+      ? (params.realtimeState as any).lastSubmittedBookingTranscriptSeq
+      : -1;
+
+  const isSamePendingStep =
+    !!submittedStepKey &&
+    !!pendingBookingStepKey &&
+    submittedStepKey === pendingBookingStepKey;
+
+  const transcriptDidNotAdvanceAfterPrompt =
+    params.lastUserTranscriptSeq === pendingBookingStepPromptAnchorSeq;
+
+  const wasAlreadySubmittedForSameTranscript =
+    lastSubmittedBookingStepKey === submittedStepKey &&
+    lastSubmittedBookingTranscriptSeq === params.lastUserTranscriptSeq;
+
+  return (
+    bookingTurnStatus === "waiting_user_answer" &&
+    isSamePendingStep &&
+    transcriptDidNotAdvanceAfterPrompt &&
+    wasAlreadySubmittedForSameTranscript
+  );
+}
+
 function wasLatestTranscriptAlreadySubmittedForStep(params: {
   realtimeState: CallState;
   pendingBookingStepKey: string;
@@ -239,6 +292,41 @@ export function createBookingRealtimeCoordinator(
     }
 
     const args = parseRealtimeToolArgs(event);
+
+    if (
+      shouldDropStaleSubmitBookingStepInsteadOfDeferring({
+        event,
+        realtimeState,
+        lastUserTranscriptSeq,
+      })
+    ) {
+      console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_STALE_DROPPED_INSTEAD_OF_DEFERRED]", {
+        callSid: params.getCallSid(),
+        toolName: getRealtimeToolName(event),
+        submittedStepKey: clean(args.step_key),
+        pendingBookingStepKey: clean(
+          (realtimeState as any).pendingBookingStepKey
+        ),
+        bookingTurnStatus: getBookingTurnStatus(realtimeState),
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+        pendingBookingStepPromptAnchorSeq:
+          typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq ===
+          "number"
+            ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
+            : null,
+        lastSubmittedBookingStepKey: clean(
+          (realtimeState as any).lastSubmittedBookingStepKey
+        ),
+        lastSubmittedBookingTranscriptSeq:
+          typeof (realtimeState as any).lastSubmittedBookingTranscriptSeq ===
+          "number"
+            ? (realtimeState as any).lastSubmittedBookingTranscriptSeq
+            : null,
+      });
+
+      return true;
+    }
 
     deferredSubmitBookingStep = {
       event,
