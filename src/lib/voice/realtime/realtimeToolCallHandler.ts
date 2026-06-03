@@ -901,20 +901,48 @@ export async function handleRealtimeToolCall(
         })
       : "";
 
+    const resolvedFollowupInstructions = resolveRealtimeToolFollowupInstructions({
+      toolName,
+      toolResult: (toolResult || {}) as RealtimeToolResult,
+      currentLocale: followupLocale,
+    });
+
+    const nextRequiredPrompt = clean(toolResult?.next_required_step?.prompt || "");
+
+    const fallbackNextStepInstructions =
+      toolName === "submit_booking_step" && nextRequiredPrompt
+        ? [
+            "Ask the caller the next booking question using this configured prompt as the source of truth:",
+            nextRequiredPrompt,
+            "Ask only this one question.",
+            "Do not repeat, reinterpret, or modify already collected booking details.",
+            "Do not submit another booking step until the caller answers this current question.",
+          ].join(" ")
+        : "";
+
     const followupInstructions =
       syntheticFollowupInstructions ||
-      resolveRealtimeToolFollowupInstructions({
-        toolName,
-        toolResult: (toolResult || {}) as RealtimeToolResult,
-        currentLocale: followupLocale,
-      });
+      resolvedFollowupInstructions ||
+      fallbackNextStepInstructions;
 
-    requestRealtimeResponse(
-      {
-        instructions: followupInstructions,
-      },
-      `tool_followup:${toolName}`
-    );
+    if (followupInstructions) {
+      requestRealtimeResponse(
+        {
+          instructions: followupInstructions,
+        },
+        `tool_followup:${toolName}`
+      );
+    } else {
+      console.warn("[VOICE_REALTIME][TOOL_FOLLOWUP_SKIPPED_EMPTY_INSTRUCTIONS]", {
+        callSid,
+        toolName,
+        isSyntheticToolCall,
+        ok: toolResult?.ok,
+        error: toolResult?.error,
+        nextRequiredStepKey: clean(toolResult?.next_required_step?.step_key || ""),
+        nextRequiredPrompt,
+      });
+    }
 
     return {
       consumed: true,
