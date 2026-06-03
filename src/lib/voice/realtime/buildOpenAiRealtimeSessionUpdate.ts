@@ -1,5 +1,4 @@
 // src/lib/voice/realtime/buildOpenAiRealtimeSessionUpdate.ts
-import { USE_CALLER_PHONE_TOKEN } from "./bookingStep/resolvers/resolveRealtimePhoneValue";
 
 type BuildOpenAiRealtimeSessionUpdateParams = {
   instructions: string;
@@ -100,16 +99,17 @@ export function buildOpenAiRealtimeSessionUpdate(
         "Realtime voice behavior:",
         "- Speak naturally, warmly, and conversationally.",
         "- Never sound like an IVR, script reader, form reader, or answering machine.",
-        "- When a booking step provides a prompt, use it only as the meaning of the question, not as a phrase to read literally.",
-        "- Rephrase booking questions in a human way while preserving the exact slot being requested.",
+        "- Preserve the caller's active language.",
+        "- Keep each spoken response short because this is a phone call.",
+        "- Ask only one question at a time.",
         "- Do not skip required booking steps.",
         "- Do not invent completed slots.",
-        "- Keep each spoken response short because this is a phone call.",
-        "- Ask only one booking question at a time.",
-        "- If the caller already answered the current slot, submit it with the proper tool instead of asking again.",
-        "- Preserve the caller's active language.",
+        "- Do not store booking answers mentally. The server-side booking state is the only source of truth.",
+        "- Do not call submit_booking_step. The server processes accepted caller transcripts and advances booking steps automatically.",
+        "- When the server provides a booking prompt, speak that prompt naturally and wait for the caller's answer.",
+        "- If the caller answers a booking question, wait for the server to process the accepted transcript. Do not call a booking-step submission tool.",
+        "- Do not pre-fill future booking steps.",
         "- Never call a tool named send_sms. That tool does not exist.",
-        "- If the current pending booking step asks whether the caller wants booking details by SMS, submit that configured booking step with submit_booking_step using the caller's latest answer. Do not call send_booking_sms for the SMS offer step.",
         "- Call send_booking_sms only after the server has accepted the configured SMS consent step and no booking step is pending.",
         "- Never invent SMS text or phone numbers. The server sends booking SMS from canonical booking state.",
         "- If automatic booking cannot be completed and the tool result says fallback_action is SEND_BOOKING_LINK, do not mention the booking provider, API, subscription, integration, or technical reason to the caller.",
@@ -117,23 +117,10 @@ export function buildOpenAiRealtimeSessionUpdate(
         "- If the caller agrees to receive the official booking link, call send_useful_link_sms with link_types ['booking', 'square_booking', 'appointments'].",
         "- Never invent useful links. The server must send useful links from tenant-configured links only.",
         "- Do not call end_call while a booking-link SMS fallback question is waiting for the caller answer.",
-        "- Never submit a booking step using inferred information that the caller did not clearly say in the latest user turn.",
-        "- For submit_booking_step, the value must come from the caller's latest answer to the current question, not from assumptions or earlier context.",
-        "- If the latest transcript does not directly answer the current booking question, ask the current question again naturally instead of submitting the step.",
-        "- If the current next_required_step.validation_config.kind is structured, submit_booking_step.value must be a JSON string object.",
-        "- For structured booking steps, use only the field names listed in next_required_step.validation_config.required_fields.",
-        "- For structured booking steps, do not submit plain text as value.",
-        "- For structured booking steps, do not submit the step until the latest caller answer provides enough information to fill all required_fields.",
-        "- The server will convert structured values into the final stored value using next_required_step.validation_config.output_template.",
-        "- Do not pre-fill future booking steps.",
-        "- Never call submit_booking_step twice from the same caller transcript.",
         "- After send_useful_link_sms succeeds, tell the caller the official link was sent and ask if they need anything else.",
         "- Do not call end_call in the same turn after send_useful_link_sms.",
         "- Only call end_call after the caller clearly says they do not need anything else, says goodbye, or asks to end the call.",
         "- Never call end_call immediately after create_appointment, send_booking_sms, or send_useful_link_sms unless the caller explicitly ends the conversation in a later caller turn.",
-        `- For a phone-number booking step, if the caller clearly confirms they want to use the current calling number, call submit_booking_step with value "${USE_CALLER_PHONE_TOKEN}".`,
-        "- For a phone-number booking step, if the caller provides a different phone number, submit only that phone number as value.",
-        "- For a phone-number booking step, never submit a name, service, date, staff member, yes/no word, or unrelated transcript as the value.",
       ].join("\n"),
       audio: {
         input: {
@@ -163,41 +150,6 @@ export function buildOpenAiRealtimeSessionUpdate(
             additionalProperties: false,
             properties: {},
             required: [],
-          },
-        },
-        {
-          type: "function",
-          name: "submit_booking_step",
-          description: [
-            "Submit the caller answer for the current tenant-configured booking step.",
-            "Use this to advance the booking flow one canonical step at a time.",
-            "Do not skip steps.",
-            "Do not invent slot completion.",
-            "If the current next_required_step.validation_config.kind is structured, value must be a JSON string object using exactly the configured required_fields.",
-            "For structured steps, do not submit plain text and do not submit until all required_fields are available from the caller's latest answer.",
-            `For phone-number steps, use value "${USE_CALLER_PHONE_TOKEN}" only when the caller clearly confirms using the current calling number.`,
-            "For phone-number steps, if the caller provides a different phone number, submit only the phone number.",
-          ].join(" "),
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              step_key: {
-                type: "string",
-                description: "The canonical current booking step key.",
-              },
-              value: {
-                type: "string",
-                description: [
-                  "The caller answer for the current booking step.",
-                  "For normal steps, submit the explicit value said by the caller.",
-                  "For structured steps, submit a JSON string object using exactly the configured required_fields from next_required_step.validation_config.",
-                  "For structured steps, do not submit plain text.",
-                  `For phone-number steps, use "${USE_CALLER_PHONE_TOKEN}" only when the caller confirms using the current calling number.`,
-                ].join(" "),
-              },
-            },
-            required: ["step_key", "value"],
           },
         },
         {
