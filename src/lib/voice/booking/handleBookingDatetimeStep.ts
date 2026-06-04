@@ -165,24 +165,41 @@ function resolveLocalizedUnavailablePrompt(input: {
   const { currentStep, currentLocale } = input;
 
   const locale = clean(currentLocale) || "en-US";
+  const localeRoot = locale.split("-")[0]?.toLowerCase() || "";
 
-  const translatedUnavailablePrompt = clean(
-    currentStep.validation_config?.unavailable_prompt_translations?.[locale]
-  );
+  const translations =
+    currentStep.validation_config?.unavailable_prompt_translations || null;
 
-  if (translatedUnavailablePrompt) {
-    return translatedUnavailablePrompt;
+  const exactTranslation = clean(translations?.[locale]);
+  if (exactTranslation) {
+    return exactTranslation;
   }
 
-  const baseUnavailablePrompt = clean(
-    currentStep.validation_config?.unavailable_prompt
+  const rootTranslationKey = Object.keys(translations || {}).find((key) => {
+    return key.toLowerCase().split("-")[0] === localeRoot;
+  });
+
+  const rootTranslation = clean(
+    rootTranslationKey ? translations?.[rootTranslationKey] : ""
   );
 
-  if (baseUnavailablePrompt) {
-    return baseUnavailablePrompt;
+  if (rootTranslation) {
+    return rootTranslation;
   }
 
-  return "";
+  const retryPrompt = resolveBookingRetryText({
+    locale: currentLocale,
+    retryPrompt: currentStep.retry_prompt || "",
+    retryPromptTranslations: currentStep.retry_prompt_translations || null,
+    fallbackPrompt: currentStep.prompt || "",
+    fallbackPromptTranslations: currentStep.prompt_translations || null,
+  });
+
+  if (retryPrompt) {
+    return retryPrompt;
+  }
+
+  return clean(currentStep.prompt);
 }
 
 function parseJsonStringArray(value: unknown): string[] {
