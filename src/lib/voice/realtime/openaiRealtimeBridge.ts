@@ -717,13 +717,6 @@ export async function createOpenAiRealtimeBridge({
     if ((event as any).event === "mark") {
       const markName = clean((event as any)?.mark?.name || "");
 
-      console.log("[VOICE_REALTIME][TWILIO_MARK_RECEIVED]", {
-        callSid,
-        streamSid,
-        markName,
-        goodbyePlaybackMarkName,
-      });
-
       if (
         goodbyePlaybackMarkName &&
         markName === goodbyePlaybackMarkName
@@ -769,12 +762,6 @@ export async function createOpenAiRealtimeBridge({
       lastAssistantAudioDoneAtMs = 0;
       lastAssistantTranscript = "";
       bargeInController.reset();
-
-      console.log("[VOICE_REALTIME][TWILIO_START]", {
-        callSid,
-        streamSid,
-        didNumber,
-      });
 
       configureRealtimeSessionIfReady().catch((error) => {
         console.error("[VOICE_REALTIME][SESSION_CONFIG_ERROR]", error);

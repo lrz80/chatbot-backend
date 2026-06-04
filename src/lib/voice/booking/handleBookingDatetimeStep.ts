@@ -437,15 +437,6 @@ export async function executeCanonicalBookingDatetimeStep(
       ),
     };
 
-    console.log("[VOICE][DATETIME_REFERENCE_STATE_SAVED]", {
-      tenantId,
-      callSid,
-      serviceName,
-      rawDatetime,
-      requestedAtForReference,
-      referenceSuggestedStartsForState,
-    });
-
     const nextState = {
       ...state,
       bookingStepIndex: currentIndex,

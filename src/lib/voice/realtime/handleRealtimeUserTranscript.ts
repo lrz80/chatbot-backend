@@ -557,19 +557,6 @@ export async function handleRealtimeUserTranscript(params: {
     };
   }
 
-  console.log("[VOICE_REALTIME][USER_TRANSCRIPT_ACCEPTED]", {
-    callSid: params.callSid,
-    transcript: runtimeResult.lastUserTranscript,
-    lastUserTranscriptSeq: runtimeResult.lastUserTranscriptSeq,
-    currentLocale: runtimeResult.currentLocale,
-    bookingTurnStatus: (runtimeResult.realtimeState as any).bookingTurnStatus || "",
-    pendingBookingStepKey: runtimeResult.realtimeState.pendingBookingStepKey || "",
-    pendingBookingStepPromptAnchorSeq:
-      typeof runtimeResult.realtimeState.pendingBookingStepPromptAnchorSeq === "number"
-        ? runtimeResult.realtimeState.pendingBookingStepPromptAnchorSeq
-        : null,
-    });
-
   return {
     consumed: true,
     lastUserTranscript: runtimeResult.lastUserTranscript,

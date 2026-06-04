@@ -79,8 +79,7 @@ export function handleStaleSubmitBookingStepPrompt(
     const shouldForceCurrentStepPromptAfterDuplicate =
       Boolean(pendingPrompt) &&
       Boolean(pendingStepKey) &&
-      (bookingTurnStatus === "waiting_user_answer" ||
-        bookingTurnStatus === "waiting_assistant_prompt");
+      bookingTurnStatus === "waiting_user_answer";
 
     console.warn("[VOICE_REALTIME][BOOKING_BLOCKED_SUBMIT_SILENTLY_IGNORED]", {
       callSid,
@@ -195,8 +194,7 @@ export function handleStaleSubmitBookingStepPrompt(
     Boolean(pendingPrompt) &&
     Boolean(pendingStepKey) &&
     Boolean(submittedStepKey) &&
-    (bookingTurnStatus === "waiting_user_answer" ||
-        bookingTurnStatus === "waiting_assistant_prompt");
+    bookingTurnStatus === "waiting_user_answer";
 
   console.warn("[VOICE_REALTIME][BOOKING_BLOCKED_SUBMIT_SILENTLY_IGNORED]", {
     callSid,
