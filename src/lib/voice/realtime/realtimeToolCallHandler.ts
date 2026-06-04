@@ -26,6 +26,8 @@ import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBooki
 import { buildSubmitBookingStepNotReadyInstructions } from "./toolFollowup/buildSubmitBookingStepNotReadyInstructions";
 import { resolveSyntheticDirectBookingFollowup } from "./toolFollowup/resolveSyntheticDirectBookingFollowup";
 import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateSubmitBookingStepEarly";
+import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppointment";
+import { handleRealtimeServerActionRequired } from "./toolExecution/handleRealtimeServerActionRequired";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -182,6 +184,30 @@ export async function handleRealtimeToolCall(
     callId,
     toolArgs,
   });
+
+  const directCreateAppointmentGuard = guardDirectCreateAppointment({
+    toolName,
+    callId,
+    callSid,
+    openAiSocket,
+    realtimeState,
+    bookingFlowLoaded,
+    callEnding,
+    lastUserTranscript,
+  });
+
+  if (directCreateAppointmentGuard.handled) {
+    return {
+      consumed: true,
+      result: directCreateAppointmentGuard.result,
+      realtimeState: directCreateAppointmentGuard.realtimeState,
+      bookingFlowLoaded: directCreateAppointmentGuard.bookingFlowLoaded,
+      hangupRequestedByTool:
+        directCreateAppointmentGuard.hangupRequestedByTool,
+      callEnding: directCreateAppointmentGuard.callEnding,
+      resetLastUserDigits: directCreateAppointmentGuard.resetLastUserDigits,
+    };
+  }
 
   const tenantReadyGuard = guardTenantReady({
     tenantId,
@@ -891,66 +917,37 @@ export async function handleRealtimeToolCall(
 
     const actionRequired = clean((toolResult as any)?.action_required || "");
 
-    if (
-      toolName === "submit_booking_step" &&
-      (toolResult as any)?.ok === true &&
-      actionRequired
-    ) {
-      console.warn("[VOICE_REALTIME][SERVER_ACTION_REQUIRED_EXECUTING]", {
-        callSid,
-        toolName,
-        actionRequired,
-      });
+    const serverActionResult = await handleRealtimeServerActionRequired({
+      toolName,
+      toolResult: (toolResult || {}) as RealtimeToolResult,
+      actionRequired,
+      resolvedTenantId,
+      callerPhone,
+      didNumber,
+      realtimeTenant,
+      realtimeCfg,
+      callSid,
+      currentLocale,
+      realtimeState,
+      nextRealtimeState,
+      bookingFlowLoaded,
+      nextBookingFlowLoaded,
+      callEnding,
+      nextCallEnding,
+      lastUserTranscript,
+      lastUserDigits,
+      requestRealtimeResponse,
+    });
 
-      const serverActionResult = await executeRealtimeTool({
-        tenantId: resolvedTenantId,
-        callerPhone,
-        toolName: actionRequired,
-        args: {},
-        tenant: realtimeTenant,
-        cfg: realtimeCfg,
-        callSid: callSid || undefined,
-        didNumber: didNumber || undefined,
-        currentLocale,
-        state: nextRealtimeState,
-        userInput: lastUserTranscript,
-        digits: lastUserDigits,
-      });
-
-      console.log("[VOICE_REALTIME][SERVER_ACTION_RESULT]", {
-        callSid,
-        actionRequired,
-        ok: serverActionResult?.ok,
-        error: serverActionResult?.error,
-        message: serverActionResult?.message,
-      });
-
-      const serverActionFollowupInstructions =
-        resolveRealtimeToolFollowupInstructions({
-          toolName: actionRequired,
-          toolResult: (serverActionResult || {}) as RealtimeToolResult,
-          currentLocale:
-            clean((nextRealtimeState as any)?.lang) ||
-            clean((realtimeState as any)?.lang) ||
-            currentLocale,
-        });
-
-      requestRealtimeResponse(
-        {
-          instructions: serverActionFollowupInstructions,
-        },
-        `tool_followup:${actionRequired}`
-      );
-
+    if (serverActionResult.handled) {
       return {
         consumed: true,
-        result: serverActionResult as RealtimeToolResult,
-        realtimeState: nextRealtimeState,
-        bookingFlowLoaded: nextBookingFlowLoaded,
-        hangupRequestedByTool:
-          actionRequired === "end_call" && serverActionResult?.ok === true,
-        callEnding: nextCallEnding,
-        resetLastUserDigits: true,
+        result: serverActionResult.result,
+        realtimeState: serverActionResult.realtimeState,
+        bookingFlowLoaded: serverActionResult.bookingFlowLoaded,
+        hangupRequestedByTool: serverActionResult.hangupRequestedByTool,
+        callEnding: serverActionResult.callEnding,
+        resetLastUserDigits: serverActionResult.resetLastUserDigits,
       };
     }
 
