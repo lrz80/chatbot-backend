@@ -143,14 +143,23 @@ export function buildToolFollowupInstructions(params: {
     nextStepKey === "confirm" ||
     nextStepExpectedType === "confirmation"
   ) {
-    return buildNaturalPromptInstruction({
-      sourceText: primaryPrompt,
-      purpose: "Ask the booking confirmation question using this configured meaning",
-      activeLocale,
-      mustAskConfirmation: true,
-      mustWaitForAnswer: true,
-      blockEndCall: true,
-    });
+    return [
+      "Use only the tool result as source of truth.",
+      activeLocale
+        ? `Respond in the active call language: ${activeLocale}. Do not switch languages unless the caller clearly switches languages in a later user turn.`
+        : "",
+      `Confirmation prompt source: ${primaryPrompt}`,
+      "Ask the caller to confirm the booking in this same turn.",
+      "The response must include a clear confirmation question equivalent to the configured prompt.",
+      "Do not omit the confirmation question.",
+      "Do not turn the confirmation into only a statement.",
+      "Do not invent or change the service, date, time, name, phone number, address, or booking facts.",
+      "Ask only this confirmation question and wait for the caller answer.",
+      "Do not call create_appointment until the caller answers this confirmation question.",
+      "Do not call end_call while confirmation is pending.",
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
 
   if (toolName === "end_call") {
