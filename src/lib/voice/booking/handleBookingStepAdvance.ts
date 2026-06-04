@@ -28,6 +28,8 @@ type HandleBookingStepAdvanceParams = {
   callerE164: string | null;
   state: CallState;
   resolvedStepValue: string;
+  resolvedStepOk?: boolean;
+  resolvedStepError?: string | null;
   isServiceStep?: boolean;
   isDatetimeStep?: boolean;
   createBookingGather: CreateBookingGatherFn;
@@ -41,7 +43,11 @@ type StepValidationResult =
     }
   | {
       ok: false;
-      reason: "required_empty" | "too_short" | "not_allowed_option";
+      reason:
+        | "required_empty"
+        | "too_short"
+        | "not_allowed_option"
+        | "resolver_rejected";
     };
 
 function normalizeStepValue(value: unknown): string {
@@ -388,12 +394,30 @@ export async function handleBookingStepAdvance(
     upsertVoiceCallState,
   } = params;
 
-  const validation = validateResolvedStepValue({
-    currentStep,
-    resolvedStepValue,
-  });
+  const resolvedOk = params.resolvedStepOk !== false;
+
+  const validation: StepValidationResult = resolvedOk
+    ? validateResolvedStepValue({
+        currentStep,
+        resolvedStepValue,
+      })
+    : {
+        ok: false,
+        reason: "resolver_rejected",
+      };
 
   if (!validation.ok) {
+    console.warn("[VOICE_BOOKING][STEP_VALUE_REJECTED_RETRY]", {
+      callSid,
+      stepKey: currentStep.step_key,
+      slot: (currentStep as any).slot,
+      expectedType: (currentStep as any).expected_type,
+      reason: validation.reason,
+      resolvedStepError: params.resolvedStepError ?? null,
+      resolvedStepValue,
+      currentIndex,
+    });
+
     const retryPrompt = buildCurrentStepRetryPrompt({
       currentStep,
       currentLocale,

@@ -813,6 +813,83 @@ export async function handleRealtimeToolCall(
       }
     }
 
+    const actionRequired = clean((toolResult as any)?.action_required || "");
+
+    if (
+      toolName === "submit_booking_step" &&
+      (toolResult as any)?.ok === true &&
+      actionRequired === "create_appointment"
+    ) {
+      console.warn("[VOICE_REALTIME][TOOL_FOLLOWUP_SKIPPED_SERVER_ACTION_REQUIRED]", {
+        callSid,
+        toolName,
+        actionRequired,
+        reason: "SERVER_WILL_ENQUEUE_CREATE_APPOINTMENT",
+      });
+
+      return {
+        consumed: true,
+        result: toolResult as RealtimeToolResult,
+        realtimeState: nextRealtimeState,
+        bookingFlowLoaded: nextBookingFlowLoaded,
+        hangupRequestedByTool,
+        callEnding: nextCallEnding,
+        resetLastUserDigits: true,
+      };
+    }
+
+    const retryPrompt =
+      clean((toolResult as any)?.next_required_step?.retry_prompt || "") ||
+      clean((toolResult as any)?.next_required_step?.prompt || "");
+
+    const retryStepKey = clean(
+      (toolResult as any)?.next_required_step?.step_key || ""
+    );
+
+    const shouldForceStepRetryPrompt =
+      toolName === "submit_booking_step" &&
+      (toolResult as any)?.ok === false &&
+      Boolean(retryStepKey) &&
+      Boolean(retryPrompt);
+
+    if (shouldForceStepRetryPrompt) {
+      console.warn("[VOICE_REALTIME][BOOKING_STEP_RETRY_PROMPT_FORCED]", {
+        callSid,
+        toolName,
+        error: (toolResult as any)?.error,
+        retryStepKey,
+        retryPrompt,
+        source: "tool_followup:submit_booking_step:retry",
+      });
+
+      requestRealtimeResponse(
+        {
+          instructions: [
+            "Use only the tool result as source of truth.",
+            `Configured retry prompt: ${retryPrompt}`,
+            "Say the configured retry prompt naturally, without changing its meaning.",
+            "Ask only this clarification question.",
+            "Do not advance the booking.",
+            "Do not call another tool.",
+            "Do not call create_appointment.",
+            "Do not invent, modify, or assume booking details.",
+            "Wait for the caller to answer this same step.",
+          ].join(" "),
+        },
+        "tool_followup:submit_booking_step:retry"
+      );
+
+      return {
+        consumed: true,
+        result: toolResult as RealtimeToolResult,
+        realtimeState: nextRealtimeState,
+        bookingFlowLoaded: nextBookingFlowLoaded,
+        hangupRequestedByTool,
+        callEnding: nextCallEnding,
+        resetLastUserDigits: true,
+      };
+    }
+
     const followupLocale = String(
       (nextRealtimeState as any)?.lang ||
         (realtimeState as any)?.lang ||
