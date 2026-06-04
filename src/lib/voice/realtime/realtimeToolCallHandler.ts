@@ -617,7 +617,19 @@ export async function handleRealtimeToolCall(
         const isWrongStepBlockedSubmit = turnGate.reason === "WRONG_STEP";
 
         if (isWrongStepBlockedSubmit) {
-          console.warn("[VOICE_REALTIME][BOOKING_WRONG_STEP_SUBMIT_IGNORED_WITHOUT_PROMPT_INTERRUPT]", {
+          const currentStepPrompt = clean(
+            realtimeState.pendingBookingStepPrompt || ""
+          );
+
+          const isLateDuplicateFromAlreadyAcceptedStep =
+            submittedStepKeyForBlockedSubmit &&
+            lastSubmittedBookingStepKeyForBlockedSubmit &&
+            submittedStepKeyForBlockedSubmit === lastSubmittedBookingStepKeyForBlockedSubmit &&
+            lastUserTranscriptSeqForBlockedSubmit >= 0 &&
+            lastSubmittedBookingTranscriptSeqForBlockedSubmit ===
+              lastUserTranscriptSeqForBlockedSubmit;
+
+          console.warn("[VOICE_REALTIME][BOOKING_WRONG_STEP_SUBMIT_IGNORED_CURRENT_STEP_REPROMPT]", {
             callSid,
             submittedStepKey: submittedStepKeyForBlockedSubmit,
             pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
@@ -627,7 +639,18 @@ export async function handleRealtimeToolCall(
             lastSubmittedBookingStepKey: lastSubmittedBookingStepKeyForBlockedSubmit,
             lastSubmittedBookingTranscriptSeq:
               lastSubmittedBookingTranscriptSeqForBlockedSubmit,
+            isLateDuplicateFromAlreadyAcceptedStep,
+            hasCurrentStepPrompt: Boolean(currentStepPrompt),
           });
+
+          if (isLateDuplicateFromAlreadyAcceptedStep && currentStepPrompt) {
+            requestRealtimeResponse(
+              {
+                instructions: currentStepPrompt,
+              },
+              "tool_guard:wrong_step_late_duplicate_current_step_prompt"
+            );
+          }
 
           return {
             consumed: true,
