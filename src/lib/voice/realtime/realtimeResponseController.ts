@@ -53,19 +53,6 @@ function shouldSupersedeActiveResponse(params: {
   return source.startsWith("tool_followup:");
 }
 
-function shouldSkipRedundantQueuedResponse(params: {
-  source: string;
-  activeResponseSource: string | null;
-}): boolean {
-  const source = clean(params.source);
-  const activeSource = clean(params.activeResponseSource);
-
-  return (
-    source === "tool_guard:duplicate_stale_submit_force_current_step_prompt" &&
-    activeSource === "tool_followup:submit_booking_step:synthetic_direct"
-  );
-}
-
 export function createRealtimeResponseController(
   params: ResponseControllerParams
 ) {
@@ -104,23 +91,6 @@ export function createRealtimeResponseController(
     });
 
     if (activeResponseId) {
-      if (
-        shouldSkipRedundantQueuedResponse({
-          source,
-          activeResponseSource,
-        })
-      ) {
-        console.warn("[VOICE_REALTIME][REDUNDANT_RESPONSE_CREATE_SKIPPED]", {
-          callSid,
-          source,
-          activeResponseId,
-          activeResponseSource,
-          reason: "GUARD_PROMPT_ALREADY_COVERED_BY_SYNTHETIC_DIRECT",
-        });
-
-        return;
-      }
-
       pendingResponseCreate = event;
       pendingResponseSource = source;
 
