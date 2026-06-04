@@ -25,6 +25,7 @@ import { sendRealtimeJson } from "./socket/sendRealtimeJson";
 import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBookingStepEffectiveArgs";
 import { buildSubmitBookingStepNotReadyInstructions } from "./toolFollowup/buildSubmitBookingStepNotReadyInstructions";
 import { resolveSyntheticDirectBookingFollowup } from "./toolFollowup/resolveSyntheticDirectBookingFollowup";
+import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateSubmitBookingStepEarly";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -381,6 +382,31 @@ export async function handleRealtimeToolCall(
   }
 
   if (toolName === "submit_booking_step") {
+    const duplicateSubmitGuard = dropDuplicateSubmitBookingStepEarly({
+      toolName,
+      toolArgs,
+      callId,
+      callSid,
+      openAiSocket,
+      realtimeState,
+      bookingFlowLoaded,
+      callEnding,
+      isSyntheticToolCall,
+      lastUserTranscript,
+    });
+
+    if (duplicateSubmitGuard.handled) {
+      return {
+        consumed: true,
+        result: duplicateSubmitGuard.result,
+        realtimeState: duplicateSubmitGuard.realtimeState,
+        bookingFlowLoaded: duplicateSubmitGuard.bookingFlowLoaded,
+        hangupRequestedByTool: duplicateSubmitGuard.hangupRequestedByTool,
+        callEnding: duplicateSubmitGuard.callEnding,
+        resetLastUserDigits: duplicateSubmitGuard.resetLastUserDigits,
+      };
+    }
+
     const freshness = validateSubmitBookingStepFreshness({
       toolArgs,
       realtimeState,
