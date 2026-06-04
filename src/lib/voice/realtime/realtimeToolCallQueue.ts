@@ -124,12 +124,12 @@ export function createRealtimeToolCallQueue(
           return;
         }
 
-        const nextRealtimeState = attachLatestUserTranscriptSeq({
-          realtimeState: toolCallResult.realtimeState,
-          lastUserTranscriptSeq,
-        });
-
-        params.setRealtimeState(nextRealtimeState);
+        params.setRealtimeState(
+          attachLatestUserTranscriptSeq({
+            realtimeState: toolCallResult.realtimeState,
+            lastUserTranscriptSeq,
+          })
+        );
 
         params.setBookingFlowLoaded(toolCallResult.bookingFlowLoaded);
 
@@ -141,18 +141,6 @@ export function createRealtimeToolCallQueue(
 
         if (toolCallResult.resetLastUserDigits) {
           params.resetLastUserDigits();
-        }
-
-        const toolName = clean(event.name || event.toolName || "");
-        const actionRequired = clean((toolCallResult.result as any)?.action_required || "");
-
-        if (
-          toolName === "submit_booking_step" &&
-          actionRequired === "create_appointment"
-        ) {
-          enqueueCreateAppointmentFromServerAction({
-            source: "server_action_required:create_appointment",
-          });
         }
       })
       .catch((error) => {
@@ -205,30 +193,8 @@ export function createRealtimeToolCallQueue(
     );
   }
 
-  function enqueueCreateAppointmentFromServerAction(paramsForCreate: {
-    source: string;
-  }): void {
-    const callId = `syn_create_appointment_${Date.now().toString(36)}_${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
-
-    console.warn("[VOICE_REALTIME][SYNTHETIC_CREATE_APPOINTMENT_ENQUEUED]", {
-      callSid: params.getCallSid(),
-      lastUserTranscriptSeq: params.getLastUserTranscriptSeq(),
-      source: paramsForCreate.source,
-    });
-
-    enqueueRealtimeToolCall(
-      buildSyntheticCreateAppointmentEvent({
-        callId,
-        source: paramsForCreate.source,
-      })
-    );
-  }
-
   return {
     enqueueRealtimeToolCall,
     enqueueSubmitBookingStepFromTranscript,
-    enqueueCreateAppointmentFromServerAction,
   };
 }
