@@ -68,6 +68,29 @@ function buildSyntheticSubmitBookingStepEvent(params: {
   };
 }
 
+function buildSyntheticCreateAppointmentEvent(params: {
+  callId: string;
+  source: string;
+}): any {
+  const args = {};
+
+  return {
+    type: "response.function_call_arguments.done",
+    name: "create_appointment",
+    call_id: params.callId,
+    arguments: JSON.stringify(args),
+
+    // Campos redundantes a propósito para ser compatible con parsers internos
+    // que puedan leer toolName/callId/toolArgs en vez de name/call_id/arguments.
+    toolName: "create_appointment",
+    callId: params.callId,
+    toolArgs: args,
+
+    synthetic: true,
+    syntheticSource: params.source,
+  };
+}
+
 export function createRealtimeToolCallQueue(
   params: RealtimeToolCallQueueParams
 ) {
@@ -101,12 +124,12 @@ export function createRealtimeToolCallQueue(
           return;
         }
 
-        params.setRealtimeState(
-          attachLatestUserTranscriptSeq({
-            realtimeState: toolCallResult.realtimeState,
-            lastUserTranscriptSeq,
-          })
-        );
+        const nextRealtimeState = attachLatestUserTranscriptSeq({
+          realtimeState: toolCallResult.realtimeState,
+          lastUserTranscriptSeq,
+        });
+
+        params.setRealtimeState(nextRealtimeState);
 
         params.setBookingFlowLoaded(toolCallResult.bookingFlowLoaded);
 
@@ -118,6 +141,18 @@ export function createRealtimeToolCallQueue(
 
         if (toolCallResult.resetLastUserDigits) {
           params.resetLastUserDigits();
+        }
+
+        const toolName = clean(event.name || event.toolName || "");
+        const actionRequired = clean((toolCallResult.result as any)?.action_required || "");
+
+        if (
+          toolName === "submit_booking_step" &&
+          actionRequired === "create_appointment"
+        ) {
+          enqueueCreateAppointmentFromServerAction({
+            source: "server_action_required:create_appointment",
+          });
         }
       })
       .catch((error) => {
@@ -170,8 +205,30 @@ export function createRealtimeToolCallQueue(
     );
   }
 
+  function enqueueCreateAppointmentFromServerAction(paramsForCreate: {
+    source: string;
+  }): void {
+    const callId = `syn_create_appointment_${Date.now().toString(36)}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+
+    console.warn("[VOICE_REALTIME][SYNTHETIC_CREATE_APPOINTMENT_ENQUEUED]", {
+      callSid: params.getCallSid(),
+      lastUserTranscriptSeq: params.getLastUserTranscriptSeq(),
+      source: paramsForCreate.source,
+    });
+
+    enqueueRealtimeToolCall(
+      buildSyntheticCreateAppointmentEvent({
+        callId,
+        source: paramsForCreate.source,
+      })
+    );
+  }
+
   return {
     enqueueRealtimeToolCall,
     enqueueSubmitBookingStepFromTranscript,
+    enqueueCreateAppointmentFromServerAction,
   };
 }
