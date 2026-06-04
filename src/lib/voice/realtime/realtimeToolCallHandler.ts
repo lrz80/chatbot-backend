@@ -614,6 +614,32 @@ export async function handleRealtimeToolCall(
         });
 
       if (shouldSilentlyIgnoreBlockedSubmit) {
+        const isWrongStepBlockedSubmit = turnGate.reason === "WRONG_STEP";
+
+        if (isWrongStepBlockedSubmit) {
+          console.warn("[VOICE_REALTIME][BOOKING_WRONG_STEP_SUBMIT_IGNORED_WITHOUT_PROMPT_INTERRUPT]", {
+            callSid,
+            submittedStepKey: submittedStepKeyForBlockedSubmit,
+            pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
+            bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
+            lastUserTranscript,
+            lastUserTranscriptSeq: lastUserTranscriptSeqForBlockedSubmit,
+            lastSubmittedBookingStepKey: lastSubmittedBookingStepKeyForBlockedSubmit,
+            lastSubmittedBookingTranscriptSeq:
+              lastSubmittedBookingTranscriptSeqForBlockedSubmit,
+          });
+
+          return {
+            consumed: true,
+            result: blockedResult,
+            realtimeState,
+            bookingFlowLoaded,
+            hangupRequestedByTool: false,
+            callEnding,
+            resetLastUserDigits: false,
+          };
+        }
+
         handleStaleSubmitBookingStepPrompt({
           callSid,
           realtimeState,
@@ -818,21 +844,61 @@ export async function handleRealtimeToolCall(
     if (
       toolName === "submit_booking_step" &&
       (toolResult as any)?.ok === true &&
-      actionRequired === "create_appointment"
+      actionRequired
     ) {
-      console.warn("[VOICE_REALTIME][TOOL_FOLLOWUP_SKIPPED_SERVER_ACTION_REQUIRED]", {
+      console.warn("[VOICE_REALTIME][SERVER_ACTION_REQUIRED_EXECUTING]", {
         callSid,
         toolName,
         actionRequired,
-        reason: "SERVER_WILL_ENQUEUE_CREATE_APPOINTMENT",
       });
+
+      const serverActionResult = await executeRealtimeTool({
+        tenantId: resolvedTenantId,
+        callerPhone,
+        toolName: actionRequired,
+        args: {},
+        tenant: realtimeTenant,
+        cfg: realtimeCfg,
+        callSid: callSid || undefined,
+        didNumber: didNumber || undefined,
+        currentLocale,
+        state: nextRealtimeState,
+        userInput: lastUserTranscript,
+        digits: lastUserDigits,
+      });
+
+      console.log("[VOICE_REALTIME][SERVER_ACTION_RESULT]", {
+        callSid,
+        actionRequired,
+        ok: serverActionResult?.ok,
+        error: serverActionResult?.error,
+        message: serverActionResult?.message,
+      });
+
+      const serverActionFollowupInstructions =
+        resolveRealtimeToolFollowupInstructions({
+          toolName: actionRequired,
+          toolResult: (serverActionResult || {}) as RealtimeToolResult,
+          currentLocale:
+            clean((nextRealtimeState as any)?.lang) ||
+            clean((realtimeState as any)?.lang) ||
+            currentLocale,
+        });
+
+      requestRealtimeResponse(
+        {
+          instructions: serverActionFollowupInstructions,
+        },
+        `tool_followup:${actionRequired}`
+      );
 
       return {
         consumed: true,
-        result: toolResult as RealtimeToolResult,
+        result: serverActionResult as RealtimeToolResult,
         realtimeState: nextRealtimeState,
         bookingFlowLoaded: nextBookingFlowLoaded,
-        hangupRequestedByTool,
+        hangupRequestedByTool:
+          actionRequired === "end_call" && serverActionResult?.ok === true,
         callEnding: nextCallEnding,
         resetLastUserDigits: true,
       };
@@ -864,17 +930,7 @@ export async function handleRealtimeToolCall(
 
       requestRealtimeResponse(
         {
-          instructions: [
-            "Use only the tool result as source of truth.",
-            `Configured retry prompt: ${retryPrompt}`,
-            "Say the configured retry prompt naturally, without changing its meaning.",
-            "Ask only this clarification question.",
-            "Do not advance the booking.",
-            "Do not call another tool.",
-            "Do not call create_appointment.",
-            "Do not invent, modify, or assume booking details.",
-            "Wait for the caller to answer this same step.",
-          ].join(" "),
+          instructions: retryPrompt,
         },
         "tool_followup:submit_booking_step:retry"
       );
