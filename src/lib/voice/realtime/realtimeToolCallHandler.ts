@@ -393,6 +393,7 @@ export async function handleRealtimeToolCall(
       callEnding,
       isSyntheticToolCall,
       lastUserTranscript,
+      requestRealtimeResponse,
     });
 
     if (duplicateSubmitGuard.handled) {

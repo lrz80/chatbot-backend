@@ -16,6 +16,10 @@ type DropDuplicateSubmitBookingStepEarlyParams = {
   callEnding: boolean;
   isSyntheticToolCall: boolean;
   lastUserTranscript: string;
+  requestRealtimeResponse: (
+    response?: Record<string, unknown>,
+    source?: string
+  ) => void;
 };
 
 type DropDuplicateSubmitBookingStepEarlyResult =
@@ -46,6 +50,7 @@ export function dropDuplicateSubmitBookingStepEarly(
     callEnding,
     isSyntheticToolCall,
     lastUserTranscript,
+    requestRealtimeResponse,
   } = params;
 
   if (toolName !== "submit_booking_step") {
@@ -112,6 +117,17 @@ export function dropDuplicateSubmitBookingStepEarly(
         output: JSON.stringify(result),
       },
     });
+  }
+
+  const currentStepPrompt = clean(realtimeState.pendingBookingStepPrompt || "");
+
+  if (currentStepPrompt) {
+    requestRealtimeResponse(
+      {
+        instructions: currentStepPrompt,
+      },
+      "tool_guard:duplicate_submit_current_step_prompt"
+    );
   }
 
   return {
