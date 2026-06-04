@@ -35,22 +35,37 @@ function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
 
 function shouldSupersedeActiveResponse(params: {
   source: string;
+  activeResponseSource: string | null;
   shouldInterruptActiveResponse: boolean;
 }): boolean {
   const source = clean(params.source);
+  const activeSource = clean(params.activeResponseSource);
 
   if (params.shouldInterruptActiveResponse) {
     return true;
   }
 
   /**
-   * Tool followups are not casual assistant chatter.
-   * They are runtime-controlled responses to a completed tool result.
-   *
-   * If they remain queued behind an active/stale response, the caller hears silence.
-   * This is generic runtime policy, not tenant/business-specific logic.
+   * Tool followups are runtime-controlled responses.
+   * They must not stay blocked behind stale assistant responses.
    */
-  return source.startsWith("tool_followup:");
+  if (source.startsWith("tool_followup:")) {
+    return true;
+  }
+
+  /**
+   * Guard prompts are recovery responses.
+   * If synthetic_direct failed to produce audible output or got stuck,
+   * the guard must be allowed to cancel it and speak the current configured prompt.
+   */
+  if (
+    source === "tool_guard:duplicate_stale_submit_force_current_step_prompt" &&
+    activeSource === "tool_followup:submit_booking_step:synthetic_direct"
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 export function createRealtimeResponseController(
@@ -87,6 +102,7 @@ export function createRealtimeResponseController(
 
     const shouldSupersede = shouldSupersedeActiveResponse({
       source,
+      activeResponseSource,
       shouldInterruptActiveResponse,
     });
 
