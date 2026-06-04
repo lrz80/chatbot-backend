@@ -69,10 +69,13 @@ export function createUserTranscriptFollowupController(
     params.requestRealtimeResponse(
       {
         instructions: [
+          `Current call locale: ${clean((realtimeState as any).currentLocale) || clean((realtimeState as any).locale) || "en-US"}.`,
           "The caller just said this:",
           transcript,
-          "Respond naturally using the current session instructions.",
-          "If the caller is asking to book, schedule, reserve, or make an appointment, call get_booking_flow now.",
+          "Respond only in the current call locale unless the caller clearly and explicitly asks to switch language.",
+          "Do not infer a language switch from noisy, partial, unclear, or low-confidence audio.",
+          "If the transcript is unclear, noisy, partial, or does not contain a clear request, ask the caller to repeat.",
+          "If the caller is clearly asking to book, schedule, reserve, or make an appointment, call get_booking_flow now.",
           "If the caller is asking a normal business question, answer normally.",
           "Do not invent booking details.",
           "Do not ignore the caller.",
