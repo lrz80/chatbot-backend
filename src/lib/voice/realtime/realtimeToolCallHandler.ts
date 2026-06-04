@@ -62,6 +62,15 @@ type HandleRealtimeToolCallResult = {
   resetLastUserDigits: boolean;
 };
 
+function buildToollessResponse(
+  instructions: string
+): Record<string, unknown> {
+  return {
+    instructions,
+    tool_choice: "none",
+  };
+}
+
 export async function handleRealtimeToolCall(
   params: HandleRealtimeToolCallParams
 ): Promise<HandleRealtimeToolCallResult> {
@@ -917,6 +926,27 @@ export async function handleRealtimeToolCall(
 
     const actionRequired = clean((toolResult as any)?.action_required || "");
 
+    const requestServerActionRealtimeResponse: typeof requestRealtimeResponse = (
+      response,
+      source
+    ) => {
+      const isCreateAppointmentFollowup =
+        actionRequired === "create_appointment" ||
+        source === "tool_followup:create_appointment";
+
+      const instructions = clean(response?.instructions || "");
+
+      if (isCreateAppointmentFollowup && instructions) {
+        requestRealtimeResponse(
+          buildToollessResponse(instructions),
+          source || "tool_followup:create_appointment"
+        );
+        return;
+      }
+
+      requestRealtimeResponse(response, source);
+    };
+
     const serverActionResult = await handleRealtimeServerActionRequired({
       toolName,
       toolResult: (toolResult || {}) as RealtimeToolResult,
@@ -936,7 +966,7 @@ export async function handleRealtimeToolCall(
       nextCallEnding,
       lastUserTranscript,
       lastUserDigits,
-      requestRealtimeResponse,
+      requestRealtimeResponse: requestServerActionRealtimeResponse,
     });
 
     if (serverActionResult.handled) {
