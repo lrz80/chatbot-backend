@@ -788,7 +788,13 @@ export async function handleRealtimeToolCall(
     lastUserTranscript,
   });
 
-  if (toolName === "submit_booking_step") {
+  if (
+    toolName === "submit_booking_step" &&
+    !(
+      clean(toolArgs.step_key) === "confirm" &&
+      ["confirm", "cancel", "unknown"].includes(clean(toolArgs.value).toLowerCase())
+    )
+  ) {
     effectiveToolArgs = applySubmitBookingStepEffectiveArgs({
       effectiveToolArgs,
       rawToolArgs: toolArgs,

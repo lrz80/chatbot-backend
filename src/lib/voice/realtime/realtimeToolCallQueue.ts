@@ -1,4 +1,4 @@
-//src/lib/voice/realtime/realtimeToolCallQueue.ts
+// src/lib/voice/realtime/realtimeToolCallQueue.ts
 import WebSocket from "ws";
 import type { CallState } from "../types";
 import { handleRealtimeToolCall } from "./realtimeToolCallHandler";
@@ -44,39 +44,18 @@ function normalizeKey(value: unknown): string {
   return clean(value).toLowerCase();
 }
 
-function isConfirmationStepKey(value: unknown): boolean {
-  const stepKey = normalizeKey(value);
-
-  return stepKey === "confirm" || stepKey === "confirmation";
-}
-
-function isConfirmationProtocolValue(value: unknown): boolean {
-  const normalized = normalizeKey(value);
-
-  return (
-    normalized === "confirm" ||
-    normalized === "cancel" ||
-    normalized === "unknown"
-  );
-}
-
-function buildConfirmationModelResolutionResponse(params: {
+function isProtocolValueForStep(params: {
   stepKey: string;
-  transcript: string;
-}): Record<string, unknown> {
-  return {
-    instructions: [
-      "Resolve the user's latest answer for the pending booking confirmation step.",
-      "Do not answer the user directly.",
-      "Call submit_booking_step exactly once.",
-      `Use step_key "${params.stepKey}".`,
-      'For value, use only one of these protocol values: "confirm", "cancel", or "unknown".',
-      'Use "confirm" only if the user clearly confirms the appointment.',
-      'Use "cancel" only if the user clearly rejects or cancels the appointment.',
-      'Use "unknown" if the user answer is unclear, incomplete, unrelated, or ambiguous.',
-      `User answer: ${JSON.stringify(params.transcript)}`,
-    ].join("\n"),
-  };
+  value: string;
+}): boolean {
+  const stepKey = normalizeKey(params.stepKey);
+  const value = normalizeKey(params.value);
+
+  if (stepKey === "confirm" || stepKey === "confirmation") {
+    return value === "confirm" || value === "cancel" || value === "unknown";
+  }
+
+  return false;
 }
 
 function buildSyntheticSubmitBookingStepEvent(params: {
@@ -84,11 +63,27 @@ function buildSyntheticSubmitBookingStepEvent(params: {
   stepKey: string;
   value: string;
   source: string;
+  sourceTranscript?: string;
+  sourceTranscriptSeq?: number;
+  resolvedBy?: string;
 }): any {
-  const args = {
+  const args: Record<string, unknown> = {
     step_key: params.stepKey,
     value: params.value,
+    resolved_candidate_source: params.resolvedBy || "backend",
   };
+
+  if (params.sourceTranscript) {
+    args.source_transcript = params.sourceTranscript;
+  }
+
+  if (typeof params.sourceTranscriptSeq === "number") {
+    args.source_transcript_seq = params.sourceTranscriptSeq;
+  }
+
+  if (params.resolvedBy) {
+    args.resolved_by = params.resolvedBy;
+  }
 
   return {
     type: "response.function_call_arguments.done",
@@ -96,8 +91,6 @@ function buildSyntheticSubmitBookingStepEvent(params: {
     call_id: params.callId,
     arguments: JSON.stringify(args),
 
-    // Campos redundantes a propósito para ser compatible con parsers internos
-    // que puedan leer toolName/callId/toolArgs en vez de name/call_id/arguments.
     toolName: "submit_booking_step",
     callId: params.callId,
     toolArgs: args,
@@ -119,8 +112,6 @@ function buildSyntheticCreateAppointmentEvent(params: {
     call_id: params.callId,
     arguments: JSON.stringify(args),
 
-    // Campos redundantes a propósito para ser compatible con parsers internos
-    // que puedan leer toolName/callId/toolArgs en vez de name/call_id/arguments.
     toolName: "create_appointment",
     callId: params.callId,
     toolArgs: args,
@@ -128,6 +119,65 @@ function buildSyntheticCreateAppointmentEvent(params: {
     synthetic: true,
     syntheticSource: params.source,
   };
+}
+
+function buildPendingStepModelResolutionResponse(params: {
+  stepKey: string;
+  transcript: string;
+  transcriptSeq: number;
+}): Record<string, unknown> {
+  return {
+    instructions: [
+      "You are resolving the user's latest answer for a pending booking step.",
+      "Do not speak to the user.",
+      "Do not explain.",
+      "Call submit_booking_step exactly once.",
+      "",
+      "Use the exact step_key provided below.",
+      "Return only a structured value appropriate for that step.",
+      "",
+      "If the pending step is a confirmation step, value must be exactly one of:",
+      '- "confirm"',
+      '- "cancel"',
+      '- "unknown"',
+      "",
+      'Use "confirm" only when the user clearly confirms.',
+      'Use "cancel" only when the user clearly rejects, cancels, or says the booking is not correct.',
+      'Use "unknown" when the answer is unclear, unrelated, incomplete, or ambiguous.',
+      "",
+      "You must include these metadata fields in the submit_booking_step arguments:",
+      '- resolved_by: "backend_model_resolution"',
+      "- source_transcript_seq: the exact number provided below",
+      "- source_transcript: the exact user answer provided below",
+      "",
+      `step_key: ${JSON.stringify(params.stepKey)}`,
+      `source_transcript_seq: ${params.transcriptSeq}`,
+      `source_transcript: ${JSON.stringify(params.transcript)}`,
+      "",
+      "submit_booking_step arguments shape:",
+      JSON.stringify({
+        step_key: params.stepKey,
+        value: "resolved value",
+        resolved_by: "backend_model_resolution",
+        resolved_candidate_source: "model",
+        source_transcript_seq: params.transcriptSeq,
+        source_transcript: params.transcript,
+      }),
+    ].join("\n"),
+  };
+}
+
+function shouldResolvePendingStepWithModel(params: {
+  stepKey: string;
+  value: string;
+}): boolean {
+  const stepKey = normalizeKey(params.stepKey);
+
+  if (isProtocolValueForStep(params)) {
+    return false;
+  }
+
+  return stepKey === "confirm" || stepKey === "confirmation";
 }
 
 export function createRealtimeToolCallQueue(
@@ -197,6 +247,7 @@ export function createRealtimeToolCallQueue(
   }): void {
     const stepKey = clean(paramsForSubmit.stepKey);
     const value = clean(paramsForSubmit.value);
+    const transcriptSeq = params.getLastUserTranscriptSeq();
 
     if (!stepKey || !value) {
       console.warn("[VOICE_REALTIME][SYNTHETIC_SUBMIT_BOOKING_STEP_SKIPPED]", {
@@ -210,21 +261,26 @@ export function createRealtimeToolCallQueue(
       return;
     }
 
-    if (isConfirmationStepKey(stepKey) && !isConfirmationProtocolValue(value)) {
-      console.warn("[VOICE_REALTIME][SYNTHETIC_CONFIRMATION_SUBMIT_REDIRECTED_TO_MODEL_RESOLUTION]", {
-        callSid: params.getCallSid(),
+    if (
+      shouldResolvePendingStepWithModel({
         stepKey,
         value,
-        lastUserTranscriptSeq: params.getLastUserTranscriptSeq(),
+      })
+    ) {
+      console.warn("[VOICE_REALTIME][PENDING_STEP_MODEL_RESOLUTION_REQUESTED]", {
+        callSid: params.getCallSid(),
+        stepKey,
+        transcriptSeq,
         source: paramsForSubmit.source,
       });
 
       params.requestRealtimeResponse(
-        buildConfirmationModelResolutionResponse({
+        buildPendingStepModelResolutionResponse({
           stepKey,
           transcript: value,
+          transcriptSeq,
         }),
-        "booking_step_confirmation_model_resolution"
+        "booking_step_model_resolution"
       );
 
       return;
@@ -238,7 +294,7 @@ export function createRealtimeToolCallQueue(
       callSid: params.getCallSid(),
       stepKey,
       value,
-      lastUserTranscriptSeq: params.getLastUserTranscriptSeq(),
+      lastUserTranscriptSeq: transcriptSeq,
       source: paramsForSubmit.source,
     });
 
@@ -248,6 +304,9 @@ export function createRealtimeToolCallQueue(
         stepKey,
         value,
         source: paramsForSubmit.source,
+        sourceTranscript: value,
+        sourceTranscriptSeq: transcriptSeq,
+        resolvedBy: "backend_direct",
       })
     );
   }
