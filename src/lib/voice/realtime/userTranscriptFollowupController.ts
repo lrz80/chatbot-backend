@@ -69,14 +69,21 @@ export function createUserTranscriptFollowupController(
     params.requestRealtimeResponse(
       {
         instructions: [
-          `Current call locale: ${clean((realtimeState as any).currentLocale) || clean((realtimeState as any).locale) || "en-US"}.`,
+          `Current call locale: ${
+            clean((realtimeState as any).currentLocale) ||
+            clean((realtimeState as any).locale) ||
+            "en-US"
+          }.`,
           "The caller just said this:",
           transcript,
+          "You are not currently inside the booking runtime.",
+          "If the caller appears to be trying to start a booking, appointment, reservation, scheduling flow, or gives booking-related details before the booking flow is loaded, call get_booking_flow immediately.",
+          "Do not wait for more booking details before calling get_booking_flow.",
+          "Do not collect service, date, time, name, phone, address, staff, or other booking fields before get_booking_flow is loaded.",
+          "If the transcript is unclear, noisy, partial, or ambiguous, ask one short clarification question in the current call locale.",
           "Respond only in the current call locale unless the caller clearly and explicitly asks to switch language.",
           "Do not infer a language switch from noisy, partial, unclear, or low-confidence audio.",
-          "If the transcript is unclear, noisy, partial, or does not contain a clear request, ask the caller to repeat.",
-          "If the caller is clearly asking to book, schedule, reserve, or make an appointment, call get_booking_flow now.",
-          "If the caller is asking a normal business question, answer normally.",
+          "If the caller is asking a normal non-booking business question, answer normally.",
           "Do not invent booking details.",
           "Do not ignore the caller.",
         ].join(" "),
