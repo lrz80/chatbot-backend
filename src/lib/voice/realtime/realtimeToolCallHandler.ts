@@ -765,6 +765,7 @@ export async function handleRealtimeToolCall(
         requestRealtimeResponse(
           {
             instructions: syntheticDirectFollowup.instructions,
+            tool_choice: "none",
           },
           syntheticDirectFollowup.source
         );
@@ -865,6 +866,7 @@ export async function handleRealtimeToolCall(
       requestRealtimeResponse(
         {
           instructions: retryPrompt,
+          tool_choice: "none",
         },
         "tool_followup:submit_booking_step:retry"
       );
