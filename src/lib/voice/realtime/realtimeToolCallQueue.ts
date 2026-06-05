@@ -40,6 +40,45 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function normalizeKey(value: unknown): string {
+  return clean(value).toLowerCase();
+}
+
+function isConfirmationStepKey(value: unknown): boolean {
+  const stepKey = normalizeKey(value);
+
+  return stepKey === "confirm" || stepKey === "confirmation";
+}
+
+function isConfirmationProtocolValue(value: unknown): boolean {
+  const normalized = normalizeKey(value);
+
+  return (
+    normalized === "confirm" ||
+    normalized === "cancel" ||
+    normalized === "unknown"
+  );
+}
+
+function buildConfirmationModelResolutionResponse(params: {
+  stepKey: string;
+  transcript: string;
+}): Record<string, unknown> {
+  return {
+    instructions: [
+      "Resolve the user's latest answer for the pending booking confirmation step.",
+      "Do not answer the user directly.",
+      "Call submit_booking_step exactly once.",
+      `Use step_key "${params.stepKey}".`,
+      'For value, use only one of these protocol values: "confirm", "cancel", or "unknown".',
+      'Use "confirm" only if the user clearly confirms the appointment.',
+      'Use "cancel" only if the user clearly rejects or cancels the appointment.',
+      'Use "unknown" if the user answer is unclear, incomplete, unrelated, or ambiguous.',
+      `User answer: ${JSON.stringify(params.transcript)}`,
+    ].join("\n"),
+  };
+}
+
 function buildSyntheticSubmitBookingStepEvent(params: {
   callId: string;
   stepKey: string;
@@ -167,6 +206,26 @@ export function createRealtimeToolCallQueue(
         value,
         source: paramsForSubmit.source,
       });
+
+      return;
+    }
+
+    if (isConfirmationStepKey(stepKey) && !isConfirmationProtocolValue(value)) {
+      console.warn("[VOICE_REALTIME][SYNTHETIC_CONFIRMATION_SUBMIT_REDIRECTED_TO_MODEL_RESOLUTION]", {
+        callSid: params.getCallSid(),
+        stepKey,
+        value,
+        lastUserTranscriptSeq: params.getLastUserTranscriptSeq(),
+        source: paramsForSubmit.source,
+      });
+
+      params.requestRealtimeResponse(
+        buildConfirmationModelResolutionResponse({
+          stepKey,
+          transcript: value,
+        }),
+        "booking_step_confirmation_model_resolution"
+      );
 
       return;
     }

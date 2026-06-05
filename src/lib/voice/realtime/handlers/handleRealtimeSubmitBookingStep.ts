@@ -193,6 +193,13 @@ function isInternalAllowedModelToken(params: {
     return true;
   }
 
+  if (
+    isConfirmationStep(params.currentStep) &&
+    isAllowedConfirmationProtocolValue(value)
+  ) {
+    return true;
+  }
+
   return false;
 }
 
