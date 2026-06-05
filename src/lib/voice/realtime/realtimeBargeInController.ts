@@ -21,7 +21,6 @@ type RealtimeBargeInControllerParams = {
 };
 
 const MIN_MS_AFTER_ASSISTANT_AUDIO_TO_ALLOW_BARGE_IN = 650;
-const RECENT_ASSISTANT_AUDIO_WINDOW_MS = 1500;
 const BARGE_IN_DEBOUNCE_MS = 300;
 
 function clean(value: unknown): string {
@@ -49,19 +48,14 @@ export function createRealtimeBargeInController(
 
     const now = Date.now();
 
-    /**
-     * Evita ráfagas repetidas de cancel/clear por el mismo corte.
-     * Esto protege contra eventos duplicados de speech_started/transcript_completed.
-     */
     if (now - lastBargeInAtMs < BARGE_IN_DEBOUNCE_MS) {
       return false;
     }
 
     const responseState = params.responseController.getState();
     const activeResponseId = clean(responseState.activeResponseId);
-    const lastAssistantAudioDeltaAtMs = params.getLastAssistantAudioDeltaAtMs();
-
     const assistantSpeaking = params.getAssistantSpeaking();
+    const lastAssistantAudioDeltaAtMs = params.getLastAssistantAudioDeltaAtMs();
 
     const msSinceLastAssistantAudio =
       lastAssistantAudioDeltaAtMs > 0
@@ -69,15 +63,30 @@ export function createRealtimeBargeInController(
         : null;
 
     /**
-     * Regla crítica:
-     * No cortes el audio de Aamy justo cuando está empezando a hablar.
+     * Regla principal:
+     * Si no hay respuesta activa y Aamy no está hablando, no hay nada que cortar.
      *
-     * OpenAI/Twilio puede disparar input_audio_buffer.speech_started por eco,
-     * ruido, respiración o audio residual del usuario. Si cortamos en los
-     * primeros milisegundos, el caller nunca escucha el prompt.
+     * Antes se cortaba por "audio reciente" aunque activeResponseId fuera null
+     * y assistantSpeaking fuera false. Eso mandaba Twilio clear sin razón.
+     */
+    if (!activeResponseId && !assistantSpeaking) {
+      console.log("[VOICE_REALTIME][BARGE_IN_IGNORED_NO_ACTIVE_ASSISTANT_OUTPUT]", {
+        callSid: params.getCallSid(),
+        streamSid: params.getStreamSid(),
+        source,
+        activeResponseId: null,
+        assistantSpeaking,
+        msSinceLastAssistantAudio,
+      });
+
+      return false;
+    }
+
+    /**
+     * No cortes a Aamy justo cuando empieza a hablar.
+     * Esto evita que eco/ruido/input_audio_buffer.speech_started corte el prompt.
      */
     const isTooSoonAfterAssistantAudio =
-      assistantSpeaking &&
       msSinceLastAssistantAudio !== null &&
       msSinceLastAssistantAudio < MIN_MS_AFTER_ASSISTANT_AUDIO_TO_ALLOW_BARGE_IN;
 
@@ -93,15 +102,6 @@ export function createRealtimeBargeInController(
           MIN_MS_AFTER_ASSISTANT_AUDIO_TO_ALLOW_BARGE_IN,
       });
 
-      return false;
-    }
-
-    const hasAssistantAudioRecently =
-      assistantSpeaking ||
-      (lastAssistantAudioDeltaAtMs > 0 &&
-        now - lastAssistantAudioDeltaAtMs < RECENT_ASSISTANT_AUDIO_WINDOW_MS);
-
-    if (!hasAssistantAudioRecently && !activeResponseId) {
       return false;
     }
 
