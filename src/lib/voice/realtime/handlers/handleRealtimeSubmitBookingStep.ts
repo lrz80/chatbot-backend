@@ -253,9 +253,23 @@ function buildSubmitValueCandidates(params: {
     stepSlot === "service" ||
     stepExpectedType === "service";
 
+  const isCurrentConfirmationStep = isConfirmationStep(currentStep);
+
   const primarySource = clean(args.resolved_candidate_source) || "model";
 
   if (isServiceStep && primaryValue && primarySource === "model") {
+    orderedCandidates.push({
+      source: "model",
+      value: primaryValue,
+    });
+  }
+
+  if (
+    isCurrentConfirmationStep &&
+    primaryValue &&
+    primarySource === "model" &&
+    isAllowedConfirmationProtocolValue(primaryValue)
+  ) {
     orderedCandidates.push({
       source: "model",
       value: primaryValue,
