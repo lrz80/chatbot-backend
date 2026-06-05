@@ -2,7 +2,6 @@
 import type WebSocket from "ws";
 import type { CallState } from "../../types";
 import type { RealtimeToolResult } from "../buildToolFollowupInstructions";
-import { handlePendingBookingStepToolRedirect } from "../handlePendingBookingStepToolRedirect";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -31,10 +30,6 @@ export async function guardSendBookingSms(params: {
   toolArgs: Record<string, any>;
   callId: string;
   openAiSocket: WebSocket;
-  requestRealtimeResponse: (
-    response?: Record<string, unknown>,
-    source?: string
-  ) => void;
   callSid: string | null;
   tenantId: string;
   callerPhone: string | null;
@@ -50,22 +45,13 @@ export async function guardSendBookingSms(params: {
 }): Promise<GuardSendBookingSmsResult> {
   const {
     toolName,
-    toolArgs,
     callId,
     openAiSocket,
-    requestRealtimeResponse,
     callSid,
-    tenantId,
-    callerPhone,
-    didNumber,
-    realtimeTenant,
-    realtimeCfg,
     realtimeState,
-    currentLocale,
     bookingFlowLoaded,
     callEnding,
     lastUserTranscript,
-    lastUserDigits,
   } = params;
 
   if (toolName !== "send_booking_sms") {
@@ -86,46 +72,6 @@ export async function guardSendBookingSms(params: {
     return {
       ok: true,
       handled: false,
-    };
-  }
-
-  const redirectResult = await handlePendingBookingStepToolRedirect({
-    originalToolName: toolName,
-    originalToolArgs: toolArgs,
-    callId,
-    openAiSocket,
-    requestRealtimeResponse,
-    callSid,
-    tenantId,
-    callerPhone,
-    didNumber,
-    realtimeTenant,
-    realtimeCfg,
-    realtimeState,
-    currentLocale,
-    bookingFlowLoaded,
-    callEnding,
-    lastUserTranscript,
-    lastUserDigits,
-  });
-
-  if (redirectResult.handled) {
-    const redirectToolResult: RealtimeToolResult =
-      redirectResult.result || {
-      ok: false,
-      error: "BOOKING_SMS_REDIRECT_HANDLED_WITHOUT_RESULT",
-      message: "The booking SMS redirect was handled but did not return a tool result.",
-      };
-
-    return {
-      ok: false,
-      handled: true,
-      result: redirectToolResult,
-      realtimeState: redirectResult.realtimeState,
-      bookingFlowLoaded: redirectResult.bookingFlowLoaded,
-      hangupRequestedByTool: redirectResult.hangupRequestedByTool,
-      callEnding: redirectResult.callEnding,
-      resetLastUserDigits: redirectResult.resetLastUserDigits,
     };
   }
 
@@ -155,19 +101,6 @@ export async function guardSendBookingSms(params: {
       })
     );
   }
-
-  requestRealtimeResponse(
-    {
-      instructions: [
-        "Use only the tool result as source of truth.",
-        "Do not call the blocked tool again.",
-        "The required booking confirmation state is missing.",
-        "Call get_booking_flow to recover the current configured booking step.",
-        "Do not invent a consent question.",
-      ].join(" "),
-    },
-    "tool_guard:missing_pending_booking_step"
-  );
 
   return {
     ok: false,

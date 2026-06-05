@@ -17,13 +17,10 @@ import { applyBookingRuntimeStateAfterToolResult } from "./bookingRuntimeState";
 import { canSubmitBookingStepNow } from "./bookingTurnState";
 import { guardGetBookingFlowIntent } from "./toolGuards/guardGetBookingFlowIntent";
 import { bootstrapSubmitBookingStepAfterFlowLoad } from "./toolGuards/bootstrapSubmitBookingStepAfterFlowLoad";
-import { isStaleAlreadyHandledSubmitBlockedByTurnState } from "./toolGuards/isStaleAlreadyHandledSubmitBlockedByTurnState";
 import { buildSyntheticBookingStepFollowupInstructions } from "./toolFollowup/buildSyntheticBookingStepFollowupInstructions";
-import { handleStaleSubmitBookingStepPrompt } from "./toolGuards/handleStaleSubmitBookingStepPrompt";
 import { clean } from "./utils/clean";
 import { sendRealtimeJson } from "./socket/sendRealtimeJson";
 import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBookingStepEffectiveArgs";
-import { buildSubmitBookingStepNotReadyInstructions } from "./toolFollowup/buildSubmitBookingStepNotReadyInstructions";
 import { resolveSyntheticDirectBookingFollowup } from "./toolFollowup/resolveSyntheticDirectBookingFollowup";
 import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateSubmitBookingStepEarly";
 import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppointment";
@@ -600,149 +597,6 @@ export async function handleRealtimeToolCall(
           output: JSON.stringify(blockedResult),
         },
       });
-
-      /**
-       * If the issue is simply that there is no new transcript yet, do not create
-       * another assistant response and do not interrupt active audio.
-       */
-      const submittedStepKeyForBlockedSubmit = clean(toolArgs.step_key);
-
-      const lastUserTranscriptSeqForBlockedSubmit =
-        typeof realtimeState.lastUserTranscriptSeq === "number"
-          ? realtimeState.lastUserTranscriptSeq
-          : -1;
-
-      const lastSubmittedBookingTranscriptSeqForBlockedSubmit =
-        typeof realtimeState.lastSubmittedBookingTranscriptSeq === "number"
-          ? realtimeState.lastSubmittedBookingTranscriptSeq
-          : -1;
-
-      const lastSubmittedBookingStepKeyForBlockedSubmit = clean(
-        realtimeState.lastSubmittedBookingStepKey || ""
-      );
-
-      const isAlreadyHandledSubmitForSameTranscriptSeq =
-        submittedStepKeyForBlockedSubmit &&
-        lastSubmittedBookingStepKeyForBlockedSubmit &&
-        submittedStepKeyForBlockedSubmit === lastSubmittedBookingStepKeyForBlockedSubmit &&
-        lastUserTranscriptSeqForBlockedSubmit >= 0 &&
-        lastSubmittedBookingTranscriptSeqForBlockedSubmit ===
-          lastUserTranscriptSeqForBlockedSubmit;
-
-      const isStaleToolCallDuringAssistantPrompt =
-        turnGate.reason === "ASSISTANT_PROMPT_NOT_COMPLETED" &&
-        isAlreadyHandledSubmitForSameTranscriptSeq;
-
-      if (isStaleToolCallDuringAssistantPrompt) {
-        console.warn("[VOICE_REALTIME][BOOKING_STALE_TOOL_CALL_IGNORED_DURING_ASSISTANT_PROMPT]", {
-          callSid,
-          reason: turnGate.reason,
-          submittedStepKey: submittedStepKeyForBlockedSubmit,
-          pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
-          bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
-          lastUserTranscript,
-          lastUserTranscriptSeq: lastUserTranscriptSeqForBlockedSubmit,
-          lastSubmittedBookingStepKey: lastSubmittedBookingStepKeyForBlockedSubmit,
-          lastSubmittedBookingTranscriptSeq:
-            lastSubmittedBookingTranscriptSeqForBlockedSubmit,
-        });
-
-        return {
-          consumed: true,
-          result: blockedResult,
-          realtimeState,
-          bookingFlowLoaded,
-          hangupRequestedByTool: false,
-          callEnding,
-          resetLastUserDigits: false,
-        };
-      }
-
-      const shouldSilentlyIgnoreBlockedSubmit =
-        turnGate.reason === "NO_NEW_USER_ANSWER" ||
-        isStaleAlreadyHandledSubmitBlockedByTurnState({
-          reason: turnGate.reason,
-          submittedStepKey: submittedStepKeyForBlockedSubmit,
-          pendingStepKey: realtimeState.pendingBookingStepKey || "",
-          bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
-          lastUserTranscript,
-          lastUserTranscriptSeq: lastUserTranscriptSeqForBlockedSubmit,
-          lastSubmittedBookingStepKey: lastSubmittedBookingStepKeyForBlockedSubmit,
-          lastSubmittedBookingTranscript:
-            realtimeState.lastSubmittedBookingTranscript || "",
-          lastSubmittedBookingTranscriptSeq:
-            lastSubmittedBookingTranscriptSeqForBlockedSubmit,
-        });
-
-      if (shouldSilentlyIgnoreBlockedSubmit) {
-        const isWrongStepBlockedSubmit = turnGate.reason === "WRONG_STEP";
-
-        if (isWrongStepBlockedSubmit) {
-          const currentStepPrompt = clean(
-            realtimeState.pendingBookingStepPrompt || ""
-          );
-
-          const isLateDuplicateFromAlreadyAcceptedStep =
-            submittedStepKeyForBlockedSubmit &&
-            lastSubmittedBookingStepKeyForBlockedSubmit &&
-            submittedStepKeyForBlockedSubmit === lastSubmittedBookingStepKeyForBlockedSubmit &&
-            lastUserTranscriptSeqForBlockedSubmit >= 0 &&
-            lastSubmittedBookingTranscriptSeqForBlockedSubmit ===
-              lastUserTranscriptSeqForBlockedSubmit;
-
-          console.warn("[VOICE_REALTIME][BOOKING_WRONG_STEP_SUBMIT_IGNORED_CURRENT_STEP_REPROMPT]", {
-            callSid,
-            submittedStepKey: submittedStepKeyForBlockedSubmit,
-            pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
-            bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
-            lastUserTranscript,
-            lastUserTranscriptSeq: lastUserTranscriptSeqForBlockedSubmit,
-            lastSubmittedBookingStepKey: lastSubmittedBookingStepKeyForBlockedSubmit,
-            lastSubmittedBookingTranscriptSeq:
-              lastSubmittedBookingTranscriptSeqForBlockedSubmit,
-            isLateDuplicateFromAlreadyAcceptedStep,
-            hasCurrentStepPrompt: Boolean(currentStepPrompt),
-          });
-
-          if (isLateDuplicateFromAlreadyAcceptedStep && currentStepPrompt) {
-            requestRealtimeResponse(
-              {
-                instructions: currentStepPrompt,
-              },
-              "tool_guard:wrong_step_late_duplicate_current_step_prompt"
-            );
-          }
-
-          return {
-            consumed: true,
-            result: blockedResult,
-            realtimeState,
-            bookingFlowLoaded,
-            hangupRequestedByTool: false,
-            callEnding,
-            resetLastUserDigits: false,
-          };
-        }
-
-        handleStaleSubmitBookingStepPrompt({
-          callSid,
-          realtimeState,
-          turnGateReason: turnGate.reason || "UNKNOWN",
-          submittedStepKey: submittedStepKeyForBlockedSubmit,
-          lastUserTranscript,
-          requestRealtimeResponse,
-        });
-      } else {
-        requestRealtimeResponse(
-          {
-            instructions: buildSubmitBookingStepNotReadyInstructions({
-              realtimeState,
-              reason: turnGate.reason || "UNKNOWN",
-            }),
-          },
-          "tool_guard:submit_booking_step_turn_state"
-        );
-      }
 
       return {
         consumed: true,
