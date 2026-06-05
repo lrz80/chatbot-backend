@@ -713,6 +713,35 @@ export async function createOpenAiRealtimeBridge({
         lastUserTranscriptSeq,
       });
 
+      const bookingTurnStatusAfterResponseDone = clean(
+        (realtimeState as any).bookingTurnStatus
+      );
+
+      const pendingBookingStepKeyAfterResponseDone = clean(
+        (realtimeState as any).pendingBookingStepKey
+      );
+
+      if (
+        isBookingAssistantPromptResponse &&
+        pendingBookingStepKeyAfterResponseDone &&
+        bookingTurnStatusAfterResponseDone === "waiting_assistant_prompt"
+      ) {
+        realtimeState = {
+          ...realtimeState,
+          bookingTurnStatus: "waiting_user_answer",
+        } as CallState;
+
+        console.log("[VOICE_REALTIME][BOOKING_TURN_OPENED_AFTER_RESPONSE_DONE]", {
+          callSid,
+          responseId: responseStateBeforeDone.activeResponseId,
+          completedResponseSource,
+          pendingBookingStepKey: pendingBookingStepKeyAfterResponseDone,
+          previousBookingTurnStatus: bookingTurnStatusAfterResponseDone,
+          nextBookingTurnStatus: "waiting_user_answer",
+          lastUserTranscriptSeq,
+        });
+      }
+
       responseController.markResponseDone({
         lastUserTranscriptSeq,
       });
