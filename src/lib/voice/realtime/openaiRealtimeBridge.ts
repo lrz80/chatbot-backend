@@ -667,7 +667,11 @@ export async function createOpenAiRealtimeBridge({
       const isBookingAssistantPromptResponse =
         isToolFollowupResponse && hasPendingBookingStep;
 
-      if (isBookingAssistantPromptResponse) {
+      if (
+        isBookingAssistantPromptResponse &&
+        bookingTurnStatus !== "waiting_assistant_prompt" &&
+        bookingTurnStatus !== "waiting_user_answer"
+      ) {
         realtimeState = {
           ...realtimeState,
           bookingTurnStatus: "waiting_assistant_prompt",
