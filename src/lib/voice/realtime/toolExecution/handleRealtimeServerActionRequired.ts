@@ -50,6 +50,18 @@ type HandleRealtimeServerActionRequiredResult =
 
 const SERVER_EXECUTABLE_ACTIONS = new Set(["create_appointment"]);
 
+function clearConsumedPendingAction(state: CallState): CallState {
+  const nextState = {
+    ...state,
+  } as any;
+
+  delete nextState.pendingActionGranted;
+  delete nextState.pendingActionAnswered;
+  delete nextState.pendingActionToolName;
+
+  return nextState as CallState;
+}
+
 export async function handleRealtimeServerActionRequired(
   params: HandleRealtimeServerActionRequiredParams
 ): Promise<HandleRealtimeServerActionRequiredResult> {
@@ -110,11 +122,16 @@ export async function handleRealtimeServerActionRequired(
     message: serverActionResult?.message,
   });
 
+  const finalRealtimeState =
+    actionRequired === "create_appointment"
+      ? clearConsumedPendingAction(nextRealtimeState)
+      : nextRealtimeState;
+
   const followupInstructions = resolveRealtimeToolFollowupInstructions({
     toolName: actionRequired,
     toolResult: (serverActionResult || {}) as RealtimeToolResult,
     currentLocale:
-      clean((nextRealtimeState as any)?.lang) ||
+      clean((finalRealtimeState as any)?.lang) ||
       clean((realtimeState as any)?.lang) ||
       currentLocale,
   });
@@ -136,7 +153,7 @@ export async function handleRealtimeServerActionRequired(
   return {
     handled: true,
     result: serverActionResult as RealtimeToolResult,
-    realtimeState: nextRealtimeState,
+    realtimeState: finalRealtimeState,
     bookingFlowLoaded: nextBookingFlowLoaded,
     hangupRequestedByTool:
       actionRequired === "end_call" && serverActionResult?.ok === true,
