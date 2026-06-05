@@ -1,4 +1,4 @@
-//src/lib/voice/realtime/toolGuards/dropDuplicateSubmitBookingStepEarly.ts
+// src/lib/voice/realtime/toolGuards/dropDuplicateSubmitBookingStepEarly.ts
 import WebSocket from "ws";
 import type { CallState } from "../../types";
 import type { RealtimeToolResult } from "../buildToolFollowupInstructions";
@@ -16,10 +16,6 @@ type DropDuplicateSubmitBookingStepEarlyParams = {
   callEnding: boolean;
   isSyntheticToolCall: boolean;
   lastUserTranscript: string;
-  requestRealtimeResponse: (
-    response?: Record<string, unknown>,
-    source?: string
-  ) => void;
 };
 
 type DropDuplicateSubmitBookingStepEarlyResult =
@@ -50,7 +46,6 @@ export function dropDuplicateSubmitBookingStepEarly(
     callEnding,
     isSyntheticToolCall,
     lastUserTranscript,
-    requestRealtimeResponse,
   } = params;
 
   if (toolName !== "submit_booking_step") {
@@ -87,14 +82,7 @@ export function dropDuplicateSubmitBookingStepEarly(
   const result: RealtimeToolResult = {
     ok: false,
     error: "STALE_DUPLICATE_SUBMIT_DROPPED",
-    next_required_step: realtimeState.pendingBookingStepKey
-      ? {
-          step_key: realtimeState.pendingBookingStepKey,
-          prompt: realtimeState.pendingBookingStepPrompt || "",
-          retry_prompt: realtimeState.pendingBookingStepPrompt || "",
-          required: realtimeState.pendingBookingStepRequired ?? true,
-        }
-      : undefined,
+    message: "Ignored duplicate submit_booking_step tool call.",
   };
 
   console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_DUPLICATE_DROPPED_EARLY]", {
@@ -117,17 +105,6 @@ export function dropDuplicateSubmitBookingStepEarly(
         output: JSON.stringify(result),
       },
     });
-  }
-
-  const currentStepPrompt = clean(realtimeState.pendingBookingStepPrompt || "");
-
-  if (currentStepPrompt) {
-    requestRealtimeResponse(
-      {
-        instructions: currentStepPrompt,
-      },
-      "tool_guard:duplicate_submit_current_step_prompt"
-    );
   }
 
   return {
