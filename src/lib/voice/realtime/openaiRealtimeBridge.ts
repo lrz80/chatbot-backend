@@ -428,6 +428,31 @@ export async function createOpenAiRealtimeBridge({
 
       assistantSpeaking = true;
 
+      const createdResponseSource = clean(responseState.activeResponseSource || "");
+      const pendingBookingStepKey = clean(
+        (realtimeState as any).pendingBookingStepKey
+      );
+
+      const isBookingToolFollowupResponse =
+        createdResponseSource.startsWith("tool_followup:") &&
+        Boolean(pendingBookingStepKey);
+
+      if (isBookingToolFollowupResponse) {
+        realtimeState = {
+          ...realtimeState,
+          bookingTurnStatus: "waiting_assistant_prompt",
+        } as CallState;
+      }
+
+      console.log("[VOICE_REALTIME][RESPONSE_CREATED]", {
+        callSid,
+        responseId: responseState.activeResponseId,
+        source: createdResponseSource,
+        pendingBookingStepKey,
+        bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
+        lastUserTranscriptSeq,
+      });
+
       if (endCallGoodbyeRequested && !endCallGoodbyeResponseId) {
         endCallGoodbyeResponseId = responseState.activeResponseId;
 
@@ -471,8 +496,26 @@ export async function createOpenAiRealtimeBridge({
         return;
       }
 
+      const wasAssistantSpeaking = assistantSpeaking;
+
       assistantSpeaking = true;
       lastAssistantAudioDeltaAtMs = Date.now();
+
+      if (!wasAssistantSpeaking) {
+        const responseState = responseController.getState();
+
+        console.log("[VOICE_REALTIME][ASSISTANT_AUDIO_STARTED]", {
+          callSid,
+          streamSid,
+          activeResponseId: responseState.activeResponseId,
+          activeResponseSource: responseState.activeResponseSource,
+          pendingBookingStepKey: clean(
+            (realtimeState as any).pendingBookingStepKey
+          ),
+          bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
+          lastUserTranscriptSeq,
+        });
+      }
 
       sendTwilioAudio({
         twilioSocket,
@@ -589,6 +632,16 @@ export async function createOpenAiRealtimeBridge({
 
       const completedResponseSource = responseStateBeforeDone.activeResponseSource;
 
+      console.log("[VOICE_REALTIME][RESPONSE_DONE]", {
+        callSid,
+        responseId: responseStateBeforeDone.activeResponseId,
+        completedResponseSource,
+        pendingResponseSource: responseStateBeforeDone.pendingResponseSource,
+        pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
+        bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
+        lastUserTranscriptSeq,
+      });
+
       const pendingBookingStepKey = clean(
         (realtimeState as any).pendingBookingStepKey
       );
@@ -614,11 +667,7 @@ export async function createOpenAiRealtimeBridge({
       const isBookingAssistantPromptResponse =
         isToolFollowupResponse && hasPendingBookingStep;
 
-      if (
-        isBookingAssistantPromptResponse &&
-        bookingTurnStatus !== "waiting_assistant_prompt" &&
-        bookingTurnStatus !== "waiting_user_answer"
-      ) {
+      if (isBookingAssistantPromptResponse) {
         realtimeState = {
           ...realtimeState,
           bookingTurnStatus: "waiting_assistant_prompt",

@@ -24,13 +24,24 @@ type ResponseControllerState = {
   awaitingResponseSource: string | null;
 };
 
+type AwaitingResponseCreateState = {
+  event: Record<string, unknown>;
+  source: string;
+  startedAtUserTranscriptSeq: number;
+  retryCount: number;
+};
+
+const RESPONSE_CREATE_ACK_TIMEOUT_MS = 1200;
+const MAX_RESPONSE_CREATE_RETRIES = 1;
+
 function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
-  if (socket.readyState !== WebSocket.OPEN) return;
+function sendJson(socket: WebSocket, payload: Record<string, unknown>): boolean {
+  if (socket.readyState !== WebSocket.OPEN) return false;
   socket.send(JSON.stringify(payload));
+  return true;
 }
 
 function shouldSupersedeActiveResponse(params: {
@@ -39,16 +50,11 @@ function shouldSupersedeActiveResponse(params: {
   shouldInterruptActiveResponse: boolean;
 }): boolean {
   const source = clean(params.source);
-  const activeSource = clean(params.activeResponseSource);
 
   if (params.shouldInterruptActiveResponse) {
     return true;
   }
 
-  /**
-   * Tool followups are runtime-controlled responses.
-   * They must not stay blocked behind stale assistant responses.
-   */
   if (source.startsWith("tool_followup:")) {
     return true;
   }
@@ -67,6 +73,61 @@ export function createRealtimeResponseController(
   let pendingResponseSource: string | null = null;
 
   let awaitingResponseSource: string | null = null;
+  let awaitingResponseCreate: AwaitingResponseCreateState | null = null;
+  let awaitingResponseCreateRetryTimer: ReturnType<typeof setTimeout> | null =
+    null;
+
+  function clearAwaitingResponseCreateRetryTimer(): void {
+    if (!awaitingResponseCreateRetryTimer) return;
+    clearTimeout(awaitingResponseCreateRetryTimer);
+    awaitingResponseCreateRetryTimer = null;
+  }
+
+  function scheduleAwaitingResponseCreateRetry(): void {
+    clearAwaitingResponseCreateRetryTimer();
+
+    if (!awaitingResponseCreate) return;
+
+    awaitingResponseCreateRetryTimer = setTimeout(() => {
+      const callSid = params.getCallSid();
+
+      if (!awaitingResponseCreate) return;
+      if (activeResponseId) return;
+
+      if (pendingResponseCreate) {
+        return;
+      }
+
+      if (params.openAiSocket.readyState !== WebSocket.OPEN) {
+        console.warn("[VOICE_REALTIME][RESPONSE_CREATE_RETRY_SOCKET_NOT_OPEN]", {
+          callSid,
+          source: awaitingResponseCreate.source,
+          socketReadyState: params.openAiSocket.readyState,
+        });
+        return;
+      }
+
+      if (awaitingResponseCreate.retryCount >= MAX_RESPONSE_CREATE_RETRIES) {
+        console.warn("[VOICE_REALTIME][RESPONSE_CREATE_ACK_TIMEOUT]", {
+          callSid,
+          source: awaitingResponseCreate.source,
+          retryCount: awaitingResponseCreate.retryCount,
+        });
+        return;
+      }
+
+      awaitingResponseCreate.retryCount += 1;
+
+      console.warn("[VOICE_REALTIME][RESPONSE_CREATE_RETRY_NO_RESPONSE_CREATED]", {
+        callSid,
+        source: awaitingResponseCreate.source,
+        retryCount: awaitingResponseCreate.retryCount,
+      });
+
+      sendJson(params.openAiSocket, awaitingResponseCreate.event);
+      scheduleAwaitingResponseCreateRetry();
+    }, RESPONSE_CREATE_ACK_TIMEOUT_MS);
+  }
 
   function getState(): ResponseControllerState {
     return {
@@ -94,7 +155,9 @@ export function createRealtimeResponseController(
       shouldInterruptActiveResponse,
     });
 
-    if (activeResponseId) {
+    const hasResponseInFlight = Boolean(activeResponseId || awaitingResponseSource);
+
+    if (hasResponseInFlight) {
       pendingResponseCreate = event;
       pendingResponseSource = source;
 
@@ -103,11 +166,13 @@ export function createRealtimeResponseController(
         source,
         activeResponseId,
         activeResponseSource,
+        awaitingResponseSource,
         shouldInterruptActiveResponse,
         shouldSupersede,
       });
 
       if (
+        activeResponseId &&
         shouldSupersede &&
         params.openAiSocket.readyState === WebSocket.OPEN
       ) {
@@ -135,6 +200,12 @@ export function createRealtimeResponseController(
 
     activeResponseStartedAtUserTranscriptSeq = startedAtUserTranscriptSeq;
     awaitingResponseSource = source;
+    awaitingResponseCreate = {
+      event,
+      source,
+      startedAtUserTranscriptSeq,
+      retryCount: 0,
+    };
 
     console.warn("[VOICE_REALTIME][RESPONSE_CREATE_REQUESTED]", {
       callSid,
@@ -143,29 +214,59 @@ export function createRealtimeResponseController(
       hasPendingResponseCreate: Boolean(pendingResponseCreate),
     });
 
-    sendJson(params.openAiSocket, event);
+    const sent = sendJson(params.openAiSocket, event);
+
+    if (!sent) {
+      console.warn("[VOICE_REALTIME][RESPONSE_CREATE_NOT_SENT_SOCKET_NOT_OPEN]", {
+        callSid,
+        source,
+        socketReadyState: params.openAiSocket.readyState,
+      });
+      return;
+    }
+
+    scheduleAwaitingResponseCreateRetry();
   }
 
   function flushPendingRealtimeResponse(): boolean {
     if (!pendingResponseCreate) return false;
     if (activeResponseId) return false;
+    if (awaitingResponseSource) return false;
     if (params.openAiSocket.readyState !== WebSocket.OPEN) return false;
 
     const callSid = params.getCallSid();
 
     const event = pendingResponseCreate;
-    const source = pendingResponseSource;
+    const source = clean(pendingResponseSource || "");
 
     pendingResponseCreate = null;
     pendingResponseSource = null;
+
     awaitingResponseSource = source;
+    awaitingResponseCreate = {
+      event,
+      source,
+      startedAtUserTranscriptSeq: activeResponseStartedAtUserTranscriptSeq,
+      retryCount: 0,
+    };
 
     console.warn("[VOICE_REALTIME][PENDING_RESPONSE_CREATE_FLUSHED]", {
       callSid,
       source,
     });
 
-    sendJson(params.openAiSocket, event);
+    const sent = sendJson(params.openAiSocket, event);
+
+    if (!sent) {
+      console.warn("[VOICE_REALTIME][PENDING_RESPONSE_CREATE_NOT_SENT_SOCKET_NOT_OPEN]", {
+        callSid,
+        source,
+        socketReadyState: params.openAiSocket.readyState,
+      });
+      return false;
+    }
+
+    scheduleAwaitingResponseCreateRetry();
     return true;
   }
 
@@ -173,11 +274,15 @@ export function createRealtimeResponseController(
     responseId: string | null;
     startedAtUserTranscriptSeq: number;
   }): ResponseControllerState {
+    clearAwaitingResponseCreateRetryTimer();
+
     activeResponseId = paramsForResponse.responseId;
     activeResponseSource = awaitingResponseSource;
     activeResponseStartedAtUserTranscriptSeq =
       paramsForResponse.startedAtUserTranscriptSeq;
+
     awaitingResponseSource = null;
+    awaitingResponseCreate = null;
 
     return getState();
   }
@@ -185,10 +290,15 @@ export function createRealtimeResponseController(
   function markResponseDone(paramsForResponse: {
     lastUserTranscriptSeq: number;
   }): ResponseControllerState {
+    clearAwaitingResponseCreateRetryTimer();
+
     activeResponseId = null;
     activeResponseSource = null;
     activeResponseStartedAtUserTranscriptSeq =
       paramsForResponse.lastUserTranscriptSeq;
+
+    awaitingResponseSource = null;
+    awaitingResponseCreate = null;
 
     flushPendingRealtimeResponse();
 
@@ -202,6 +312,7 @@ export function createRealtimeResponseController(
     console.warn("[VOICE_REALTIME][RESPONSE_ALREADY_ACTIVE_RETRY_QUEUED]", {
       callSid,
       activeResponseId,
+      awaitingResponseSource,
       pendingResponseSource,
       hasPendingResponseCreate: Boolean(pendingResponseCreate),
     });
@@ -225,7 +336,9 @@ export function createRealtimeResponseController(
       return;
     }
 
-    flushPendingRealtimeResponse();
+    if (!awaitingResponseSource) {
+      flushPendingRealtimeResponse();
+    }
   }
 
   function handleResponseCancelNotActiveError(): void {
@@ -234,13 +347,16 @@ export function createRealtimeResponseController(
     console.warn("[VOICE_REALTIME][RESPONSE_CANCEL_NOT_ACTIVE_IGNORED]", {
       callSid,
       activeResponseId,
+      awaitingResponseSource,
       pendingResponseSource,
     });
 
     activeResponseId = null;
     activeResponseSource = null;
 
-    flushPendingRealtimeResponse();
+    if (!awaitingResponseSource) {
+      flushPendingRealtimeResponse();
+    }
   }
 
   return {
