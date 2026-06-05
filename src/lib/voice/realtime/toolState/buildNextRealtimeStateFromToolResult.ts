@@ -110,6 +110,11 @@ export function buildNextRealtimeStateFromToolResult(
     toolResult?.ok === true &&
     Boolean(actionRequiredToolName);
 
+  const shouldClearPendingAction =
+    toolName === "create_appointment" ||
+    toolName === "send_booking_sms" ||
+    toolName === "end_call";
+
   return {
     ...realtimeState,
     lang: currentLocale as any,
@@ -182,21 +187,23 @@ export function buildNextRealtimeStateFromToolResult(
         : realtimeState.lastSubmittedBookingTranscriptSeq,
 
     pendingActionGranted:
-      toolName === "send_booking_sms" || toolName === "end_call"
+      shouldClearPendingAction
         ? undefined
         : pendingActionGranted
           ? true
           : realtimeState.pendingActionGranted,
 
     pendingActionAnswered:
-      hasSubmittedPendingBookingStep &&
-      toolResult?.ok === true &&
-      Boolean(actionRequiredToolName)
-        ? true
-        : realtimeState.pendingActionAnswered,
+      shouldClearPendingAction
+        ? undefined
+        : hasSubmittedPendingBookingStep &&
+            toolResult?.ok === true &&
+            Boolean(actionRequiredToolName)
+          ? true
+          : realtimeState.pendingActionAnswered,
 
     pendingActionToolName:
-      toolName === "send_booking_sms" || toolName === "end_call"
+      shouldClearPendingAction
         ? undefined
         : pendingActionGranted
           ? actionRequiredToolName
