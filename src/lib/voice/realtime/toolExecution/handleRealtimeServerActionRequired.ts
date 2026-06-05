@@ -119,12 +119,19 @@ export async function handleRealtimeServerActionRequired(
       currentLocale,
   });
 
-  requestRealtimeResponse(
-    {
-      instructions: followupInstructions,
-    },
-    `tool_followup:${actionRequired}`
-  );
+  const finalFollowupInstructions =
+    clean(followupInstructions) ||
+    clean((serverActionResult as any)?.message || "");
+
+  if (finalFollowupInstructions) {
+    requestRealtimeResponse(
+      {
+        instructions: finalFollowupInstructions,
+        tool_choice: "none",
+      },
+      `tool_followup:${actionRequired}`
+    );
+  }
 
   return {
     handled: true,

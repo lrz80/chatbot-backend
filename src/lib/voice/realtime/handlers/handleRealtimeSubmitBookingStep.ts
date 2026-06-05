@@ -57,6 +57,48 @@ function normalizeKey(value: unknown): string {
   return clean(value).toLowerCase();
 }
 
+function isConfirmationStep(step: BookingFlowStepLike | null): boolean {
+  const stepKey = normalizeKey((step as any)?.step_key);
+  const slot = normalizeKey((step as any)?.slot);
+  const expectedType = normalizeKey((step as any)?.expected_type);
+  const validationMode = normalizeKey((step as any)?.validation_mode);
+
+  return (
+    stepKey === "confirm" ||
+    stepKey === "confirmation" ||
+    slot === "confirmation" ||
+    expectedType === "confirmation" ||
+    validationMode === "confirmation"
+  );
+}
+
+function isAllowedConfirmationProtocolValue(value: unknown): boolean {
+  const normalized = normalizeKey(value);
+
+  return (
+    normalized === "confirm" ||
+    normalized === "cancel" ||
+    normalized === "unknown"
+  );
+}
+
+function getStructuredConfirmationIntent(value: unknown): string {
+  const normalized = normalizeKey(value);
+
+  if (
+    normalized === "confirm" ||
+    normalized === "confirmed" ||
+    normalized === "cancel" ||
+    normalized === "cancelled" ||
+    normalized === "canceled" ||
+    normalized === "unknown"
+  ) {
+    return normalized;
+  }
+
+  return "";
+}
+
 function getCurrentStepLike(params: {
   args: Record<string, any>;
   bookingContext: RealtimeBookingContext;
@@ -392,6 +434,100 @@ export async function handleRealtimeSubmitBookingStep(
     if (!prepared.ok) {
       lastPreparedFailure = prepared.result;
       continue;
+    }
+
+    if (isConfirmationStep(prepared.currentStep)) {
+      const isAllowedProtocolValue = isAllowedConfirmationProtocolValue(
+        prepared.resolvedInputValue
+      );
+
+      if (!isAllowedProtocolValue) {
+        const bookingState = buildRealtimeBookingState({
+          steps,
+          state: bookingContext.state,
+          explicitCurrentIndex: prepared.currentIndex,
+        });
+
+        console.warn("[VOICE_REALTIME][BOOKING_CONFIRMATION_VALUE_REJECTED]", {
+          callSid: bookingContext.callSid,
+          stepKey: prepared.stepKey,
+          targetSlot: prepared.targetSlot,
+          candidateSource: candidate.source,
+          rejectedValue: prepared.resolvedInputValue,
+          rawTranscriptValue: prepared.rawTranscriptValue,
+          modelValue: prepared.modelValue,
+          reason: "CONFIRMATION_REQUIRES_PROTOCOL_VALUE",
+        });
+
+        return buildRealtimeStepRetryResult({
+          error: "AMBIGUOUS_CONFIRMATION_VALUE",
+          currentStep: prepared.currentStep,
+          currentIndex: prepared.currentIndex,
+          currentLocale: bookingContext.currentLocale,
+          steps,
+          bookingState,
+        });
+      }
+
+      if (normalizeKey(prepared.resolvedInputValue) === "unknown") {
+        const bookingState = buildRealtimeBookingState({
+          steps,
+          state: bookingContext.state,
+          explicitCurrentIndex: prepared.currentIndex,
+        });
+
+        console.warn("[VOICE_REALTIME][BOOKING_CONFIRMATION_UNKNOWN_RETRY]", {
+          callSid: bookingContext.callSid,
+          stepKey: prepared.stepKey,
+          targetSlot: prepared.targetSlot,
+          candidateSource: candidate.source,
+          rawTranscriptValue: prepared.rawTranscriptValue,
+          modelValue: prepared.modelValue,
+        });
+
+        return buildRealtimeStepRetryResult({
+          error: "AMBIGUOUS_CONFIRMATION_VALUE",
+          currentStep: prepared.currentStep,
+          currentIndex: prepared.currentIndex,
+          currentLocale: bookingContext.currentLocale,
+          steps,
+          bookingState,
+        });
+      }
+    }
+
+    if (isConfirmationStep(prepared.currentStep)) {
+      const structuredIntent = getStructuredConfirmationIntent(
+        prepared.resolvedInputValue
+      );
+
+      if (!structuredIntent || structuredIntent === "unknown") {
+        const bookingState = buildRealtimeBookingState({
+          steps,
+          state: bookingContext.state,
+          explicitCurrentIndex: prepared.currentIndex,
+        });
+
+        console.warn("[VOICE_REALTIME][BOOKING_CONFIRMATION_VALUE_REJECTED]", {
+          callSid: bookingContext.callSid,
+          stepKey: prepared.stepKey,
+          targetSlot: prepared.targetSlot,
+          candidateSource: candidate.source,
+          rejectedValue: prepared.resolvedInputValue,
+          rawTranscriptValue: prepared.rawTranscriptValue,
+          modelValue: prepared.modelValue,
+          reason: "CONFIRMATION_REQUIRES_STRUCTURED_INTENT",
+        });
+
+        return buildRealtimeStepRetryResult({
+          error: "AMBIGUOUS_CONFIRMATION_VALUE",
+          currentStep: prepared.currentStep,
+          currentIndex: prepared.currentIndex,
+          currentLocale: bookingContext.currentLocale,
+          steps,
+          bookingState,
+        });
+      }
     }
 
     const routeResult = await executeRealtimeStepRoute({
