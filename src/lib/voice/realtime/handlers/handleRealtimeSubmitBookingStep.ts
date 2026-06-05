@@ -378,6 +378,31 @@ function shouldTryNextCandidate(result: any): boolean {
   return false;
 }
 
+function getEffectiveConfirmationProtocolValue(params: {
+  candidate: SubmitValueCandidate;
+  prepared: any;
+}): string {
+  const candidateValue = normalizeKey(params.candidate.value);
+
+  if (isAllowedConfirmationProtocolValue(candidateValue)) {
+    return candidateValue;
+  }
+
+  const resolvedInputValue = normalizeKey(params.prepared?.resolvedInputValue);
+
+  if (isAllowedConfirmationProtocolValue(resolvedInputValue)) {
+    return resolvedInputValue;
+  }
+
+  const modelValue = normalizeKey(params.prepared?.modelValue);
+
+  if (isAllowedConfirmationProtocolValue(modelValue)) {
+    return modelValue;
+  }
+
+  return "";
+}
+
 export async function handleRealtimeSubmitBookingStep(
   params: HandleRealtimeSubmitBookingStepParams
 ): Promise<any> {
@@ -457,12 +482,17 @@ export async function handleRealtimeSubmitBookingStep(
       continue;
     }
 
-    if (isConfirmationStep(prepared.currentStep)) {
-      const isAllowedProtocolValue = isAllowedConfirmationProtocolValue(
-        prepared.resolvedInputValue
-      );
+    const isCurrentConfirmationStep = isConfirmationStep(prepared.currentStep);
 
-      if (!isAllowedProtocolValue) {
+    const effectiveConfirmationProtocolValue = isCurrentConfirmationStep
+      ? getEffectiveConfirmationProtocolValue({
+          candidate,
+          prepared,
+        })
+      : "";
+
+    if (isCurrentConfirmationStep) {
+      if (!effectiveConfirmationProtocolValue) {
         const bookingState = buildRealtimeBookingState({
           steps,
           state: bookingContext.state,
@@ -475,6 +505,7 @@ export async function handleRealtimeSubmitBookingStep(
           targetSlot: prepared.targetSlot,
           candidateSource: candidate.source,
           rejectedValue: prepared.resolvedInputValue,
+          candidateValue: candidate.value,
           rawTranscriptValue: prepared.rawTranscriptValue,
           modelValue: prepared.modelValue,
           reason: "CONFIRMATION_REQUIRES_PROTOCOL_VALUE",
@@ -490,7 +521,7 @@ export async function handleRealtimeSubmitBookingStep(
         });
       }
 
-      if (normalizeKey(prepared.resolvedInputValue) === "unknown") {
+      if (effectiveConfirmationProtocolValue === "unknown") {
         const bookingState = buildRealtimeBookingState({
           steps,
           state: bookingContext.state,
@@ -502,42 +533,9 @@ export async function handleRealtimeSubmitBookingStep(
           stepKey: prepared.stepKey,
           targetSlot: prepared.targetSlot,
           candidateSource: candidate.source,
+          candidateValue: candidate.value,
           rawTranscriptValue: prepared.rawTranscriptValue,
           modelValue: prepared.modelValue,
-        });
-
-        return buildRealtimeStepRetryResult({
-          error: "AMBIGUOUS_CONFIRMATION_VALUE",
-          currentStep: prepared.currentStep,
-          currentIndex: prepared.currentIndex,
-          currentLocale: bookingContext.currentLocale,
-          steps,
-          bookingState,
-        });
-      }
-    }
-
-    if (isConfirmationStep(prepared.currentStep)) {
-      const structuredIntent = getStructuredConfirmationIntent(
-        prepared.resolvedInputValue
-      );
-
-      if (!structuredIntent || structuredIntent === "unknown") {
-        const bookingState = buildRealtimeBookingState({
-          steps,
-          state: bookingContext.state,
-          explicitCurrentIndex: prepared.currentIndex,
-        });
-
-        console.warn("[VOICE_REALTIME][BOOKING_CONFIRMATION_VALUE_REJECTED]", {
-          callSid: bookingContext.callSid,
-          stepKey: prepared.stepKey,
-          targetSlot: prepared.targetSlot,
-          candidateSource: candidate.source,
-          rejectedValue: prepared.resolvedInputValue,
-          rawTranscriptValue: prepared.rawTranscriptValue,
-          modelValue: prepared.modelValue,
-          reason: "CONFIRMATION_REQUIRES_STRUCTURED_INTENT",
         });
 
         return buildRealtimeStepRetryResult({
@@ -560,7 +558,9 @@ export async function handleRealtimeSubmitBookingStep(
       currentIndex: prepared.currentIndex,
       targetSlot: prepared.targetSlot,
       stepKey: prepared.stepKey,
-      resolvedInputValue: prepared.resolvedInputValue,
+      resolvedInputValue: isCurrentConfirmationStep
+        ? effectiveConfirmationProtocolValue
+        : prepared.resolvedInputValue,
       rawTranscriptValue: prepared.rawTranscriptValue,
       modelValue: prepared.modelValue,
       sanitizedArgs: {
