@@ -53,18 +53,6 @@ function shouldSupersedeActiveResponse(params: {
     return true;
   }
 
-  /**
-   * Guard prompts are recovery responses.
-   * If synthetic_direct failed to produce audible output or got stuck,
-   * the guard must be allowed to cancel it and speak the current configured prompt.
-   */
-  if (
-    source === "tool_guard:duplicate_stale_submit_force_current_step_prompt" &&
-    activeSource === "tool_followup:submit_booking_step:synthetic_direct"
-  ) {
-    return true;
-  }
-
   return false;
 }
 

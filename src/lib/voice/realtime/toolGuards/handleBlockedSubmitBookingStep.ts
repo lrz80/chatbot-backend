@@ -28,10 +28,6 @@ export function handleBlockedSubmitBookingStep(params: {
   callSid: string | null;
   callId: string;
   openAiSocket: WebSocket;
-  requestRealtimeResponse: (
-    response?: Record<string, unknown>,
-    source?: string
-  ) => void;
   freshness: BlockedFreshness;
   realtimeState: CallState;
   bookingFlowLoaded: boolean;
@@ -49,7 +45,6 @@ export function handleBlockedSubmitBookingStep(params: {
     callSid,
     callId,
     openAiSocket,
-    requestRealtimeResponse,
     freshness,
     realtimeState,
     bookingFlowLoaded,
@@ -88,22 +83,6 @@ export function handleBlockedSubmitBookingStep(params: {
       output: JSON.stringify(blockedResult),
     },
   });
-
-  requestRealtimeResponse(
-    {
-      instructions: [
-        "Use only the tool result as source of truth.",
-        "Do not call submit_booking_step again yet.",
-        "The caller has not provided a new answer for the current booking step after the latest question.",
-        "Repeat the current pending booking question naturally and briefly.",
-        "Do not apologize excessively.",
-        "Do not mention an error.",
-        "Do not advance to another booking step.",
-        "Wait for the caller to answer.",
-      ].join(" "),
-    },
-    "tool_guard:booking_step_invalid_or_duplicate_input"
-  );
 
   return {
     consumed: true,

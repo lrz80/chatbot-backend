@@ -126,14 +126,6 @@ export async function bootstrapSubmitBookingStepAfterFlowLoad(
       output: blockedResult,
     });
 
-    params.requestRealtimeResponse(
-      {
-        instructions:
-          "The booking flow could not be loaded. Continue using the existing configured assistant behavior and do not invent booking details.",
-      },
-      "tool_guard:booking_flow_bootstrap_failed"
-    );
-
     return {
       handled: true,
       result: blockedResult,
@@ -184,18 +176,6 @@ export async function bootstrapSubmitBookingStepAfterFlowLoad(
       isSyntheticToolCall: params.isSyntheticToolCall,
       output: blockedResult,
     });
-
-    const followupInstructions = resolveRealtimeToolFollowupInstructions({
-      toolName: "get_booking_flow",
-      toolResult: flowResult as RealtimeToolResult,
-    });
-
-    params.requestRealtimeResponse(
-      {
-        instructions: followupInstructions,
-      },
-      "tool_guard:booking_bootstrap_step_mismatch"
-    );
 
     return {
       handled: true,
