@@ -43,7 +43,7 @@ export type AdvanceRealtimeBookingStepResult =
       booking_state: BookingState;
       next_required_step: RealtimeMappedStep | null;
       assistant_prompt: string;
-      action_required: "awaiting_confirmation" | null;
+      action_required: "awaiting_confirmation" | "create_appointment" | null;
     }
   | {
       ok: false;
@@ -83,16 +83,18 @@ export async function advanceRealtimeBookingStep(
 
   const isFlowComplete = nextIndex === null;
 
+  const finalConfirmationGranted = Boolean(
+    clean(advancedState.bookingData?.confirmation) ||
+      clean(advancedState.bookingData?.customer_confirmed)
+  );
+
   const bookingState = isFlowComplete
     ? {
         current_step_key: null,
         current_step_slot: null,
         awaiting_confirmation: false,
-        final_confirmation_granted: Boolean(
-          clean(advancedState.bookingData?.confirmation) ||
-            clean(advancedState.bookingData?.customer_confirmed)
-        ),
-        ready_to_create: false,
+        final_confirmation_granted: finalConfirmationGranted,
+        ready_to_create: finalConfirmationGranted,
         collected_slots: normalizeAnswersToCanonicalSlots({
           steps,
           answersBySlot: buildAnswersBySlot({
@@ -152,7 +154,12 @@ export async function advanceRealtimeBookingStep(
     next_required_step: nextRequiredStep,
     assistant_prompt:
       nextStepKey === "confirm" ? clean(nextRequiredStep?.prompt || "") : "",
-    action_required:
-      nextStepKey === "confirm" ? "awaiting_confirmation" : null,
+    action_required: isFlowComplete
+      ? finalConfirmationGranted
+        ? "create_appointment"
+        : null
+      : nextStepKey === "confirm"
+        ? "awaiting_confirmation"
+        : null,
   };
 }
