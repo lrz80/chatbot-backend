@@ -3,7 +3,6 @@
 import type { CallState } from "../../types";
 import type { RealtimeToolResult } from "../buildToolFollowupInstructions";
 import { clean } from "../utils/clean";
-import { resolveSyntheticSubmitBookingStepFollowup } from "./resolveSyntheticSubmitBookingStepFollowup";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -39,7 +38,9 @@ export type SyntheticDirectBookingFollowupResolution = {
   };
 };
 
-function resolvePromptAnchorSeq(state: MutableRealtimeBookingState): number | undefined {
+function resolvePromptAnchorSeq(
+  state: MutableRealtimeBookingState
+): number | undefined {
   if (typeof state.lastSubmittedBookingTranscriptSeq === "number") {
     return state.lastSubmittedBookingTranscriptSeq;
   }
@@ -53,6 +54,28 @@ function resolvePromptAnchorSeq(state: MutableRealtimeBookingState): number | un
   }
 
   return undefined;
+}
+
+function buildDirectBookingPromptInstructions(params: {
+  currentLocale: VoiceLocale | string;
+  prompt: string;
+}): string {
+  const locale = clean(params.currentLocale) || "en-US";
+  const prompt = clean(params.prompt);
+
+  if (!prompt) return "";
+
+  return [
+    `Current call locale: ${locale}.`,
+    "Speak the configured booking message below to the caller now.",
+    "Use the message as the source of truth.",
+    "Do not verify, reinterpret, correct, or recalculate dates, times, services, prices, availability, or booking details.",
+    "Do not say that you are checking availability.",
+    "Do not call any tool.",
+    "Do not add extra questions beyond the configured message.",
+    "Configured booking message:",
+    prompt,
+  ].join(" ");
 }
 
 export function resolveSyntheticDirectBookingFollowup(params: {
@@ -79,10 +102,9 @@ export function resolveSyntheticDirectBookingFollowup(params: {
     return null;
   }
 
-  const instructions = resolveSyntheticSubmitBookingStepFollowup({
-    toolName,
-    toolResult: params.toolResult,
+  const instructions = buildDirectBookingPromptInstructions({
     currentLocale: params.currentLocale,
+    prompt: nextRequiredPrompt,
   });
 
   if (!instructions) {
@@ -91,13 +113,6 @@ export function resolveSyntheticDirectBookingFollowup(params: {
 
   const source = `tool_followup:${toolName}:synthetic_direct`;
 
-  /**
-   * Synthetic tool calls do not send function_call_output back to OpenAI.
-   * Because of that, the runtime itself must own the state transition.
-   *
-   * The next_required_step is already the source of truth from the booking engine.
-   * This module only maps that truth into the realtime turn state.
-   */
   const nextRealtimeState = {
     ...params.nextRealtimeState,
   } as MutableRealtimeBookingState;
@@ -110,7 +125,14 @@ export function resolveSyntheticDirectBookingFollowup(params: {
     typeof nextRequiredStep?.required === "boolean"
       ? nextRequiredStep.required
       : true;
-  nextRealtimeState.bookingTurnStatus = "waiting_user_answer";
+
+  /**
+   * Important:
+   * The assistant has not spoken this prompt yet.
+   * Do not mark the system as waiting for the user here.
+   * response.done should be the point where the turn opens for user input.
+   */
+  nextRealtimeState.bookingTurnStatus = "waiting_assistant_prompt";
 
   if (typeof nextAnchorSeq === "number") {
     nextRealtimeState.pendingBookingStepPromptAnchorSeq = nextAnchorSeq;
@@ -127,7 +149,7 @@ export function resolveSyntheticDirectBookingFollowup(params: {
       nextRequiredStepKey,
       nextRequiredPrompt,
       source,
-      bookingTurnStatus: "waiting_user_answer",
+      bookingTurnStatus: "waiting_assistant_prompt",
       pendingBookingStepPromptAnchorSeq:
         typeof nextRealtimeState.pendingBookingStepPromptAnchorSeq === "number"
           ? nextRealtimeState.pendingBookingStepPromptAnchorSeq
