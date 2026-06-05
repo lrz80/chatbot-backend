@@ -20,6 +20,10 @@ type RealtimeBargeInControllerParams = {
   setLastAssistantAudioDoneAtMs: (value: number) => void;
 };
 
+const MIN_MS_AFTER_ASSISTANT_AUDIO_TO_ALLOW_BARGE_IN = 650;
+const RECENT_ASSISTANT_AUDIO_WINDOW_MS = 1500;
+const BARGE_IN_DEBOUNCE_MS = 300;
+
 function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
@@ -49,7 +53,7 @@ export function createRealtimeBargeInController(
      * Evita ráfagas repetidas de cancel/clear por el mismo corte.
      * Esto protege contra eventos duplicados de speech_started/transcript_completed.
      */
-    if (now - lastBargeInAtMs < 300) {
+    if (now - lastBargeInAtMs < BARGE_IN_DEBOUNCE_MS) {
       return false;
     }
 
@@ -59,10 +63,43 @@ export function createRealtimeBargeInController(
 
     const assistantSpeaking = params.getAssistantSpeaking();
 
+    const msSinceLastAssistantAudio =
+      lastAssistantAudioDeltaAtMs > 0
+        ? now - lastAssistantAudioDeltaAtMs
+        : null;
+
+    /**
+     * Regla crítica:
+     * No cortes el audio de Aamy justo cuando está empezando a hablar.
+     *
+     * OpenAI/Twilio puede disparar input_audio_buffer.speech_started por eco,
+     * ruido, respiración o audio residual del usuario. Si cortamos en los
+     * primeros milisegundos, el caller nunca escucha el prompt.
+     */
+    const isTooSoonAfterAssistantAudio =
+      assistantSpeaking &&
+      msSinceLastAssistantAudio !== null &&
+      msSinceLastAssistantAudio < MIN_MS_AFTER_ASSISTANT_AUDIO_TO_ALLOW_BARGE_IN;
+
+    if (isTooSoonAfterAssistantAudio) {
+      console.log("[VOICE_REALTIME][BARGE_IN_IGNORED_TOO_SOON_AFTER_ASSISTANT_AUDIO]", {
+        callSid: params.getCallSid(),
+        streamSid: params.getStreamSid(),
+        source,
+        activeResponseId: activeResponseId || null,
+        assistantSpeaking,
+        msSinceLastAssistantAudio,
+        minMsAfterAssistantAudio:
+          MIN_MS_AFTER_ASSISTANT_AUDIO_TO_ALLOW_BARGE_IN,
+      });
+
+      return false;
+    }
+
     const hasAssistantAudioRecently =
       assistantSpeaking ||
       (lastAssistantAudioDeltaAtMs > 0 &&
-        now - lastAssistantAudioDeltaAtMs < 1500);
+        now - lastAssistantAudioDeltaAtMs < RECENT_ASSISTANT_AUDIO_WINDOW_MS);
 
     if (!hasAssistantAudioRecently && !activeResponseId) {
       return false;
@@ -79,10 +116,7 @@ export function createRealtimeBargeInController(
       source,
       activeResponseId: activeResponseId || null,
       assistantSpeaking,
-      msSinceLastAssistantAudio:
-        lastAssistantAudioDeltaAtMs > 0
-          ? now - lastAssistantAudioDeltaAtMs
-          : null,
+      msSinceLastAssistantAudio,
     });
 
     if (activeResponseId) {
