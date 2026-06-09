@@ -302,6 +302,9 @@ export async function createOpenAiRealtimeBridge({
 
     const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
     const pendingBookingStepKey = clean((realtimeState as any).pendingBookingStepKey);
+    const pendingBookingStepPrompt = clean(
+      (realtimeState as any).pendingBookingStepPrompt
+    );
 
     const hasActiveBookingTurn =
       Boolean(pendingBookingStepKey) &&
@@ -326,13 +329,51 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
+    const isSubmitBookingStepFollowup =
+      normalizedSource === "tool_followup:submit_booking_step" ||
+      normalizedSource.startsWith("tool_followup:submit_booking_step:");
+
+    const forcedBookingPromptResponse =
+      isSubmitBookingStepFollowup && pendingBookingStepPrompt
+        ? {
+            instructions: [
+              "Speak only the booking prompt below.",
+              "Do not add anything before it.",
+              "Do not add anything after it.",
+              "Do not explain.",
+              "Do not summarize.",
+              "Do not mention appointment status.",
+              "Do not make availability-related comments.",
+              "",
+              pendingBookingStepPrompt,
+            ].join("\n"),
+            tool_choice: "none",
+          }
+        : response;
+
+    if (isSubmitBookingStepFollowup && pendingBookingStepPrompt) {
+      console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_PROMPT_FORCED_EXACT]", {
+        callSid,
+        source: normalizedSource,
+        pendingBookingStepKey,
+        bookingTurnStatus,
+        pendingBookingStepPrompt,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+      });
+    }
+
     const event: Record<string, unknown> = {
       type: "response.create",
-      ...(response ? { response } : {}),
+      ...(forcedBookingPromptResponse
+        ? { response: forcedBookingPromptResponse }
+        : {}),
     };
 
     const responseInstructions =
-      typeof response?.instructions === "string" ? response.instructions : "";
+      typeof forcedBookingPromptResponse?.instructions === "string"
+        ? forcedBookingPromptResponse.instructions
+        : "";
 
     const isEndCallFollowup = normalizedSource === "tool_followup:end_call";
 
