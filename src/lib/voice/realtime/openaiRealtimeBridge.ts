@@ -298,6 +298,34 @@ export async function createOpenAiRealtimeBridge({
     response?: Record<string, unknown>,
     source = "unknown"
   ): void {
+    const normalizedSource = clean(source);
+
+    const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
+    const pendingBookingStepKey = clean((realtimeState as any).pendingBookingStepKey);
+
+    const hasActiveBookingTurn =
+      Boolean(pendingBookingStepKey) &&
+      (
+        bookingTurnStatus === "waiting_user_answer" ||
+        bookingTurnStatus === "waiting_assistant_prompt"
+      );
+
+    if (
+      normalizedSource === "bridge:user_transcript_followup" &&
+      hasActiveBookingTurn
+    ) {
+      console.warn("[VOICE_REALTIME][USER_TRANSCRIPT_FOLLOWUP_BLOCKED_DURING_BOOKING]", {
+        callSid,
+        source: normalizedSource,
+        pendingBookingStepKey,
+        bookingTurnStatus,
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+      });
+
+      return;
+    }
+
     const event: Record<string, unknown> = {
       type: "response.create",
       ...(response ? { response } : {}),
@@ -306,14 +334,12 @@ export async function createOpenAiRealtimeBridge({
     const responseInstructions =
       typeof response?.instructions === "string" ? response.instructions : "";
 
-    const isEndCallFollowup = source === "tool_followup:end_call";
+    const isEndCallFollowup = normalizedSource === "tool_followup:end_call";
 
     const shouldCreateEndCallGoodbye =
       isEndCallFollowup &&
       responseInstructions.includes("Say a short, natural goodbye") &&
       !responseInstructions.includes("Do not end the call yet");
-
-    const normalizedSource = clean(source);
 
     const shouldInterruptActiveResponse =
       normalizedSource === "tool_followup:get_booking_flow" ||
@@ -331,13 +357,13 @@ export async function createOpenAiRealtimeBridge({
 
       console.log("[VOICE_REALTIME][END_CALL_FOLLOWUP_NOT_GOODBYE]", {
         callSid,
-        source,
+        source: normalizedSource,
       });
     }
 
     responseController.requestRealtimeResponse({
       event,
-      source,
+      source: normalizedSource,
       shouldInterruptActiveResponse,
       startedAtUserTranscriptSeq: lastUserTranscriptSeq,
     });
@@ -544,6 +570,17 @@ export async function createOpenAiRealtimeBridge({
           lastUserTranscriptSeq,
         });
       }
+
+      console.warn("[VOICE_REALTIME][ASSISTANT_AUDIO_DELTA_SENT_TO_TWILIO]", {
+        callSid,
+        streamSid,
+        activeResponseId: responseState.activeResponseId,
+        activeResponseSource,
+        pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
+        bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
+        lastUserTranscript,
+        lastUserTranscriptSeq,
+      });
 
       sendTwilioAudio({
         twilioSocket,

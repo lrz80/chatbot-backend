@@ -34,6 +34,22 @@ function isConfirmationStep(params: {
   );
 }
 
+function buildInternalSilenceRules(): string[] {
+  return [
+    "Internal tool-routing task. Do not speak to the caller.",
+    "Do not produce audio.",
+    "Do not answer conversationally.",
+    "Do not ask a question.",
+    "Do not say anything to the caller.",
+    "Do not explain anything.",
+    "Do not make availability-related comments.",
+    "Never say you are reviewing availability.",
+    "Never say a time is available or unavailable.",
+    "Never call get_booking_flow.",
+    "",
+  ];
+}
+
 function buildConfirmationNormalizationInstructions(params: {
   pendingBookingStepKey: string;
   pendingSlot: string;
@@ -42,6 +58,8 @@ function buildConfirmationNormalizationInstructions(params: {
   lastUserTranscript: string;
 }): string {
   return [
+    ...buildInternalSilenceRules(),
+
     "The caller answered the current booking confirmation step.",
     `Current booking step key: ${params.pendingBookingStepKey}`,
     `Current booking slot: ${params.pendingSlot}`,
@@ -49,24 +67,29 @@ function buildConfirmationNormalizationInstructions(params: {
     `Current validation mode: ${params.validationMode}`,
     `Caller latest answer: ${params.lastUserTranscript}`,
     "",
+
     "Resolve the caller's latest answer into a booking confirmation intent.",
     "Use only the caller's latest answer.",
     "Do not guess.",
     "Do not invent missing data.",
     "Do not use earlier turns as the answer.",
-    "Do not submit the caller's literal words.",
+    "Do not submit the caller's literal words for confirmation.",
     "",
+
     "Allowed confirmation values:",
     "- confirm: the caller clearly approves creating the appointment.",
-    "- cancel: the caller clearly rejects or cancels the appointment.",
+    "- cancel: the caller clearly rejects, cancels, or says the booking is not correct.",
     "- unknown: the caller's answer is unclear, unrelated, incomplete, noise, greeting, or not enough to confirm/cancel.",
     "",
-    "If the answer is clear, call submit_booking_step with:",
+
+    "Always call submit_booking_step exactly once with:",
     `- step_key: ${params.pendingBookingStepKey}`,
-    "- value: confirm OR cancel",
+    "- value: confirm OR cancel OR unknown",
     "",
-    "If the answer is not clear, do not call submit_booking_step.",
-    "Ask the current confirmation question again naturally in the active call language.",
+
+    "Use confirm only when clear.",
+    "Use cancel only when clear.",
+    "Use unknown for anything unclear.",
   ].join("\n");
 }
 
@@ -78,6 +101,8 @@ function buildDefaultNormalizationInstructions(params: {
   lastUserTranscript: string;
 }): string {
   return [
+    ...buildInternalSilenceRules(),
+
     "The caller answered the current booking step.",
     `Current booking step key: ${params.pendingBookingStepKey}`,
     `Current booking slot: ${params.pendingSlot}`,
@@ -85,23 +110,26 @@ function buildDefaultNormalizationInstructions(params: {
     `Current validation mode: ${params.validationMode}`,
     `Caller latest answer: ${params.lastUserTranscript}`,
     "",
+
     "Normalize the caller's latest answer only if needed, then call submit_booking_step.",
     "Use only the caller's latest answer.",
     "Do not guess.",
     "Do not invent missing data.",
     "Do not use earlier turns as the answer.",
     "",
+
     "Rules:",
     "- If this is an address step, convert spoken numbers into address digits when clear.",
     "- If this is a phone-number step and the caller clearly confirms using the current calling number, submit the configured caller-phone token.",
     `- Caller-phone token: ${USE_CALLER_PHONE_TOKEN}`,
     "- If this is a phone-number step and the caller says a different phone number, submit only the normalized phone number.",
     "- If this is an email step, normalize the email only if the caller clearly said one.",
-    "- If the latest answer does not clearly answer this step, ask the current question again naturally.",
+    "- If the latest answer does not clearly answer this step, still call submit_booking_step with the caller's latest answer exactly as heard. Let the backend reject it and return the retry prompt.",
     "",
-    "If clear, call submit_booking_step with:",
+
+    "Always call submit_booking_step exactly once with:",
     `- step_key: ${params.pendingBookingStepKey}`,
-    "- value: the normalized answer",
+    "- value: the normalized answer if clear, otherwise the caller's latest answer exactly as heard.",
   ].join("\n");
 }
 
@@ -166,6 +194,7 @@ export function requestNormalizedStepModelResolution(params: {
   params.requestRealtimeResponse(
     {
       instructions,
+      tool_choice: "auto",
     },
     confirmationStep
       ? "booking_step_confirmation_model_resolution"

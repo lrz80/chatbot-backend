@@ -3,6 +3,7 @@
 type RequestRealtimeResponse = (
   payload: {
     instructions: string;
+    tool_choice?: "auto" | "none" | "required";
   },
   source: string
 ) => void;
@@ -49,16 +50,39 @@ export function requestServiceStepModelResolution(params: {
   params.requestRealtimeResponse(
     {
       instructions: [
+        "Internal tool-routing task. Do not speak to the caller.",
+        "Do not produce audio.",
+        "Do not answer conversationally.",
+        "Do not ask a question.",
+        "Do not say anything to the caller.",
+        "Do not explain anything.",
+        "Do not make availability-related comments.",
+        "Never say you are reviewing availability.",
+        "Never say a time is available or unavailable.",
+        "Never call get_booking_flow.",
+        "Never call end_call.",
+        "",
         "Use only the active booking flow and the latest caller transcript as source of truth.",
         "The current pending booking step is service.",
+        `Current booking step key: ${pendingBookingStepKey}`,
         `Latest caller transcript: ${lastUserTranscript}`,
-        "Do not submit the raw transcript as the service value unless it clearly matches one configured service option.",
+        "",
         "Use the current next_required_step.validation_config.options and speech_hints to resolve the caller's intended service.",
-        "If exactly one configured service is clearly intended, call submit_booking_step with step_key service and value set to the configured/canonical service name.",
-        "If the service is not clear enough, do not call submit_booking_step. Ask the service question again naturally in the active call language.",
-        "Do not advance to another booking step until service is resolved.",
-        "Do not call end_call.",
-      ].join(" "),
+        "Do not submit the raw transcript as the service value unless it clearly matches one configured service option.",
+        "",
+        "If exactly one configured service is clearly intended, call submit_booking_step with:",
+        `- step_key: ${pendingBookingStepKey}`,
+        "- value: the configured/canonical service name",
+        "",
+        "If the service is not clear enough, still call submit_booking_step with:",
+        `- step_key: ${pendingBookingStepKey}`,
+        "- value: the caller's latest transcript exactly as heard",
+        "",
+        "Let the backend reject unclear service values and return the configured retry prompt.",
+        "Always call submit_booking_step exactly once.",
+        "Do not advance to another booking step yourself.",
+      ].join("\n"),
+      tool_choice: "auto",
     },
     "booking_step_service_model_resolution"
   );
