@@ -638,6 +638,11 @@ export async function createOpenAiRealtimeBridge({
         callSid,
         responseId: responseStateBeforeDone.activeResponseId,
         completedResponseSource,
+        lastAssistantTranscript,
+        lastAssistantAudioDeltaAtMs,
+        lastAssistantAudioDoneAtMs,
+        msSinceLastAssistantAudio:
+          lastAssistantAudioDeltaAtMs > 0 ? Date.now() - lastAssistantAudioDeltaAtMs : null,
         pendingResponseSource: responseStateBeforeDone.pendingResponseSource,
         pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
         bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),

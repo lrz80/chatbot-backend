@@ -62,26 +62,11 @@ function buildDirectBookingPromptInstructions(params: {
   prompt: string;
   isRetry: boolean;
 }): string {
-  const locale = clean(params.currentLocale) || "en-US";
   const prompt = clean(params.prompt);
 
   if (!prompt) return "";
 
-  return [
-    `Current call locale: ${locale}.`,
-    "",
-    "You must speak exactly one short booking prompt now.",
-    "Do not call any tool.",
-    "Do not explain.",
-    "Do not say you are checking availability.",
-    "Do not add confirmation, summary, or extra details.",
-    "Do not mention that the appointment is booked, scheduled, confirmed, reserved, completed, or locked in.",
-    "Say only the text inside <booking_prompt>.",
-    "",
-    "<booking_prompt>",
-    prompt,
-    "</booking_prompt>",
-  ].join("\n");
+  return prompt;
 }
 
 export function resolveSyntheticDirectBookingFollowup(params: {
