@@ -677,7 +677,34 @@ export async function createOpenAiRealtimeBridge({
             bookingCoordinator.nudgeBookingStepProcessingAfterTranscript();
           }
 
-          userTranscriptFollowupController.requestFollowupAfterAcceptedUserTranscript();
+          const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
+          const pendingBookingStepKey = clean((realtimeState as any).pendingBookingStepKey);
+
+          const currentTranscriptSeq =
+            typeof lastUserTranscriptSeq === "number" ? lastUserTranscriptSeq : -1;
+
+          const pendingPromptAnchorSeq =
+            typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq === "number"
+              ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
+              : -1;
+
+          const isAnswerToPendingBookingStep =
+            Boolean(pendingBookingStepKey) &&
+            bookingTurnStatus === "waiting_user_answer" &&
+            currentTranscriptSeq > pendingPromptAnchorSeq;
+
+          if (isAnswerToPendingBookingStep) {
+            console.warn("[VOICE_REALTIME][USER_TRANSCRIPT_FOLLOWUP_SKIPPED_BOOKING_ANSWER]", {
+              callSid,
+              pendingBookingStepKey,
+              bookingTurnStatus,
+              lastUserTranscript,
+              lastUserTranscriptSeq,
+              pendingBookingStepPromptAnchorSeq: pendingPromptAnchorSeq,
+            });
+          } else {
+            userTranscriptFollowupController.requestFollowupAfterAcceptedUserTranscript();
+          }
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {

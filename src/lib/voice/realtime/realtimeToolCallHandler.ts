@@ -913,16 +913,7 @@ export async function handleRealtimeToolCall(
 
       requestRealtimeResponse(
         {
-          instructions: [
-            "Say exactly this booking prompt to the caller.",
-            "Do not add anything before it.",
-            "Do not add anything after it.",
-            "Do not explain.",
-            "Do not summarize.",
-            "Do not mention availability.",
-            "",
-            nextRequiredPrompt,
-          ].join("\n"),
+          instructions: nextRequiredPrompt,
           tool_choice: "none",
         },
         "tool_followup:submit_booking_step"
