@@ -52,6 +52,15 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function isInternalModelResolutionSource(source: unknown): boolean {
+  const value = clean(source);
+
+  return (
+    value.startsWith("booking_step_") &&
+    value.endsWith("_model_resolution")
+  );
+}
+
 function resolveGoodbyeHangupFallbackMs(transcript: string): number {
   const configured = Number(process.env.REALTIME_GOODBYE_HANGUP_FALLBACK_MS);
 
@@ -498,19 +507,36 @@ export async function createOpenAiRealtimeBridge({
         return;
       }
 
+      const responseState = responseController.getState();
+      const activeResponseSource = clean(responseState.activeResponseSource || "");
+
+      if (isInternalModelResolutionSource(activeResponseSource)) {
+        console.warn("[VOICE_REALTIME][INTERNAL_MODEL_RESOLUTION_AUDIO_SUPPRESSED]", {
+          callSid,
+          streamSid,
+          activeResponseId: responseState.activeResponseId,
+          activeResponseSource,
+          pendingBookingStepKey: clean(
+            (realtimeState as any).pendingBookingStepKey
+          ),
+          bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
+          lastUserTranscriptSeq,
+        });
+
+        return;
+      }
+
       const wasAssistantSpeaking = assistantSpeaking;
 
       assistantSpeaking = true;
       lastAssistantAudioDeltaAtMs = Date.now();
 
       if (!wasAssistantSpeaking) {
-        const responseState = responseController.getState();
-
         console.log("[VOICE_REALTIME][ASSISTANT_AUDIO_STARTED]", {
           callSid,
           streamSid,
           activeResponseId: responseState.activeResponseId,
-          activeResponseSource: responseState.activeResponseSource,
+          activeResponseSource,
           pendingBookingStepKey: clean(
             (realtimeState as any).pendingBookingStepKey
           ),
