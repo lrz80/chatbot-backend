@@ -888,6 +888,57 @@ export async function handleRealtimeToolCall(
         ""
     ).trim();
 
+    const nextRequiredPrompt = clean(
+      (toolResult as any)?.next_required_step?.prompt || ""
+    );
+
+    const nextRequiredStepKey = clean(
+      (toolResult as any)?.next_required_step?.step_key || ""
+    );
+
+    const shouldForceSubmitBookingStepPrompt =
+      toolName === "submit_booking_step" &&
+      Boolean(nextRequiredStepKey) &&
+      Boolean(nextRequiredPrompt);
+
+    if (shouldForceSubmitBookingStepPrompt) {
+      console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_TOOL_RESULT_PROMPT_FORCED]", {
+        callSid,
+        toolName,
+        ok: (toolResult as any)?.ok,
+        nextRequiredStepKey,
+        nextRequiredPrompt,
+        source: "tool_followup:submit_booking_step",
+      });
+
+      requestRealtimeResponse(
+        {
+          instructions: [
+            "Say exactly this booking prompt to the caller.",
+            "Do not add anything before it.",
+            "Do not add anything after it.",
+            "Do not explain.",
+            "Do not summarize.",
+            "Do not mention availability.",
+            "",
+            nextRequiredPrompt,
+          ].join("\n"),
+          tool_choice: "none",
+        },
+        "tool_followup:submit_booking_step"
+      );
+
+      return {
+        consumed: true,
+        result: toolResult as RealtimeToolResult,
+        realtimeState: nextRealtimeState,
+        bookingFlowLoaded: nextBookingFlowLoaded,
+        hangupRequestedByTool,
+        callEnding: nextCallEnding,
+        resetLastUserDigits: true,
+      };
+    }
+
     const syntheticFollowupInstructions = isSyntheticToolCall
       ? buildSyntheticBookingStepFollowupInstructions({
           toolName,
