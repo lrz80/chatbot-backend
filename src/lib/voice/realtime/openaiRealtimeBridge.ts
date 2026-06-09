@@ -289,9 +289,24 @@ export async function createOpenAiRealtimeBridge({
     response?: Record<string, unknown>,
     source = "unknown"
   ): void {
+    const normalizedSource = clean(source);
+
+    const shouldForceAudioResponse =
+      normalizedSource.startsWith("tool_followup:submit_booking_step") ||
+      normalizedSource === "tool_followup:get_booking_flow" ||
+      normalizedSource === "tool_followup:end_call";
+
+    const responseWithAudio =
+      response && shouldForceAudioResponse
+        ? {
+            modalities: ["text", "audio"],
+            ...response,
+          }
+        : response;
+
     const event: Record<string, unknown> = {
       type: "response.create",
-      ...(response ? { response } : {}),
+      ...(responseWithAudio ? { response: responseWithAudio } : {}),
     };
 
     const responseInstructions =
@@ -303,8 +318,6 @@ export async function createOpenAiRealtimeBridge({
       isEndCallFollowup &&
       responseInstructions.includes("Say a short, natural goodbye") &&
       !responseInstructions.includes("Do not end the call yet");
-
-    const normalizedSource = clean(source);
 
     const shouldInterruptActiveResponse =
       normalizedSource === "tool_followup:get_booking_flow" ||

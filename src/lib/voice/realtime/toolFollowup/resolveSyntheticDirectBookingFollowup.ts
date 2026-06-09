@@ -69,22 +69,14 @@ function buildDirectBookingPromptInstructions(params: {
 
   return [
     `Current call locale: ${locale}.`,
-    params.isRetry
-      ? "The caller's previous answer was not valid or the requested option was not available."
-      : "The caller's previous answer was accepted and the backend selected the next required booking step.",
     "",
-    "Critical booking prompt rule:",
-    "Say the text inside <booking_prompt> and </booking_prompt> as the booking question now.",
-    "You may only make pronunciation natural for voice, but you must not add new booking facts.",
-    "Do not add any confirmation, summary, explanation, or extra question before or after it.",
-    "Do not say the appointment is booked, scheduled, reserved, confirmed, created, completed, set, or locked in.",
-    "Do not say “agendamos”, “quedó agendado”, “reservado”, “confirmado”, “listo”, or any equivalent booking-completion phrase.",
-    "Do not mention any date, time, service, staff member, price, policy, customer name, phone number, address, or appointment detail unless that exact information appears inside <booking_prompt>.",
-    "Do not verify, reinterpret, correct, recalculate, or re-check dates, times, services, prices, availability, or booking details.",
-    "Do not say that you are checking availability.",
+    "You must speak exactly one short booking prompt now.",
     "Do not call any tool.",
-    "Ask only this one booking question.",
-    "After asking it, stop and wait for the caller answer.",
+    "Do not explain.",
+    "Do not say you are checking availability.",
+    "Do not add confirmation, summary, or extra details.",
+    "Do not mention that the appointment is booked, scheduled, confirmed, reserved, completed, or locked in.",
+    "Say only the text inside <booking_prompt>.",
     "",
     "<booking_prompt>",
     prompt,
