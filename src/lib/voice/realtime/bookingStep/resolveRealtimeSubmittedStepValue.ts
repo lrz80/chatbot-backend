@@ -86,6 +86,47 @@ function isDatetimeStep(step: BookingFlowStepLike): boolean {
   return stepKey === "datetime" || slot === "datetime";
 }
 
+function buildIncompatibleTextResult(params: {
+  rawTranscriptValue: string;
+  modelValue: string;
+}): RealtimeSubmittedStepValueResult {
+  return {
+    ok: false,
+    error: "INCOMPATIBLE_TEXT_VALUE",
+    value: "",
+    rawTranscriptValue: params.rawTranscriptValue,
+    modelValue: params.modelValue,
+    source: "none",
+  };
+}
+
+function isCustomerNameSlot(slot: string): boolean {
+  return clean(slot).toLowerCase() === "customer_name";
+}
+
+function textLooksLikeDatetimeForCurrentTenant(params: {
+  value: string;
+  rawTranscriptValue: string;
+  modelValue: string;
+  timeZone: string;
+}): boolean {
+  const candidate =
+    clean(params.rawTranscriptValue) ||
+    clean(params.value) ||
+    clean(params.modelValue);
+
+  if (!candidate) return false;
+
+  const datetimeResult = resolveRealtimeDatetimeValue({
+    value: candidate,
+    rawTranscriptValue: candidate,
+    modelValue: candidate,
+    timeZone: params.timeZone,
+  });
+
+  return datetimeResult.ok === true;
+}
+
 export function resolveRealtimeSubmittedStepValue(params: {
   step: BookingFlowStepLike;
   value: string;
@@ -167,6 +208,21 @@ export function resolveRealtimeSubmittedStepValue(params: {
   if (expectedType === "number") {
     return resolveRealtimeNumberValue({
       value,
+      rawTranscriptValue,
+      modelValue,
+    });
+  }
+
+  if (
+    isCustomerNameSlot(slot) &&
+    textLooksLikeDatetimeForCurrentTenant({
+      value,
+      rawTranscriptValue,
+      modelValue,
+      timeZone,
+    })
+  ) {
+    return buildIncompatibleTextResult({
       rawTranscriptValue,
       modelValue,
     });

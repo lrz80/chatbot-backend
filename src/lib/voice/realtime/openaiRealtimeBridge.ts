@@ -304,10 +304,12 @@ export async function createOpenAiRealtimeBridge({
       responseInstructions.includes("Say a short, natural goodbye") &&
       !responseInstructions.includes("Do not end the call yet");
 
+    const normalizedSource = clean(source);
+
     const shouldInterruptActiveResponse =
-      source === "tool_followup:get_booking_flow" ||
-      source === "tool_followup:submit_booking_step" ||
-      source === "tool_followup:end_call";
+      normalizedSource === "tool_followup:get_booking_flow" ||
+      normalizedSource.startsWith("tool_followup:submit_booking_step") ||
+      normalizedSource === "tool_followup:end_call";
 
     if (isEndCallFollowup && shouldCreateEndCallGoodbye) {
       endCallGoodbyeRequested = true;

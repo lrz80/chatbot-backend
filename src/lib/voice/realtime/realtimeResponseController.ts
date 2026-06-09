@@ -71,6 +71,7 @@ export function createRealtimeResponseController(
 
   let pendingResponseCreate: Record<string, unknown> | null = null;
   let pendingResponseSource: string | null = null;
+  let pendingResponseStartedAtUserTranscriptSeq: number | null = null;
 
   let awaitingResponseSource: string | null = null;
   let awaitingResponseCreate: AwaitingResponseCreateState | null = null;
@@ -160,6 +161,7 @@ export function createRealtimeResponseController(
     if (hasResponseInFlight) {
       pendingResponseCreate = event;
       pendingResponseSource = source;
+      pendingResponseStartedAtUserTranscriptSeq = startedAtUserTranscriptSeq;
 
       console.warn("[VOICE_REALTIME][RESPONSE_CREATE_QUEUED]", {
         callSid,
@@ -169,6 +171,7 @@ export function createRealtimeResponseController(
         awaitingResponseSource,
         shouldInterruptActiveResponse,
         shouldSupersede,
+        startedAtUserTranscriptSeq,
       });
 
       if (
@@ -238,21 +241,27 @@ export function createRealtimeResponseController(
 
     const event = pendingResponseCreate;
     const source = clean(pendingResponseSource || "");
+    const startedAtUserTranscriptSeq =
+      pendingResponseStartedAtUserTranscriptSeq ?? activeResponseStartedAtUserTranscriptSeq;
 
     pendingResponseCreate = null;
     pendingResponseSource = null;
+    pendingResponseStartedAtUserTranscriptSeq = null;
+
+    activeResponseStartedAtUserTranscriptSeq = startedAtUserTranscriptSeq;
 
     awaitingResponseSource = source;
     awaitingResponseCreate = {
       event,
       source,
-      startedAtUserTranscriptSeq: activeResponseStartedAtUserTranscriptSeq,
+      startedAtUserTranscriptSeq,
       retryCount: 0,
     };
 
     console.warn("[VOICE_REALTIME][PENDING_RESPONSE_CREATE_FLUSHED]", {
       callSid,
       source,
+      startedAtUserTranscriptSeq,
     });
 
     const sent = sendJson(params.openAiSocket, event);

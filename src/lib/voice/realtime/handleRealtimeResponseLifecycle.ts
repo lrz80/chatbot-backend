@@ -29,9 +29,11 @@ type HandleRealtimeResponseDoneResult = {
 };
 
 function isBookingQuestionResponseSource(source: string | null): boolean {
+  const cleanSource = String(source ?? "").trim();
+
   return (
-    source === "tool_followup:get_booking_flow" ||
-    source === "tool_followup:submit_booking_step"
+    cleanSource === "tool_followup:get_booking_flow" ||
+    cleanSource.startsWith("tool_followup:submit_booking_step")
   );
 }
 
@@ -66,6 +68,7 @@ export function handleRealtimeResponseDone(
 
     console.log("[VOICE_REALTIME][BOOKING_TURN_OPENED_FOR_USER_ANSWER]", {
       callSid: params.callSid,
+      completedResponseSource: params.completedResponseSource,
       bookingTurnStatus: (nextRealtimeState as any).bookingTurnStatus || "",
       pendingBookingStepKey: nextRealtimeState.pendingBookingStepKey || "",
       pendingBookingStepPrompt: nextRealtimeState.pendingBookingStepPrompt || "",
@@ -75,7 +78,6 @@ export function handleRealtimeResponseDone(
           : null,
       lastUserTranscript: params.lastUserTranscript,
       lastUserTranscriptSeq: params.lastUserTranscriptSeq,
-      completedResponseSource: params.completedResponseSource,
     });
   }
 
