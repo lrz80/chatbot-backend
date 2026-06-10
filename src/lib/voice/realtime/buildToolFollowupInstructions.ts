@@ -43,7 +43,6 @@ function buildNaturalPromptInstruction(params: {
     `${purpose}: ${sourceText}`,
     "Do not invent booking details, prices, dates, times, services, names, phone numbers, or policies.",
     "Do not read the configured text like an IVR, form, or answering machine.",
-    "Rephrase it naturally for a warm human phone conversation.",
     "Preserve the exact meaning, required slot, configured options, service name, date, time, and booking facts.",
     mustAskConfirmation
       ? "The caller must clearly be asked to confirm the booking in this same turn."
@@ -84,6 +83,24 @@ export function buildToolFollowupInstructions(params: {
   const nextStepRequired = nextRequiredStep?.required === true;
 
   const primaryPrompt = assistantPrompt || nextStepPrompt || message;
+
+  if (toolName === "submit_booking_step" && nextStepPrompt) {
+    return [
+      "Use only the tool result as source of truth.",
+      activeLocale
+        ? `Respond in the active call language: ${activeLocale}.`
+        : "",
+      "Say exactly the following booking prompt and nothing else.",
+      "Do not rephrase it.",
+      "Do not add confirmations, transitions, explanations, status updates, filler words, or extra questions.",
+      "Do not mention availability checks, calendar checks, validation, tools, processing, or internal steps.",
+      "After saying the prompt, stop and wait for the caller answer.",
+      "",
+      nextStepPrompt,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
 
   /**
    * Important:
@@ -223,13 +240,20 @@ export function buildToolFollowupInstructions(params: {
   }
 
   if (nextStepPrompt) {
-    return buildNaturalPromptInstruction({
-      sourceText: nextStepPrompt,
-      purpose: "Ask the next booking question using this configured meaning",
-      activeLocale,
-      mustWaitForAnswer: true,
-      blockEndCall: nextStepRequired,
-    });
+    return [
+      "Use only the tool result as source of truth.",
+      activeLocale
+        ? `Respond in the active call language: ${activeLocale}.`
+        : "",
+      "Say exactly the following prompt and nothing else.",
+      "Do not rephrase it.",
+      "Do not add confirmations, transitions, explanations, status updates, filler words, or extra questions.",
+      "After saying the prompt, stop and wait for the caller answer.",
+      "",
+      nextStepPrompt,
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   if (!ok && error) {

@@ -67,17 +67,8 @@ export function resolveSyntheticSubmitBookingStepFollowup(
   if (!nextPrompt) return "";
 
   return [
-    "This is a live booking step prompt.",
-    "Say only the configured booking prompt inside <booking_prompt> and </booking_prompt>.",
-    "Do not add confirmations, summaries, explanations, transitions, or extra questions.",
-    "Do not say or imply that the appointment is already booked, scheduled, reserved, confirmed, created, completed, set, or locked in unless that meaning is explicitly written inside the configured booking prompt.",
-    "Do not mention any booking detail unless it is already written inside the configured booking prompt.",
-    "Do not repeat, reinterpret, verify, correct, recalculate, or modify already collected booking details.",
-    "Do not submit another booking step until the caller answers this current question.",
-    "After saying the prompt, stop and wait for the caller answer.",
-    "",
-    "<booking_prompt>",
+    "Say exactly this booking prompt and nothing else.",
+    "Do not add status updates, transitions, explanations, confirmations, or extra words.",
     nextPrompt,
-    "</booking_prompt>",
   ].join("\n");
 }
