@@ -38,6 +38,12 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function getObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function sendJson(socket: WebSocket, payload: Record<string, unknown>): boolean {
   if (socket.readyState !== WebSocket.OPEN) return false;
   socket.send(JSON.stringify(payload));
@@ -210,11 +216,16 @@ export function createRealtimeResponseController(
       retryCount: 0,
     };
 
+    const responsePayload = getObject(event.response);
+    const responseInstructions = clean(responsePayload?.instructions || "");
+
     console.warn("[VOICE_REALTIME][RESPONSE_CREATE_REQUESTED]", {
       callSid,
       source,
       startedAtUserTranscriptSeq,
       hasPendingResponseCreate: Boolean(pendingResponseCreate),
+      hasInstructions: Boolean(responseInstructions),
+      instructionsPreview: responseInstructions.slice(0, 700),
     });
 
     const sent = sendJson(params.openAiSocket, event);
@@ -258,10 +269,15 @@ export function createRealtimeResponseController(
       retryCount: 0,
     };
 
+    const responsePayload = getObject(event.response);
+    const responseInstructions = clean(responsePayload?.instructions || "");
+
     console.warn("[VOICE_REALTIME][PENDING_RESPONSE_CREATE_FLUSHED]", {
       callSid,
       source,
       startedAtUserTranscriptSeq,
+      hasInstructions: Boolean(responseInstructions),
+      instructionsPreview: responseInstructions.slice(0, 700),
     });
 
     const sent = sendJson(params.openAiSocket, event);
