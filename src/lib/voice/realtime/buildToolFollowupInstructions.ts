@@ -84,18 +84,27 @@ export function buildToolFollowupInstructions(params: {
 
   const primaryPrompt = assistantPrompt || nextStepPrompt || message;
 
-  if (toolName === "submit_booking_step" && nextStepPrompt) {
+  if (
+    toolName === "submit_booking_step" &&
+    ok &&
+    nextStepPrompt &&
+    !actionRequired
+  ) {
     return [
       "Use only the tool result as source of truth.",
       activeLocale
         ? `Respond in the active call language: ${activeLocale}.`
         : "",
-      "Say exactly the following booking prompt and nothing else.",
-      "Do not rephrase it.",
+      "This booking step was already processed by the backend.",
+      "If the submitted step involved date/time, availability was already checked by the backend before this instruction was created.",
+      "Your job is only to ask the next required booking question.",
+      "Do not say you are checking, verifying, searching, looking, processing, or confirming availability.",
+      "Do not mention availability, calendar, provider, backend, validation, tools, or internal steps.",
       "Do not add confirmations, transitions, explanations, status updates, filler words, or extra questions.",
-      "Do not mention availability checks, calendar checks, validation, tools, processing, or internal steps.",
-      "After saying the prompt, stop and wait for the caller answer.",
+      "Do not rephrase the prompt.",
+      "Speak only the exact prompt below, then stop and wait for the caller answer.",
       "",
+      "EXACT_PROMPT:",
       nextStepPrompt,
     ]
       .filter(Boolean)
