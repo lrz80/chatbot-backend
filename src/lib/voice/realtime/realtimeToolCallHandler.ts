@@ -191,6 +191,18 @@ export async function handleRealtimeToolCall(
     toolArgs,
   });
 
+  if (toolName === "submit_booking_step") {
+    console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_RESPONSE_CANCEL_REQUESTED]", {
+      callSid,
+      callId,
+      submittedStepKey: clean(toolArgs.step_key || ""),
+    });
+
+    sendRealtimeJson(openAiSocket, {
+      type: "response.cancel",
+    });
+  }
+
   const directCreateAppointmentGuard = guardDirectCreateAppointment({
     toolName,
     callId,
