@@ -764,7 +764,10 @@ export async function handleRealtimeToolCall(
 
         requestRealtimeResponse(
           {
-            instructions: syntheticDirectFollowup.instructions,
+            instructions: [
+              "Say exactly the following message and nothing else:",
+              syntheticDirectFollowup.instructions,
+            ].join("\n"),
             tool_choice: "none",
           },
           syntheticDirectFollowup.source
@@ -865,7 +868,10 @@ export async function handleRealtimeToolCall(
 
       requestRealtimeResponse(
         {
-          instructions: retryPrompt,
+          instructions: [
+            "Say exactly the following message and nothing else:",
+            retryPrompt,
+          ].join("\n"),
           tool_choice: "none",
         },
         "tool_followup:submit_booking_step:retry"
@@ -913,7 +919,10 @@ export async function handleRealtimeToolCall(
 
       requestRealtimeResponse(
         {
-          instructions: nextRequiredPrompt,
+          instructions: [
+            "Say exactly the following message and nothing else:",
+            nextRequiredPrompt,
+          ].join("\n"),
           tool_choice: "none",
         },
         "tool_followup:submit_booking_step"
