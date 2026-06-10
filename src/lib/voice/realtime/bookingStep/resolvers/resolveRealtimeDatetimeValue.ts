@@ -1,14 +1,53 @@
 // src/lib/voice/realtime/bookingStep/resolvers/resolveRealtimeDatetimeValue.ts
-import { hasExplicitVoiceDateAnchor } from "../../../../appointments/parseVoiceRequestedDate";
+import {
+  hasExplicitVoiceDateAnchor,
+  parseVoiceRequestedDate,
+} from "../../../../appointments/parseVoiceRequestedDate";
 import { clean } from "../../realtimeBookingFlowUtils";
 import { isModelValueGroundedInTranscript } from "./grounding";
+
+export type ResolveRealtimeDatetimeValueResult =
+  | {
+      ok: true;
+      value: string;
+      rawTranscriptValue: string;
+      modelValue: string;
+      source: "model" | "transcript";
+    }
+  | {
+      ok: false;
+      error: "INCOMPATIBLE_DATETIME_VALUE";
+      value: "";
+      rawTranscriptValue: string;
+      modelValue: string;
+      source: "none";
+    };
+
+function isCompleteParsableDatetime(params: {
+  value: string;
+  timeZone: string;
+}): boolean {
+  const value = clean(params.value);
+  const timeZone = clean(params.timeZone);
+
+  if (!value || !timeZone) {
+    return false;
+  }
+
+  const parsed = parseVoiceRequestedDate({
+    raw: value,
+    timeZone,
+  });
+
+  return parsed.ok === true;
+}
 
 export function resolveRealtimeDatetimeValue(params: {
   value: string;
   rawTranscriptValue: string;
   modelValue: string;
   timeZone: string;
-}) {
+}): ResolveRealtimeDatetimeValueResult {
   const value = clean(params.value);
   const rawTranscriptValue = clean(params.rawTranscriptValue);
   const modelValue = clean(params.modelValue);
@@ -21,7 +60,12 @@ export function resolveRealtimeDatetimeValue(params: {
       timeZone,
     });
 
-  if (!transcriptValueHasDateAnchor) {
+  const transcriptValueIsCompleteDatetime = isCompleteParsableDatetime({
+    value: rawTranscriptValue,
+    timeZone,
+  });
+
+  if (!transcriptValueHasDateAnchor || !transcriptValueIsCompleteDatetime) {
     return {
       ok: false as const,
       error: "INCOMPATIBLE_DATETIME_VALUE" as const,
@@ -39,8 +83,14 @@ export function resolveRealtimeDatetimeValue(params: {
       timeZone,
     });
 
+  const modelValueIsCompleteDatetime = isCompleteParsableDatetime({
+    value,
+    timeZone,
+  });
+
   if (
     modelValueHasDateAnchor &&
+    modelValueIsCompleteDatetime &&
     isModelValueGroundedInTranscript({
       modelValue: value,
       rawTranscriptValue,
