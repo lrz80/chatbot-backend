@@ -63,10 +63,25 @@ function buildDirectBookingPromptInstructions(params: {
   isRetry: boolean;
 }): string {
   const prompt = clean(params.prompt);
+  const currentLocale = clean(params.currentLocale);
 
   if (!prompt) return "";
 
-  return prompt;
+  return [
+    "You are in a live phone booking flow.",
+    currentLocale ? `Respond in the active call language: ${currentLocale}.` : "",
+    "Say exactly the booking prompt below and nothing else.",
+    "Do not add any transition, confirmation, explanation, status update, filler phrase, or extra words.",
+    "Do not mention checking availability, verifying availability, calendar checks, tools, validation, processing, or internal steps.",
+    "Do not say anything before the booking prompt.",
+    "Do not say anything after the booking prompt.",
+    "After saying the booking prompt, stop and wait for the caller answer.",
+    "",
+    "Booking prompt:",
+    prompt,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function resolveSyntheticDirectBookingFollowup(params: {
