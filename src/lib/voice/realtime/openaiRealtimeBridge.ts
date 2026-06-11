@@ -101,6 +101,55 @@ function sendTwilioMark(params: {
   return true;
 }
 
+function normalizeAssistantPromptText(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[¿?¡!.,;:]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractExactBookingPromptFromInstructions(
+  instructions: unknown
+): string {
+  const text = clean(instructions);
+
+  const marker = "Booking prompt:";
+  const markerIndex = text.lastIndexOf(marker);
+
+  if (markerIndex < 0) {
+    return "";
+  }
+
+  return clean(text.slice(markerIndex + marker.length));
+}
+
+function isExactBookingPromptResponseSource(source: unknown): boolean {
+  const value = clean(source);
+
+  return (
+    value === "tool_followup:submit_booking_step" ||
+    value === "tool_followup:submit_booking_step:synthetic_direct" ||
+    value === "tool_followup:submit_booking_step:retry"
+  );
+}
+
+function isAssistantTranscriptCompatibleWithExpectedPrompt(params: {
+  transcript: string;
+  expectedPrompt: string;
+}): boolean {
+  const transcript = normalizeAssistantPromptText(params.transcript);
+  const expectedPrompt = normalizeAssistantPromptText(params.expectedPrompt);
+
+  if (!transcript || !expectedPrompt) {
+    return true;
+  }
+
+  return expectedPrompt.startsWith(transcript);
+}
+
 export async function createOpenAiRealtimeBridge({
   twilioSocket,
 }: BridgeParams): Promise<void> {
@@ -131,6 +180,8 @@ export async function createOpenAiRealtimeBridge({
   let lastAssistantAudioDoneAtMs = 0;
   let currentAssistantTranscript = "";
   let lastAssistantTranscript = "";
+  let suppressActiveAssistantAudio = false;
+  let expectedAssistantPromptForActiveResponse = "";
 
   let hangupRequestedByTool = false;
   let endCallGoodbyeRequested = false;
@@ -338,6 +389,11 @@ export async function createOpenAiRealtimeBridge({
     const responseInstructions =
       typeof response?.instructions === "string" ? response.instructions : "";
 
+    const expectedBookingPromptFromInstructions =
+      isExactBookingPromptResponseSource(normalizedSource)
+        ? extractExactBookingPromptFromInstructions(responseInstructions)
+        : "";
+
     const isEndCallFollowup = normalizedSource === "tool_followup:end_call";
 
     const shouldCreateEndCallGoodbye =
@@ -362,6 +418,17 @@ export async function createOpenAiRealtimeBridge({
       console.log("[VOICE_REALTIME][END_CALL_FOLLOWUP_NOT_GOODBYE]", {
         callSid,
         source: normalizedSource,
+      });
+    }
+
+    if (expectedBookingPromptFromInstructions) {
+      expectedAssistantPromptForActiveResponse =
+        expectedBookingPromptFromInstructions;
+
+      console.warn("[VOICE_REALTIME][EXPECTED_ASSISTANT_PROMPT_ARMED]", {
+        callSid,
+        source: normalizedSource,
+        expectedAssistantPromptForActiveResponse,
       });
     }
 
@@ -471,6 +538,7 @@ export async function createOpenAiRealtimeBridge({
 
       currentAssistantTranscript = "";
       lastAssistantTranscript = "";
+      suppressActiveAssistantAudio = false;
 
       const createdResponseSource = clean(responseState.activeResponseSource || "");
       const pendingBookingStepKey = clean(
@@ -539,6 +607,66 @@ export async function createOpenAiRealtimeBridge({
     if (assistantTranscriptDelta) {
       currentAssistantTranscript += assistantTranscriptDelta;
 
+      const responseState = responseController.getState();
+      const activeResponseSource = clean(responseState.activeResponseSource || "");
+
+      const fallbackExpectedPrompt = clean(
+        (realtimeState as any).pendingBookingStepPrompt || ""
+      );
+
+      const expectedPrompt =
+        expectedAssistantPromptForActiveResponse || fallbackExpectedPrompt;
+
+      const shouldEnforceExactPrompt =
+        isExactBookingPromptResponseSource(activeResponseSource) &&
+        Boolean(expectedPrompt);
+
+      const compatible = isAssistantTranscriptCompatibleWithExpectedPrompt({
+        transcript: currentAssistantTranscript,
+        expectedPrompt,
+      });
+
+      console.warn("[VOICE_REALTIME][EXACT_BOOKING_PROMPT_GUARD_CHECK]", {
+        callSid,
+        activeResponseId: responseState.activeResponseId,
+        activeResponseSource,
+        expectedPrompt,
+        currentAssistantTranscript,
+        shouldEnforceExactPrompt,
+        compatible,
+        pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
+        bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
+      });
+
+      if (shouldEnforceExactPrompt && !compatible) {
+        suppressActiveAssistantAudio = true;
+
+        console.error("[VOICE_REALTIME][EXACT_BOOKING_PROMPT_VIOLATION_CANCELLED]", {
+          callSid,
+          activeResponseId: responseState.activeResponseId,
+          activeResponseSource,
+          expectedPrompt,
+          currentAssistantTranscript,
+          pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
+          bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
+        });
+
+        if (openAiSocket.readyState === WebSocket.OPEN) {
+          sendJson(openAiSocket, {
+            type: "response.cancel",
+          });
+        }
+
+        if (streamSid && twilioSocket.readyState === WebSocket.OPEN) {
+          sendJson(twilioSocket, {
+            event: "clear",
+            streamSid,
+          });
+        }
+
+        return;
+      }
+
       console.log("[VOICE_REALTIME][ASSISTANT_TRANSCRIPT_DELTA]", {
         callSid,
         delta: assistantTranscriptDelta,
@@ -551,6 +679,19 @@ export async function createOpenAiRealtimeBridge({
     const audioDelta = resolveOpenAiRealtimeAudioDelta(event);
 
     if (audioDelta && streamSid) {
+      if (suppressActiveAssistantAudio) {
+        console.warn("[VOICE_REALTIME][ASSISTANT_AUDIO_SUPPRESSED_AFTER_PROMPT_VIOLATION]", {
+          callSid,
+          streamSid,
+          activeResponseId: responseController.getState().activeResponseId,
+          activeResponseSource: responseController.getState().activeResponseSource,
+          currentAssistantTranscript,
+          expectedAssistantPromptForActiveResponse,
+        });
+
+        return;
+      }
+
       if (callEnding) {
         return;
       }
@@ -746,6 +887,9 @@ export async function createOpenAiRealtimeBridge({
     if (event.type === "response.done") {
       assistantSpeaking = false;
       lastAssistantAudioDoneAtMs = Date.now();
+
+      suppressActiveAssistantAudio = false;
+      expectedAssistantPromptForActiveResponse = "";
 
       if (!lastAssistantTranscript && currentAssistantTranscript) {
         lastAssistantTranscript = clean(currentAssistantTranscript);
@@ -978,6 +1122,8 @@ export async function createOpenAiRealtimeBridge({
       lastAssistantAudioDoneAtMs = 0;
       currentAssistantTranscript = "";
       lastAssistantTranscript = "";
+      suppressActiveAssistantAudio = false;
+      expectedAssistantPromptForActiveResponse = "";
       bargeInController.reset();
 
       configureRealtimeSessionIfReady().catch((error) => {
