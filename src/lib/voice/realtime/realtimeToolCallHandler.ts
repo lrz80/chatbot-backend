@@ -77,22 +77,34 @@ function buildExactBookingPromptResponse(params: {
   return {
     conversation: "none",
     tool_choice: "none",
+    metadata: {
+      purpose: "exact_booking_prompt",
+      expected_prompt: prompt,
+    },
     instructions: [
-      "You are generating a direct booking prompt for a live phone call.",
-      `Active language: ${params.currentLocale}.`,
-      "The backend already processed the previous caller answer.",
-      "If the previous answer was a date/time, availability was already checked silently by the backend.",
-      "Do not use conversation history.",
-      "Do not acknowledge the previous answer.",
-      "Do not say understood, perfect, okay, one moment, checking, verifying, processing, or anything similar.",
-      "Do not mention availability, calendar, tools, validation, backend, or internal steps.",
-      "Say only the exact booking prompt below.",
-      "Do not say anything before it.",
-      "Do not say anything after it.",
-      "",
-      "Booking prompt:",
-      prompt,
+      "You are a speech renderer for a live phone booking flow.",
+      "You must not reason, continue the conversation, interpret the previous caller answer, or use prior conversation context.",
+      "Your only task is to speak exactly the booking prompt provided in the input.",
+      "Do not add, remove, translate, paraphrase, explain, acknowledge, or prepend anything.",
+      "Do not mention availability, scheduling status, calendar, backend, validation, tools, or processing.",
+      `The active language is ${params.currentLocale}.`,
     ].join("\n"),
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "Speak exactly this booking prompt and nothing else:",
+              "",
+              prompt,
+            ].join("\n"),
+          },
+        ],
+      },
+    ],
   };
 }
 
