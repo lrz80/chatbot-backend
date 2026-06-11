@@ -31,7 +31,10 @@ import { createBookingRealtimeCoordinator } from "./bookingRealtimeCoordinator";
 import {
   getOpenAiRealtimeUrl,
   isConversationAlreadyHasActiveResponseError,
+  isOpenAiRealtimeAssistantTranscriptDone,
   isResponseCancelNotActiveError,
+  resolveOpenAiRealtimeAssistantTranscriptDelta,
+  resolveOpenAiRealtimeAssistantTranscriptDone,
   resolveOpenAiRealtimeAudioDelta,
   safeJsonParseRealtimeEvent,
 } from "./openAiRealtimeEvents";
@@ -126,6 +129,7 @@ export async function createOpenAiRealtimeBridge({
   let assistantSpeaking = false;
   let lastAssistantAudioDeltaAtMs = 0;
   let lastAssistantAudioDoneAtMs = 0;
+  let currentAssistantTranscript = "";
   let lastAssistantTranscript = "";
 
   let hangupRequestedByTool = false;
@@ -465,6 +469,9 @@ export async function createOpenAiRealtimeBridge({
 
       assistantSpeaking = true;
 
+      currentAssistantTranscript = "";
+      lastAssistantTranscript = "";
+
       const createdResponseSource = clean(responseState.activeResponseSource || "");
       const pendingBookingStepKey = clean(
         (realtimeState as any).pendingBookingStepKey
@@ -523,6 +530,21 @@ export async function createOpenAiRealtimeBridge({
       }
 
       toolCallQueue.enqueueRealtimeToolCall(event);
+      return;
+    }
+
+    const assistantTranscriptDelta =
+      resolveOpenAiRealtimeAssistantTranscriptDelta(event);
+
+    if (assistantTranscriptDelta) {
+      currentAssistantTranscript += assistantTranscriptDelta;
+
+      console.log("[VOICE_REALTIME][ASSISTANT_TRANSCRIPT_DELTA]", {
+        callSid,
+        delta: assistantTranscriptDelta,
+        currentAssistantTranscript,
+      });
+
       return;
     }
 
@@ -591,13 +613,18 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
-    if (event.type === "response.audio_transcript.done") {
-      lastAssistantTranscript = clean(
-        event.transcript || event.response?.output_text || ""
-      );
+    if (isOpenAiRealtimeAssistantTranscriptDone(event)) {
+      const doneTranscript = resolveOpenAiRealtimeAssistantTranscriptDone(event);
+
+      lastAssistantTranscript = clean(doneTranscript || currentAssistantTranscript);
+      currentAssistantTranscript = "";
 
       console.log("[VOICE_REALTIME][ASSISTANT_TRANSCRIPT_DONE]", {
         callSid,
+        activeResponseId: responseController.getState().activeResponseId,
+        activeResponseSource: responseController.getState().activeResponseSource,
+        pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
+        bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
         transcript: lastAssistantTranscript,
       });
 
@@ -719,6 +746,16 @@ export async function createOpenAiRealtimeBridge({
     if (event.type === "response.done") {
       assistantSpeaking = false;
       lastAssistantAudioDoneAtMs = Date.now();
+
+      if (!lastAssistantTranscript && currentAssistantTranscript) {
+        lastAssistantTranscript = clean(currentAssistantTranscript);
+        currentAssistantTranscript = "";
+
+        console.log("[VOICE_REALTIME][ASSISTANT_TRANSCRIPT_FINALIZED_ON_RESPONSE_DONE]", {
+          callSid,
+          transcript: lastAssistantTranscript,
+        });
+      }
 
       const responseStateBeforeDone = responseController.getState();
 
@@ -939,6 +976,7 @@ export async function createOpenAiRealtimeBridge({
       assistantSpeaking = false;
       lastAssistantAudioDeltaAtMs = 0;
       lastAssistantAudioDoneAtMs = 0;
+      currentAssistantTranscript = "";
       lastAssistantTranscript = "";
       bargeInController.reset();
 
