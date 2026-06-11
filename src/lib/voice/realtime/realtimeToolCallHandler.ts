@@ -68,6 +68,34 @@ function buildToollessResponse(
   };
 }
 
+function buildExactBookingPromptResponse(params: {
+  prompt: string;
+  currentLocale: VoiceLocale;
+}): Record<string, unknown> {
+  const prompt = clean(params.prompt);
+
+  return {
+    conversation: "none",
+    tool_choice: "none",
+    instructions: [
+      "You are generating a direct booking prompt for a live phone call.",
+      `Active language: ${params.currentLocale}.`,
+      "The backend already processed the previous caller answer.",
+      "If the previous answer was a date/time, availability was already checked silently by the backend.",
+      "Do not use conversation history.",
+      "Do not acknowledge the previous answer.",
+      "Do not say understood, perfect, okay, one moment, checking, verifying, processing, or anything similar.",
+      "Do not mention availability, calendar, tools, validation, backend, or internal steps.",
+      "Say only the exact booking prompt below.",
+      "Do not say anything before it.",
+      "Do not say anything after it.",
+      "",
+      "Booking prompt:",
+      prompt,
+    ].join("\n"),
+  };
+}
+
 export async function handleRealtimeToolCall(
   params: HandleRealtimeToolCallParams
 ): Promise<HandleRealtimeToolCallResult> {
@@ -775,13 +803,13 @@ export async function handleRealtimeToolCall(
         });
 
         requestRealtimeResponse(
-          {
-            instructions: [
-              "Say exactly the following message and nothing else:",
-              syntheticDirectFollowup.instructions,
-            ].join("\n"),
-            tool_choice: "none",
-          },
+          buildExactBookingPromptResponse({
+            prompt: clean(
+              (toolResult as any)?.next_required_step?.prompt ||
+                syntheticDirectFollowup.instructions
+            ),
+            currentLocale,
+          }),
           syntheticDirectFollowup.source
         );
 
@@ -879,13 +907,10 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        {
-          instructions: [
-            "Say exactly the following message and nothing else:",
-            retryPrompt,
-          ].join("\n"),
-          tool_choice: "none",
-        },
+        buildExactBookingPromptResponse({
+          prompt: retryPrompt,
+          currentLocale,
+        }),
         "tool_followup:submit_booking_step:retry"
       );
 
@@ -930,13 +955,10 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        {
-          instructions: [
-            "Say exactly the following message and nothing else:",
-            nextRequiredPrompt,
-          ].join("\n"),
-          tool_choice: "none",
-        },
+        buildExactBookingPromptResponse({
+          prompt: nextRequiredPrompt,
+          currentLocale,
+        }),
         "tool_followup:submit_booking_step"
       );
 
