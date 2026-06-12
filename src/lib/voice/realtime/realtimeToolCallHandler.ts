@@ -177,6 +177,46 @@ export async function handleRealtimeToolCall(
     toolArgs = {};
   }
 
+  if (toolName === "submit_booking_step") {
+    const pendingStepKey = clean((realtimeState as any).pendingBookingStepKey);
+    const submittedStepKey = clean(toolArgs.step_key);
+    const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
+
+    const shouldBindSubmitToPendingStep =
+      Boolean(pendingStepKey) &&
+      Boolean(submittedStepKey) &&
+      submittedStepKey !== pendingStepKey &&
+      (
+        bookingTurnStatus === "waiting_user_answer" ||
+        bookingTurnStatus === "waiting_assistant_prompt"
+      );
+
+    if (shouldBindSubmitToPendingStep) {
+      const originalToolArgs = { ...toolArgs };
+
+      toolArgs = {
+        ...toolArgs,
+        step_key: pendingStepKey,
+        original_step_key: submittedStepKey,
+        step_key_corrected_by_runtime: true,
+      };
+
+      console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_KEY_BOUND_TO_PENDING_STEP]", {
+        callSid,
+        pendingStepKey,
+        submittedStepKey,
+        bookingTurnStatus,
+        originalToolArgs,
+        correctedToolArgs: toolArgs,
+        lastUserTranscript,
+        lastUserTranscriptSeq:
+          typeof realtimeState.lastUserTranscriptSeq === "number"
+            ? realtimeState.lastUserTranscriptSeq
+            : null,
+      });
+    }
+  }
+
   if (toolName === "end_call") {
     const endCallGuard = guardRealtimeEndCall({
       callSid,
@@ -648,6 +688,20 @@ export async function handleRealtimeToolCall(
           output: JSON.stringify(blockedResult),
         },
       });
+
+      const blockedRetryPrompt = clean(
+        (blockedResult as any)?.next_required_step?.prompt || ""
+      );
+
+      if (blockedRetryPrompt) {
+        requestRealtimeResponse(
+          buildExactBookingPromptResponse({
+            prompt: blockedRetryPrompt,
+            currentLocale,
+          }),
+          "tool_followup:submit_booking_step:blocked_retry"
+        );
+      }
 
       return {
         consumed: true,
