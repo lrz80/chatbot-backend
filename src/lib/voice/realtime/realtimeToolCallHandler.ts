@@ -194,10 +194,28 @@ export async function handleRealtimeToolCall(
     if (shouldBindSubmitToPendingStep) {
       const originalToolArgs = { ...toolArgs };
 
+      const transcriptValue = clean(lastUserTranscript);
+
       toolArgs = {
         ...toolArgs,
+
+        // Runtime owns the active step.
         step_key: pendingStepKey,
+
+        // If the model submitted the wrong step_key, its value belongs to the wrong step too.
+        // Use only the latest human transcript for the active pending step.
+        value: transcriptValue,
+        model_value: "",
+        transcript_value: transcriptValue,
+        value_candidates: [
+          {
+            source: "transcript",
+            value: transcriptValue,
+          },
+        ],
+
         original_step_key: submittedStepKey,
+        original_model_value: clean(toolArgs.value || ""),
         step_key_corrected_by_runtime: true,
       };
 
