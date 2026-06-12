@@ -181,6 +181,7 @@ export async function createOpenAiRealtimeBridge({
   let exactPromptViolationHandledForActiveResponse = false;
   let pendingExactPromptRetry = false;
   let didLogSuppressedAudioForActiveResponse = false;
+  let didLogInternalModelResolutionAudioSuppressed = false;
 
   let hangupRequestedByTool = false;
   let endCallGoodbyeRequested = false;
@@ -541,6 +542,7 @@ export async function createOpenAiRealtimeBridge({
       exactPromptViolationHandledForActiveResponse = false;
       pendingExactPromptRetry = false;
       didLogSuppressedAudioForActiveResponse = false;
+      didLogInternalModelResolutionAudioSuppressed = false;
 
       const createdResponseSource = clean(responseState.activeResponseSource || "");
       const pendingBookingStepKey = clean(
@@ -698,17 +700,21 @@ export async function createOpenAiRealtimeBridge({
       const activeResponseSource = clean(responseState.activeResponseSource || "");
 
       if (isInternalModelResolutionSource(activeResponseSource)) {
-        console.warn("[VOICE_REALTIME][INTERNAL_MODEL_RESOLUTION_AUDIO_SUPPRESSED]", {
-          callSid,
-          streamSid,
-          activeResponseId: responseState.activeResponseId,
-          activeResponseSource,
-          pendingBookingStepKey: clean(
-            (realtimeState as any).pendingBookingStepKey
-          ),
-          bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
-          lastUserTranscriptSeq,
-        });
+        if (!didLogInternalModelResolutionAudioSuppressed) {
+          didLogInternalModelResolutionAudioSuppressed = true;
+
+          console.warn("[VOICE_REALTIME][INTERNAL_MODEL_RESOLUTION_AUDIO_SUPPRESSED]", {
+            callSid,
+            streamSid,
+            activeResponseId: responseState.activeResponseId,
+            activeResponseSource,
+            pendingBookingStepKey: clean(
+              (realtimeState as any).pendingBookingStepKey
+            ),
+            bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
+            lastUserTranscriptSeq,
+          });
+        }
 
         return;
       }
@@ -1170,6 +1176,7 @@ export async function createOpenAiRealtimeBridge({
       exactPromptViolationHandledForActiveResponse = false;
       pendingExactPromptRetry = false;
       didLogSuppressedAudioForActiveResponse = false;
+      didLogInternalModelResolutionAudioSuppressed = false;
       bargeInController.reset();
 
       configureRealtimeSessionIfReady().catch((error) => {
