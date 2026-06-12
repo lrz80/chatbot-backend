@@ -203,12 +203,8 @@ export function requestNormalizedStepModelResolution(params: {
 
   params.requestRealtimeResponse(
     {
-      conversation: "none",
       instructions,
-      tool_choice: {
-        type: "function",
-        name: "submit_booking_step",
-      },
+      tool_choice: "required",
     },
     confirmationStep
       ? "booking_step_confirmation_model_resolution"
