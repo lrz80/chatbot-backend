@@ -82,9 +82,12 @@ function buildConfirmationNormalizationInstructions(params: {
     "- unknown: the caller's answer is unclear, unrelated, incomplete, noise, greeting, or not enough to confirm/cancel.",
     "",
 
-    "Always call submit_booking_step exactly once with:",
+    "Tool call requirements:",
+    "- tool: submit_booking_step",
     `- step_key: ${params.pendingBookingStepKey}`,
     "- value: confirm OR cancel OR unknown",
+    "Never use any previous step_key.",
+    "Never use any previous date, time, service, name, phone, or old answer.",
     "",
 
     "Use confirm only when clear.",
@@ -111,7 +114,11 @@ function buildDefaultNormalizationInstructions(params: {
     `Caller latest answer: ${params.lastUserTranscript}`,
     "",
 
-    "Normalize the caller's latest answer only if needed, then call submit_booking_step.",
+    "You must call submit_booking_step exactly once.",
+    "Do not produce a spoken or written answer.",
+    "Do not respond to the caller.",
+    "Only call the tool.",
+    "Normalize the caller's latest answer only if needed.",
     "Use only the caller's latest answer.",
     "Do not guess.",
     "Do not invent missing data.",
@@ -127,9 +134,12 @@ function buildDefaultNormalizationInstructions(params: {
     "- If the latest answer does not clearly answer this step, still call submit_booking_step with the caller's latest answer exactly as heard. Let the backend reject it and return the retry prompt.",
     "",
 
-    "Always call submit_booking_step exactly once with:",
+    "Tool call requirements:",
+    `- tool: submit_booking_step`,
     `- step_key: ${params.pendingBookingStepKey}`,
     "- value: the normalized answer if clear, otherwise the caller's latest answer exactly as heard.",
+    "Never use any previous step_key.",
+    "Never use any previous date, time, service, name, or old answer.",
   ].join("\n");
 }
 
@@ -193,8 +203,12 @@ export function requestNormalizedStepModelResolution(params: {
 
   params.requestRealtimeResponse(
     {
+      conversation: "none",
       instructions,
-      tool_choice: "auto",
+      tool_choice: {
+        type: "function",
+        name: "submit_booking_step",
+      },
     },
     confirmationStep
       ? "booking_step_confirmation_model_resolution"
