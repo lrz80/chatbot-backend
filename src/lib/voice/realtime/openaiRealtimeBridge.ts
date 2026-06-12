@@ -129,11 +129,7 @@ function extractExactBookingPromptFromInstructions(
 function isExactBookingPromptResponseSource(source: unknown): boolean {
   const value = clean(source);
 
-  return (
-    value === "tool_followup:submit_booking_step" ||
-    value === "tool_followup:submit_booking_step:synthetic_direct" ||
-    value === "tool_followup:submit_booking_step:retry"
-  );
+  return value.startsWith("tool_followup:submit_booking_step");
 }
 
 function isAssistantTranscriptCompatibleWithExpectedPrompt(params: {
@@ -182,6 +178,9 @@ export async function createOpenAiRealtimeBridge({
   let lastAssistantTranscript = "";
   let suppressActiveAssistantAudio = false;
   let expectedAssistantPromptForActiveResponse = "";
+  let exactPromptViolationHandledForActiveResponse = false;
+  let pendingExactPromptRetry = false;
+  let didLogSuppressedAudioForActiveResponse = false;
 
   let hangupRequestedByTool = false;
   let endCallGoodbyeRequested = false;
@@ -539,6 +538,9 @@ export async function createOpenAiRealtimeBridge({
       currentAssistantTranscript = "";
       lastAssistantTranscript = "";
       suppressActiveAssistantAudio = false;
+      exactPromptViolationHandledForActiveResponse = false;
+      pendingExactPromptRetry = false;
+      didLogSuppressedAudioForActiveResponse = false;
 
       const createdResponseSource = clean(responseState.activeResponseSource || "");
       const pendingBookingStepKey = clean(
@@ -605,6 +607,10 @@ export async function createOpenAiRealtimeBridge({
       resolveOpenAiRealtimeAssistantTranscriptDelta(event);
 
     if (assistantTranscriptDelta) {
+      if (suppressActiveAssistantAudio) {
+        return;
+      }
+
       currentAssistantTranscript += assistantTranscriptDelta;
 
       const responseState = responseController.getState();
@@ -626,20 +632,14 @@ export async function createOpenAiRealtimeBridge({
         expectedPrompt,
       });
 
-      console.warn("[VOICE_REALTIME][EXACT_BOOKING_PROMPT_GUARD_CHECK]", {
-        callSid,
-        activeResponseId: responseState.activeResponseId,
-        activeResponseSource,
-        expectedPrompt,
-        currentAssistantTranscript,
-        shouldEnforceExactPrompt,
-        compatible,
-        pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
-        bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
-      });
-
       if (shouldEnforceExactPrompt && !compatible) {
+        if (exactPromptViolationHandledForActiveResponse) {
+          return;
+        }
+
+        exactPromptViolationHandledForActiveResponse = true;
         suppressActiveAssistantAudio = true;
+        pendingExactPromptRetry = true;
 
         console.error("[VOICE_REALTIME][EXACT_BOOKING_PROMPT_VIOLATION_CANCELLED]", {
           callSid,
@@ -667,12 +667,6 @@ export async function createOpenAiRealtimeBridge({
         return;
       }
 
-      console.log("[VOICE_REALTIME][ASSISTANT_TRANSCRIPT_DELTA]", {
-        callSid,
-        delta: assistantTranscriptDelta,
-        currentAssistantTranscript,
-      });
-
       return;
     }
 
@@ -680,14 +674,18 @@ export async function createOpenAiRealtimeBridge({
 
     if (audioDelta && streamSid) {
       if (suppressActiveAssistantAudio) {
-        console.warn("[VOICE_REALTIME][ASSISTANT_AUDIO_SUPPRESSED_AFTER_PROMPT_VIOLATION]", {
-          callSid,
-          streamSid,
-          activeResponseId: responseController.getState().activeResponseId,
-          activeResponseSource: responseController.getState().activeResponseSource,
-          currentAssistantTranscript,
-          expectedAssistantPromptForActiveResponse,
-        });
+        if (!didLogSuppressedAudioForActiveResponse) {
+          didLogSuppressedAudioForActiveResponse = true;
+
+          console.warn("[VOICE_REALTIME][ASSISTANT_AUDIO_SUPPRESSED_AFTER_PROMPT_VIOLATION]", {
+            callSid,
+            streamSid,
+            activeResponseId: responseController.getState().activeResponseId,
+            activeResponseSource: responseController.getState().activeResponseSource,
+            currentAssistantTranscript,
+            expectedAssistantPromptForActiveResponse,
+          });
+        }
 
         return;
       }
@@ -733,17 +731,6 @@ export async function createOpenAiRealtimeBridge({
           lastUserTranscriptSeq,
         });
       }
-
-      console.warn("[VOICE_REALTIME][ASSISTANT_AUDIO_DELTA_SENT_TO_TWILIO]", {
-        callSid,
-        streamSid,
-        activeResponseId: responseState.activeResponseId,
-        activeResponseSource,
-        pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
-        bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
-        lastUserTranscript,
-        lastUserTranscriptSeq,
-      });
 
       sendTwilioAudio({
         twilioSocket,
@@ -888,8 +875,14 @@ export async function createOpenAiRealtimeBridge({
       assistantSpeaking = false;
       lastAssistantAudioDoneAtMs = Date.now();
 
+      const shouldRetryExactPrompt =
+        pendingExactPromptRetry &&
+        Boolean(expectedAssistantPromptForActiveResponse) &&
+        Boolean(clean((realtimeState as any).pendingBookingStepKey));
+
+      const retryExactPrompt = expectedAssistantPromptForActiveResponse;
+
       suppressActiveAssistantAudio = false;
-      expectedAssistantPromptForActiveResponse = "";
 
       if (!lastAssistantTranscript && currentAssistantTranscript) {
         lastAssistantTranscript = clean(currentAssistantTranscript);
@@ -1045,6 +1038,56 @@ export async function createOpenAiRealtimeBridge({
         });
       }
 
+      expectedAssistantPromptForActiveResponse = "";
+      pendingExactPromptRetry = false;
+      exactPromptViolationHandledForActiveResponse = false;
+      didLogSuppressedAudioForActiveResponse = false;
+
+      if (shouldRetryExactPrompt) {
+        console.warn("[VOICE_REALTIME][EXACT_BOOKING_PROMPT_RETRY_REQUESTED]", {
+          callSid,
+          retryExactPrompt,
+          pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
+          bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
+        });
+
+        requestRealtimeResponse(
+          {
+            conversation: "none",
+            tool_choice: "none",
+            metadata: {
+              purpose: "exact_booking_prompt_retry",
+              expected_prompt: retryExactPrompt,
+            },
+            instructions: [
+              "You are a speech renderer for a live phone booking flow.",
+              "Speak exactly the booking prompt provided in the input.",
+              "Do not use conversation history.",
+              "Do not reason.",
+              "Do not mention availability.",
+              "Do not add any other words.",
+            ].join("\n"),
+            input: [
+              {
+                type: "message",
+                role: "user",
+                content: [
+                  {
+                    type: "input_text",
+                    text: [
+                      "Speak exactly this booking prompt and nothing else:",
+                      "",
+                      retryExactPrompt,
+                    ].join("\n"),
+                  },
+                ],
+              },
+            ],
+          },
+          "tool_followup:submit_booking_step:exact_retry"
+        );
+      }
+
       return;
     }
   });
@@ -1124,6 +1167,9 @@ export async function createOpenAiRealtimeBridge({
       lastAssistantTranscript = "";
       suppressActiveAssistantAudio = false;
       expectedAssistantPromptForActiveResponse = "";
+      exactPromptViolationHandledForActiveResponse = false;
+      pendingExactPromptRetry = false;
+      didLogSuppressedAudioForActiveResponse = false;
       bargeInController.reset();
 
       configureRealtimeSessionIfReady().catch((error) => {
