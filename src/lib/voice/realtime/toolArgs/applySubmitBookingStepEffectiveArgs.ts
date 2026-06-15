@@ -20,6 +20,34 @@ type ApplySubmitBookingStepEffectiveArgsParams = {
   lastUserTranscript: string;
 };
 
+function serializeToolArgValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return clean(value);
+  }
+
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return clean(value);
+  }
+
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+
+  return clean(value);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -75,13 +103,33 @@ function hasPhoneDigits(value: string): boolean {
   return /\d/.test(value);
 }
 
+function isStructuredDatetimeProtocolValue(value: string): boolean {
+  const trimmed = clean(value);
+
+  if (!trimmed.startsWith("{")) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+
+    return (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof parsed.status === "string"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function applySubmitBookingStepEffectiveArgs(
   params: ApplySubmitBookingStepEffectiveArgsParams
 ): Record<string, any> {
   const { effectiveToolArgs, rawToolArgs, realtimeState, lastUserTranscript } =
     params;
 
-  const modelValue = clean(rawToolArgs.value);
+  const modelValue = serializeToolArgValue(rawToolArgs.value);
   const transcriptValue = clean(lastUserTranscript);
 
   const currentTranscriptSeq =
@@ -163,6 +211,26 @@ export function applySubmitBookingStepEffectiveArgs(
     return {
       ...effectiveToolArgs,
       value: forwardedPhoneConfirmValue,
+      model_value: modelValue,
+      transcript_value: transcriptValue,
+      value_candidates: valueCandidates,
+    };
+  }
+
+  if (
+    expectedType === "datetime" &&
+    isStructuredDatetimeProtocolValue(modelValue)
+  ) {
+    const valueCandidates: ValueCandidate[] = [
+      {
+        source: "model",
+        value: modelValue,
+      },
+    ];
+
+    return {
+      ...effectiveToolArgs,
+      value: modelValue,
       model_value: modelValue,
       transcript_value: transcriptValue,
       value_candidates: valueCandidates,
