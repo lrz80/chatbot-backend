@@ -3,6 +3,10 @@ import { clean } from "../../realtimeBookingFlowUtils";
 
 export const USE_CALLER_PHONE_TOKEN = "__USE_CALLER_PHONE__";
 
+export const PHONE_CONFIRM_USE_INBOUND = "use_inbound_caller";
+export const PHONE_CONFIRM_REPLACE = "replace_phone";
+export const PHONE_CONFIRM_UNKNOWN = "unknown";
+
 type ResolveRealtimePhoneValueParams = {
   value: string;
   rawTranscriptValue: string;
@@ -22,6 +26,10 @@ export type ResolveRealtimePhoneValueResult =
       value: "";
       source: "none";
     };
+
+function normalizeProtocolValue(value: unknown): string {
+  return clean(value).toLowerCase();
+}
 
 function normalizePhoneToE164(value: string): string {
   const raw = clean(value);
@@ -52,17 +60,55 @@ function isValidE164Phone(value: string): boolean {
   return /^\+[1-9]\d{7,14}$/.test(value);
 }
 
-function isUseCallerPhoneToken(value: string): boolean {
-  return clean(value) === USE_CALLER_PHONE_TOKEN;
+function isUseCallerPhoneProtocol(value: string): boolean {
+  const normalized = normalizeProtocolValue(value);
+
+  return (
+    normalized === USE_CALLER_PHONE_TOKEN ||
+    normalized === PHONE_CONFIRM_USE_INBOUND
+  );
+}
+
+function isRejectOrUnknownPhoneProtocol(value: string): boolean {
+  const normalized = normalizeProtocolValue(value);
+
+  return (
+    normalized === PHONE_CONFIRM_REPLACE ||
+    normalized === PHONE_CONFIRM_UNKNOWN
+  );
+}
+
+function resolveCallerPhone(callerPhoneValue: string | null): ResolveRealtimePhoneValueResult {
+  const callerPhone = normalizePhoneToE164(callerPhoneValue || "");
+
+  if (!isValidE164Phone(callerPhone)) {
+    return {
+      ok: false,
+      error: "PHONE_REQUIRED",
+      value: "",
+      source: "none",
+    };
+  }
+
+  return {
+    ok: true,
+    value: callerPhone,
+    source: "caller_phone",
+  };
 }
 
 /**
  * Generic voice phone resolver.
  *
  * It does not infer consent from natural language.
+ *
  * Valid phone sources are:
  * - an explicit submitted/spoken phone number
- * - the real caller phone only when the tool submits USE_CALLER_PHONE_TOKEN
+ * - the real caller phone only when the tool submits an internal protocol value:
+ *   - USE_CALLER_PHONE_TOKEN
+ *   - PHONE_CONFIRM_USE_INBOUND
+ *
+ * It does NOT compare against words like "yes", "sí", "ok", etc.
  */
 export function resolveRealtimePhoneValue(
   params: ResolveRealtimePhoneValueParams
@@ -71,22 +117,19 @@ export function resolveRealtimePhoneValue(
   const modelValue = clean(params.modelValue);
   const rawTranscriptValue = clean(params.rawTranscriptValue);
 
-  if (isUseCallerPhoneToken(value) || isUseCallerPhoneToken(modelValue)) {
-    const callerPhone = normalizePhoneToE164(params.callerPhone || "");
+  if (isUseCallerPhoneProtocol(value) || isUseCallerPhoneProtocol(modelValue)) {
+    return resolveCallerPhone(params.callerPhone);
+  }
 
-    if (!isValidE164Phone(callerPhone)) {
-      return {
-        ok: false,
-        error: "PHONE_REQUIRED",
-        value: "",
-        source: "none",
-      };
-    }
-
+  if (
+    isRejectOrUnknownPhoneProtocol(value) ||
+    isRejectOrUnknownPhoneProtocol(modelValue)
+  ) {
     return {
-      ok: true,
-      value: callerPhone,
-      source: "caller_phone",
+      ok: false,
+      error: "INVALID_PHONE_VALUE",
+      value: "",
+      source: "none",
     };
   }
 

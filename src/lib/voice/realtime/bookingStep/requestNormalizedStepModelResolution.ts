@@ -1,13 +1,14 @@
 // src/lib/voice/realtime/bookingStep/requestNormalizedStepModelResolution.ts
+import {
+  PHONE_CONFIRM_REPLACE,
+  PHONE_CONFIRM_UNKNOWN,
+  PHONE_CONFIRM_USE_INBOUND,
+} from "./resolvers/resolveRealtimePhoneValue";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,
   source?: string
 ) => void;
-
-const PHONE_CONFIRM_USE_INBOUND = "use_inbound_caller";
-const PHONE_CONFIRM_REPLACE = "replace_phone";
-const PHONE_CONFIRM_UNKNOWN = "unknown";
 
 function clean(value: unknown): string {
   return String(value ?? "").trim();
