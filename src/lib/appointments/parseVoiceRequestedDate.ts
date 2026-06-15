@@ -1,4 +1,4 @@
-//src/lib/appointments/parseVoiceRequestedDate.ts
+// src/lib/appointments/parseVoiceRequestedDate.ts
 type ParseVoiceRequestedDateParams = {
   raw: string;
   baseDate?: Date;
@@ -10,13 +10,18 @@ type ParseVoiceRequestedDateResult =
   | {
       ok: true;
       requestedAt: Date;
+      hasExplicitDate: boolean;
+      hasExplicitTime: boolean;
+      confidence: "high" | "medium";
     }
   | {
       ok: false;
+      hasExplicitDate: boolean;
+      hasExplicitTime: boolean;
+      confidence: "low";
     };
 
 const WEEKDAY_MAP: Record<string, number> = {
-  // español
   domingo: 0,
   lunes: 1,
   martes: 2,
@@ -27,7 +32,6 @@ const WEEKDAY_MAP: Record<string, number> = {
   sabado: 6,
   sábado: 6,
 
-  // inglés
   sunday: 0,
   monday: 1,
   tuesday: 2,
@@ -38,7 +42,6 @@ const WEEKDAY_MAP: Record<string, number> = {
 };
 
 const NUMBER_WORD_MAP: Record<string, number> = {
-  // español
   una: 1,
   uno: 1,
   dos: 2,
@@ -53,7 +56,6 @@ const NUMBER_WORD_MAP: Record<string, number> = {
   once: 11,
   doce: 12,
 
-  // inglés
   one: 1,
   two: 2,
   three: 3,
@@ -74,6 +76,18 @@ type TimeZoneDateParts = {
   day: number;
   weekday: number;
 };
+
+type DatetimeProtocolValue =
+  | {
+      status: "resolved";
+      raw: string;
+      date_text: string;
+      time_text: string;
+    }
+  | {
+      status: "unknown";
+      raw: string;
+    };
 
 function normalizeText(value: string): string {
   return (value || "")
@@ -131,6 +145,55 @@ function replaceHourWordsWithDigits(value: string): string {
     .join(" ");
 }
 
+function parseDatetimeProtocolValue(raw: string): DatetimeProtocolValue | null {
+  const value = String(raw || "").trim();
+
+  if (!value.startsWith("{")) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    const status = String((parsed as any).status || "").trim().toLowerCase();
+    const rawText = String((parsed as any).raw || "").trim();
+
+    if (status === "unknown") {
+      return {
+        status: "unknown",
+        raw: rawText,
+      };
+    }
+
+    if (status !== "resolved") {
+      return null;
+    }
+
+    const dateText = String((parsed as any).date_text || "").trim();
+    const timeText = String((parsed as any).time_text || "").trim();
+
+    if (!dateText || !timeText) {
+      return {
+        status: "unknown",
+        raw: rawText,
+      };
+    }
+
+    return {
+      status: "resolved",
+      raw: rawText,
+      date_text: dateText,
+      time_text: timeText,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function getDatePartsInTimeZone(date: Date, timeZone: string): TimeZoneDateParts {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -168,8 +231,12 @@ function addDaysToParts(
   days: number,
   timeZone: string
 ): TimeZoneDateParts {
-  const utcBase = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12, 0, 0));
+  const utcBase = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day, 12, 0, 0)
+  );
+
   utcBase.setUTCDate(utcBase.getUTCDate() + days);
+
   return getDatePartsInTimeZone(utcBase, timeZone);
 }
 
@@ -178,7 +245,6 @@ function resolveTargetDateParts(
   baseDate: Date,
   timeZone: string
 ): TimeZoneDateParts | null {
-  const normalized = normalizeText(text);
   const tokens = tokenizeNormalizedText(text);
   const baseParts = getDatePartsInTimeZone(baseDate, timeZone);
 
@@ -310,7 +376,15 @@ function buildDateInTimeZone(params: {
   const tzMinute = Number(parts.find((p) => p.type === "minute")?.value || "0");
 
   const desiredUtcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
-  const observedUtcMs = Date.UTC(tzYear, tzMonth - 1, tzDay, tzHour, tzMinute, 0, 0);
+  const observedUtcMs = Date.UTC(
+    tzYear,
+    tzMonth - 1,
+    tzDay,
+    tzHour,
+    tzMinute,
+    0,
+    0
+  );
 
   const diffMs = desiredUtcMs - observedUtcMs;
 
@@ -363,6 +437,12 @@ export function hasExplicitVoiceDateAnchor(params: {
     return false;
   }
 
+  const protocolValue = parseDatetimeProtocolValue(raw);
+
+  if (protocolValue?.status === "resolved") {
+    return true;
+  }
+
   const baseDate = params.baseDate ? new Date(params.baseDate) : new Date();
   const timeZone = params.timeZone || "America/New_York";
 
@@ -377,19 +457,45 @@ export function parseVoiceRequestedDate(
   const timeZone = params.timeZone || "America/New_York";
 
   if (!raw) {
-    return { ok: false };
+    return {
+      ok: false,
+      hasExplicitDate: false,
+      hasExplicitTime: false,
+      confidence: "low",
+    };
   }
 
-  const targetDateParts = resolveTargetDateParts(raw, baseDate, timeZone);
+  const protocolValue = parseDatetimeProtocolValue(raw);
+
+  if (protocolValue?.status === "unknown") {
+    return {
+      ok: false,
+      hasExplicitDate: false,
+      hasExplicitTime: false,
+      confidence: "low",
+    };
+  }
+
+  const effectiveRaw =
+    protocolValue?.status === "resolved"
+      ? `${protocolValue.date_text} ${protocolValue.time_text}`
+      : raw;
+
+  const targetDateParts = resolveTargetDateParts(
+    effectiveRaw,
+    baseDate,
+    timeZone
+  );
 
   console.log("[VOICE][TARGET_DATE_PARTS]", {
     raw,
+    effectiveRaw,
     baseDate: baseDate.toISOString(),
     timeZone,
     targetDateParts,
   });
 
-  const time = parseHourMinute(raw);
+  const time = parseHourMinute(effectiveRaw);
 
   if (targetDateParts && time) {
     const requestedAt = buildDateInTimeZone({
@@ -404,6 +510,9 @@ export function parseVoiceRequestedDate(
     return {
       ok: true,
       requestedAt,
+      hasExplicitDate: true,
+      hasExplicitTime: true,
+      confidence: protocolValue?.status === "resolved" ? "high" : "medium",
     };
   }
 
@@ -411,7 +520,7 @@ export function parseVoiceRequestedDate(
     referenceSuggestedStarts: Array.isArray(params.referenceSuggestedStarts)
       ? params.referenceSuggestedStarts
       : [],
-    raw,
+    raw: effectiveRaw,
     timeZone,
   });
 
@@ -419,8 +528,16 @@ export function parseVoiceRequestedDate(
     return {
       ok: true,
       requestedAt: suggestedMatch,
+      hasExplicitDate: true,
+      hasExplicitTime: true,
+      confidence: "high",
     };
   }
 
-  return { ok: false };
+  return {
+    ok: false,
+    hasExplicitDate: Boolean(targetDateParts),
+    hasExplicitTime: Boolean(time),
+    confidence: "low",
+  };
 }

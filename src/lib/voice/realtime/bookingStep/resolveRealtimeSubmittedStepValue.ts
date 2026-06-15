@@ -127,6 +127,73 @@ function textLooksLikeDatetimeForCurrentTenant(params: {
   return datetimeResult.ok === true;
 }
 
+function resolveStructuredDatetimeProtocolValue(params: {
+  value: string;
+  rawTranscriptValue: string;
+  modelValue: string;
+}): RealtimeSubmittedStepValueResult | null {
+  const candidates = [params.modelValue, params.value]
+    .map((candidate) => clean(candidate))
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (!candidate.startsWith("{")) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(candidate);
+
+      if (!parsed || typeof parsed !== "object") {
+        continue;
+      }
+
+      const status = clean((parsed as any).status).toLowerCase();
+
+      if (status === "unknown") {
+        return {
+          ok: false,
+          error: "INCOMPATIBLE_DATETIME_VALUE",
+          value: "",
+          rawTranscriptValue: params.rawTranscriptValue,
+          modelValue: params.modelValue,
+          source: "none",
+        };
+      }
+
+      if (status !== "resolved") {
+        continue;
+      }
+
+      const dateText = clean((parsed as any).date_text);
+      const timeText = clean((parsed as any).time_text);
+
+      if (!dateText || !timeText) {
+        return {
+          ok: false,
+          error: "INCOMPATIBLE_DATETIME_VALUE",
+          value: "",
+          rawTranscriptValue: params.rawTranscriptValue,
+          modelValue: params.modelValue,
+          source: "none",
+        };
+      }
+
+      return {
+        ok: true,
+        value: candidate,
+        rawTranscriptValue: params.rawTranscriptValue,
+        modelValue: params.modelValue,
+        source: "model",
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 export function resolveRealtimeSubmittedStepValue(params: {
   step: BookingFlowStepLike;
   value: string;
@@ -197,6 +264,16 @@ export function resolveRealtimeSubmittedStepValue(params: {
   }
 
   if (isDatetimeStep(step) || expectedType === "datetime") {
+    const structuredDatetimeResult = resolveStructuredDatetimeProtocolValue({
+      value,
+      rawTranscriptValue,
+      modelValue,
+    });
+
+    if (structuredDatetimeResult) {
+      return structuredDatetimeResult;
+    }
+
     return resolveRealtimeDatetimeValue({
       value,
       rawTranscriptValue,
