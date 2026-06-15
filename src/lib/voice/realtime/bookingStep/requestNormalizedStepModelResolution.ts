@@ -34,6 +34,24 @@ function isConfirmationStep(params: {
   );
 }
 
+function isConfirmOrReplacePhoneStep(params: {
+  expectedType: string;
+  pendingSlot: string;
+  validationMode: string;
+  useInboundCaller: boolean;
+}): boolean {
+  const expectedType = normalizeKey(params.expectedType);
+  const pendingSlot = normalizeKey(params.pendingSlot);
+  const validationMode = normalizeKey(params.validationMode);
+
+  return (
+    expectedType === "phone" &&
+    pendingSlot === "customer_phone" &&
+    validationMode === "confirm_or_replace" &&
+    params.useInboundCaller === true
+  );
+}
+
 function buildInternalSilenceRules(): string[] {
   return [
     "Internal tool-routing task. Do not speak to the caller.",
@@ -101,8 +119,29 @@ function buildDefaultNormalizationInstructions(params: {
   pendingSlot: string;
   expectedType: string;
   validationMode: string;
+  useInboundCaller: boolean;
   lastUserTranscript: string;
 }): string {
+  const confirmOrReplacePhoneStep = isConfirmOrReplacePhoneStep({
+    expectedType: params.expectedType,
+    pendingSlot: params.pendingSlot,
+    validationMode: params.validationMode,
+    useInboundCaller: params.useInboundCaller,
+  });
+
+  const phoneRules = confirmOrReplacePhoneStep
+    ? [
+        "- This is a phone-number confirmation step using the inbound caller phone.",
+        `- If the caller clearly confirms using the current calling number, submit exactly this token as the value: ${USE_CALLER_PHONE_TOKEN}`,
+        "- Confirmation examples include: yes, yeah, yep, si, sí, sì, correcto, correct, ok, okay, confirmo.",
+        "- If the caller says a different phone number, submit only the normalized phone number.",
+        "- If the caller says no but does not provide another phone number, submit the caller's latest answer exactly as heard. Let the backend reject it and return the retry prompt.",
+      ]
+    : [
+        "- If this is a phone-number step and the caller says a phone number, submit only the normalized phone number.",
+        "- Do not submit the caller-phone token unless the current validation mode is confirm_or_replace and inbound caller phone usage is enabled.",
+      ];
+
   return [
     ...buildInternalSilenceRules(),
 
@@ -111,6 +150,7 @@ function buildDefaultNormalizationInstructions(params: {
     `Current booking slot: ${params.pendingSlot}`,
     `Current expected type: ${params.expectedType}`,
     `Current validation mode: ${params.validationMode}`,
+    `Current use inbound caller phone: ${params.useInboundCaller ? "true" : "false"}`,
     `Caller latest answer: ${params.lastUserTranscript}`,
     "",
 
@@ -127,19 +167,17 @@ function buildDefaultNormalizationInstructions(params: {
 
     "Rules:",
     "- If this is an address step, convert spoken numbers into address digits when clear.",
-    "- If this is a phone-number step and the caller clearly confirms using the current calling number, submit the configured caller-phone token.",
-    `- Caller-phone token: ${USE_CALLER_PHONE_TOKEN}`,
-    "- If this is a phone-number step and the caller says a different phone number, submit only the normalized phone number.",
+    ...phoneRules,
     "- If this is an email step, normalize the email only if the caller clearly said one.",
     "- If the latest answer does not clearly answer this step, still call submit_booking_step with the caller's latest answer exactly as heard. Let the backend reject it and return the retry prompt.",
     "",
 
     "Tool call requirements:",
-    `- tool: submit_booking_step`,
+    "- tool: submit_booking_step",
     `- step_key: ${params.pendingBookingStepKey}`,
     "- value: the normalized answer if clear, otherwise the caller's latest answer exactly as heard.",
     "Never use any previous step_key.",
-    "Never use any previous date, time, service, name, or old answer.",
+    "Never use any previous date, time, service, name, phone, or old answer.",
   ].join("\n");
 }
 
@@ -150,6 +188,7 @@ export function requestNormalizedStepModelResolution(params: {
   pendingSlot: string;
   expectedType: string;
   validationMode: string;
+  useInboundCaller?: boolean;
   lastUserTranscript: string;
   lastUserTranscriptSeq: number;
   pendingBookingStepPromptAnchorSeq: number;
@@ -159,6 +198,7 @@ export function requestNormalizedStepModelResolution(params: {
   const pendingSlot = clean(params.pendingSlot);
   const expectedType = clean(params.expectedType);
   const validationMode = clean(params.validationMode);
+  const useInboundCaller = params.useInboundCaller === true;
   const lastUserTranscript = clean(params.lastUserTranscript);
 
   if (!pendingBookingStepKey || !lastUserTranscript) {
@@ -179,6 +219,7 @@ export function requestNormalizedStepModelResolution(params: {
     pendingSlot,
     expectedType,
     validationMode,
+    useInboundCaller,
     isConfirmationStep: confirmationStep,
     lastUserTranscript,
     lastUserTranscriptSeq: params.lastUserTranscriptSeq,
@@ -198,6 +239,7 @@ export function requestNormalizedStepModelResolution(params: {
         pendingSlot,
         expectedType,
         validationMode,
+        useInboundCaller,
         lastUserTranscript,
       });
 

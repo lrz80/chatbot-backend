@@ -51,10 +51,55 @@ function getPendingBookingStepSlot(realtimeState: CallState): string {
   return clean((realtimeState as any).pendingBookingStepSlot).toLowerCase();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getPendingBookingStepValidationConfig(
+  realtimeState: CallState
+): Record<string, unknown> {
+  const state = realtimeState as any;
+
+  if (isRecord(state.pendingBookingStepValidationConfig)) {
+    return state.pendingBookingStepValidationConfig;
+  }
+
+  if (isRecord(state.pendingBookingStep?.validation_config)) {
+    return state.pendingBookingStep.validation_config;
+  }
+
+  if (isRecord(state.pendingBookingStep?.validationConfig)) {
+    return state.pendingBookingStep.validationConfig;
+  }
+
+  if (isRecord(state.nextRequiredStep?.validation_config)) {
+    return state.nextRequiredStep.validation_config;
+  }
+
+  if (isRecord(state.nextRequiredStep?.validationConfig)) {
+    return state.nextRequiredStep.validationConfig;
+  }
+
+  if (isRecord(state.next_required_step?.validation_config)) {
+    return state.next_required_step.validation_config;
+  }
+
+  return {};
+}
+
 function getPendingBookingStepValidationMode(realtimeState: CallState): string {
-  return clean(
-    (realtimeState as any).pendingBookingStepValidationConfig?.mode
-  ).toLowerCase();
+  const validationConfig = getPendingBookingStepValidationConfig(realtimeState);
+
+  return clean(validationConfig.mode).toLowerCase();
+}
+
+function getPendingBookingStepUseInboundCaller(realtimeState: CallState): boolean {
+  const validationConfig = getPendingBookingStepValidationConfig(realtimeState);
+
+  return (
+    validationConfig.use_inbound_caller === true ||
+    validationConfig.useInboundCaller === true
+  );
 }
 
 function getPendingBookingStepPromptAnchorSeq(realtimeState: CallState): number {
@@ -480,13 +525,19 @@ export function createBookingRealtimeCoordinator(
 
     lastBookingNormalizedModelResolutionKey = resolutionKey;
 
+    const pendingSlot = getPendingBookingStepSlot(realtimeState);
+    const expectedType = getPendingBookingStepExpectedType(realtimeState);
+    const validationMode = getPendingBookingStepValidationMode(realtimeState);
+    const useInboundCaller = getPendingBookingStepUseInboundCaller(realtimeState);
+
     requestNormalizedStepModelResolution({
       callSid: params.getCallSid(),
       source: paramsForResolution.source,
       pendingBookingStepKey: paramsForResolution.pendingBookingStepKey,
-      pendingSlot: getPendingBookingStepSlot(realtimeState),
-      expectedType: getPendingBookingStepExpectedType(realtimeState),
-      validationMode: getPendingBookingStepValidationMode(realtimeState),
+      pendingSlot,
+      expectedType,
+      validationMode,
+      useInboundCaller,
       lastUserTranscript: paramsForResolution.lastUserTranscript,
       lastUserTranscriptSeq: paramsForResolution.lastUserTranscriptSeq,
       pendingBookingStepPromptAnchorSeq:
