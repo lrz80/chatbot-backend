@@ -108,6 +108,43 @@ function buildExactBookingPromptResponse(params: {
   };
 }
 
+function getPendingBookingStepValidationConfig(
+  realtimeState: CallState
+): Record<string, unknown> {
+  const state = realtimeState as any;
+  const value = state.pendingBookingStepValidationConfig;
+
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function isPendingPhoneConfirmOrReplaceStep(
+  realtimeState: CallState
+): boolean {
+  const validationConfig = getPendingBookingStepValidationConfig(realtimeState);
+
+  const pendingStepKey = clean((realtimeState as any).pendingBookingStepKey);
+  const pendingSlot = clean((realtimeState as any).pendingBookingStepSlot).toLowerCase();
+  const expectedType = clean(
+    (realtimeState as any).pendingBookingStepExpectedType
+  ).toLowerCase();
+
+  const validationMode = clean(validationConfig.mode).toLowerCase();
+
+  const useInboundCaller =
+    validationConfig.use_inbound_caller === true ||
+    validationConfig.useInboundCaller === true;
+
+  return (
+    pendingStepKey === "phone" &&
+    pendingSlot === "customer_phone" &&
+    expectedType === "phone" &&
+    validationMode === "confirm_or_replace" &&
+    useInboundCaller === true
+  );
+}
+
 export async function handleRealtimeToolCall(
   params: HandleRealtimeToolCallParams
 ): Promise<HandleRealtimeToolCallResult> {
@@ -193,6 +230,56 @@ export async function handleRealtimeToolCall(
 
     if (shouldBindSubmitToPendingStep) {
       const originalToolArgs = { ...toolArgs };
+
+      if (isPendingPhoneConfirmOrReplaceStep(realtimeState)) {
+        const blockedResult: RealtimeToolResult = {
+          ok: false,
+          error: "STALE_SUBMIT_BOOKING_STEP_TOOL_CALL",
+          message:
+            "Ignored stale submit_booking_step tool call for a previous booking step.",
+          next_required_step: {
+            step_key: pendingStepKey,
+            prompt: clean((realtimeState as any).pendingBookingStepPrompt || ""),
+            required: (realtimeState as any).pendingBookingStepRequired ?? true,
+          },
+        };
+
+        console.warn("[VOICE_REALTIME][STALE_SUBMIT_BOOKING_STEP_DROPPED_BEFORE_BIND]", {
+          callSid,
+          pendingStepKey,
+          submittedStepKey,
+          bookingTurnStatus,
+          originalToolArgs,
+          lastUserTranscript,
+          lastUserTranscriptSeq:
+            typeof realtimeState.lastUserTranscriptSeq === "number"
+              ? realtimeState.lastUserTranscriptSeq
+              : null,
+          pendingBookingStepPromptAnchorSeq:
+            typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
+              ? realtimeState.pendingBookingStepPromptAnchorSeq
+              : null,
+        });
+
+        sendRealtimeJson(openAiSocket, {
+          type: "conversation.item.create",
+          item: {
+            type: "function_call_output",
+            call_id: callId,
+            output: JSON.stringify(blockedResult),
+          },
+        });
+
+        return {
+          consumed: true,
+          result: blockedResult,
+          realtimeState,
+          bookingFlowLoaded,
+          hangupRequestedByTool: false,
+          callEnding,
+          resetLastUserDigits: false,
+        };
+      }
 
       const transcriptValue = clean(lastUserTranscript);
 
@@ -776,6 +863,52 @@ export async function handleRealtimeToolCall(
       realtimeState,
       lastUserTranscript,
     });
+
+    if (effectiveToolArgs.should_drop_submit_booking_step === true) {
+      const blockedResult: RealtimeToolResult = {
+        ok: false,
+        error: "STALE_SUBMIT_BOOKING_STEP_TOOL_CALL",
+        message: "Ignored stale submit_booking_step tool call.",
+        next_required_step: realtimeState.pendingBookingStepKey
+          ? {
+              step_key: realtimeState.pendingBookingStepKey,
+              prompt: realtimeState.pendingBookingStepPrompt || "",
+              required: realtimeState.pendingBookingStepRequired ?? true,
+            }
+          : undefined,
+      };
+
+      console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_DROPPED_STALE_TOOL_CALL]", {
+        callSid,
+        pendingStepKey: effectiveToolArgs.step_key,
+        originalStepKey: effectiveToolArgs.original_step_key,
+        originalModelValue: effectiveToolArgs.original_model_value,
+        transcriptValue: effectiveToolArgs.transcript_value,
+        lastUserTranscriptSeq:
+          typeof realtimeState.lastUserTranscriptSeq === "number"
+            ? realtimeState.lastUserTranscriptSeq
+            : null,
+      });
+
+      sendRealtimeJson(openAiSocket, {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify(blockedResult),
+        },
+      });
+
+      return {
+        consumed: true,
+        result: blockedResult,
+        realtimeState,
+        bookingFlowLoaded,
+        hangupRequestedByTool: false,
+        callEnding,
+        resetLastUserDigits: false,
+      };
+    }
   }
 
   if (toolName === "submit_booking_step") {

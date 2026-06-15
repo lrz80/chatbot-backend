@@ -159,32 +159,23 @@ export function applySubmitBookingStepEffectiveArgs(
   });
 
   if (phoneConfirmOrReplaceStep && rawStepKey && rawStepKey !== stepKey) {
-    console.warn(
-      "[VOICE_REALTIME][STALE_PHONE_CONFIRM_TOOL_CALL_PROTOCOL_FALLBACK]",
-      {
-        pendingStepKey: stepKey,
-        rawStepKey,
-        modelValue,
-        transcriptValue,
-        currentTranscriptSeq,
-        promptAnchorSeq,
-      }
-    );
-
-    const valueCandidates: ValueCandidate[] = [
-      {
-        source: "model",
-        value: PHONE_CONFIRM_UNKNOWN,
-      },
-    ];
+    console.warn("[VOICE_REALTIME][STALE_PHONE_CONFIRM_TOOL_CALL_DROPPED]", {
+      pendingStepKey: stepKey,
+      rawStepKey,
+      modelValue,
+      transcriptValue,
+      currentTranscriptSeq,
+      promptAnchorSeq,
+    });
 
     return {
       ...effectiveToolArgs,
-      value: PHONE_CONFIRM_UNKNOWN,
+      value: "",
       model_value: modelValue,
       transcript_value: transcriptValue,
-      value_candidates: valueCandidates,
+      value_candidates: [],
       stale_phone_confirm_tool_call: true,
+      should_drop_submit_booking_step: true,
       original_step_key: rawStepKey,
       original_model_value: modelValue,
     };
