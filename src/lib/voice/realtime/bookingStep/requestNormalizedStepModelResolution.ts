@@ -5,6 +5,9 @@ import {
   PHONE_CONFIRM_USE_INBOUND,
 } from "./resolvers/resolveRealtimePhoneValue";
 
+const DATETIME_RESOLVED = "resolved";
+const DATETIME_UNKNOWN = "unknown";
+
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,
   source?: string
@@ -38,6 +41,7 @@ function isConfirmationStep(params: {
   );
 }
 
+
 function isConfirmOrReplacePhoneStep(params: {
   expectedType: string;
   pendingSlot: string;
@@ -53,6 +57,16 @@ function isConfirmOrReplacePhoneStep(params: {
     pendingSlot === "customer_phone" &&
     validationMode === "confirm_or_replace" &&
     params.useInboundCaller === true
+  );
+}
+
+function isDatetimeStep(params: {
+  pendingSlot: string;
+  expectedType: string;
+}): boolean {
+  return (
+    normalizeKey(params.pendingSlot) === "datetime" ||
+    normalizeKey(params.expectedType) === "datetime"
   );
 }
 
@@ -160,6 +174,53 @@ function buildPhoneConfirmOrReplaceInstructions(params: {
   ].join("\n");
 }
 
+function buildDatetimeNormalizationInstructions(params: {
+  pendingBookingStepKey: string;
+  pendingSlot: string;
+  expectedType: string;
+  validationMode: string;
+  lastUserTranscript: string;
+}): string {
+  return [
+    ...buildInternalSilenceRules(),
+
+    "The caller answered a booking datetime step.",
+    `Current booking step key: ${params.pendingBookingStepKey}`,
+    `Current booking slot: ${params.pendingSlot}`,
+    `Current expected type: ${params.expectedType}`,
+    `Current validation mode: ${params.validationMode}`,
+    `Caller latest answer: ${params.lastUserTranscript}`,
+    "",
+
+    "Resolve the caller's latest answer into a datetime protocol JSON string.",
+    "Use only the caller's latest answer.",
+    "Do not guess.",
+    "Do not invent missing date or time.",
+    "Do not use earlier turns as the answer.",
+    "Do not submit the caller's literal words if the answer is unclear, incomplete, unrelated, corrupted by transcription, or missing either date/day or time.",
+    "",
+
+    "Allowed protocol JSON shapes:",
+    `- {"status":"${DATETIME_RESOLVED}","raw":"caller exact answer","date_text":"date phrase","time_text":"time phrase"}`,
+    `- {"status":"${DATETIME_UNKNOWN}","raw":"caller exact answer"}`,
+    "",
+
+    "Rules:",
+    `- Use status ${DATETIME_RESOLVED} only when the caller clearly provided both a date/day and a time.`,
+    `- Use status ${DATETIME_UNKNOWN} when the answer is unclear, incomplete, unrelated, corrupted by transcription, or missing either date/day or time.`,
+    "- If resolved, date_text must contain only the date/day phrase from the latest answer.",
+    "- If resolved, time_text must contain only the time phrase from the latest answer.",
+    "",
+
+    "Tool call requirements:",
+    "- tool: submit_booking_step",
+    `- step_key: ${params.pendingBookingStepKey}`,
+    "- value: the JSON string only",
+    "Never use any previous step_key.",
+    "Never use any previous date, time, service, name, phone, or old answer.",
+  ].join("\n");
+}
+
 function buildDefaultNormalizationInstructions(params: {
   pendingBookingStepKey: string;
   pendingSlot: string;
@@ -243,6 +304,11 @@ export function requestNormalizedStepModelResolution(params: {
     useInboundCaller,
   });
 
+  const datetimeStep = isDatetimeStep({
+    pendingSlot,
+    expectedType,
+  });
+
   console.warn("[VOICE_REALTIME][NORMALIZED_STEP_MODEL_RESOLUTION_REQUESTED]", {
     callSid: params.callSid,
     source: params.source,
@@ -253,6 +319,7 @@ export function requestNormalizedStepModelResolution(params: {
     useInboundCaller,
     isConfirmationStep: confirmationStep,
     isPhoneConfirmOrReplaceStep: phoneConfirmOrReplaceStep,
+    isDatetimeStep: datetimeStep,
     lastUserTranscript,
     lastUserTranscriptSeq: params.lastUserTranscriptSeq,
     pendingBookingStepPromptAnchorSeq: params.pendingBookingStepPromptAnchorSeq,
@@ -275,13 +342,21 @@ export function requestNormalizedStepModelResolution(params: {
           useInboundCaller,
           lastUserTranscript,
         })
-      : buildDefaultNormalizationInstructions({
-          pendingBookingStepKey,
-          pendingSlot,
-          expectedType,
-          validationMode,
-          lastUserTranscript,
-        });
+      : datetimeStep
+        ? buildDatetimeNormalizationInstructions({
+            pendingBookingStepKey,
+            pendingSlot,
+            expectedType,
+            validationMode,
+            lastUserTranscript,
+          })
+        : buildDefaultNormalizationInstructions({
+            pendingBookingStepKey,
+            pendingSlot,
+            expectedType,
+            validationMode,
+            lastUserTranscript,
+          });
 
   params.requestRealtimeResponse(
     {
@@ -292,6 +367,8 @@ export function requestNormalizedStepModelResolution(params: {
       ? "booking_step_confirmation_model_resolution"
       : phoneConfirmOrReplaceStep
         ? "booking_step_phone_confirm_or_replace_model_resolution"
-        : "booking_step_normalized_model_resolution"
+        : datetimeStep
+          ? "booking_step_datetime_model_resolution"
+          : "booking_step_normalized_model_resolution"
   );
 }

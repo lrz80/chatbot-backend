@@ -146,6 +146,37 @@ export async function resolveVoiceScheduleValidation(
     };
   }
 
+  const parsedMeta = parsed as {
+    hasExplicitDate?: unknown;
+    hasExplicitTime?: unknown;
+    confidence?: unknown;
+  };
+
+  const hasExplicitDate = parsedMeta.hasExplicitDate === true;
+  const hasExplicitTime = parsedMeta.hasExplicitTime === true;
+  const confidence = String(parsedMeta.confidence || "").trim().toLowerCase();
+
+  if (!hasExplicitDate || !hasExplicitTime || confidence === "low") {
+    console.warn("[VOICE][DATETIME_REJECTED_LOW_CONFIDENCE]", {
+      tenantId: params.tenantId,
+      serviceName: params.serviceName,
+      rawDatetime: params.rawDatetime,
+      timeZone,
+      hasExplicitDate,
+      hasExplicitTime,
+      confidence,
+      parsed,
+    });
+
+    return {
+      ok: false,
+      reason: "invalid_datetime",
+      availableTimes: [],
+      suggestedStarts: [],
+      timeZone,
+    };
+  }
+
   const { rows: settingsRows } = await pool.query(
     `
       SELECT

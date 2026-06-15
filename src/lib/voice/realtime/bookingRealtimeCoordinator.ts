@@ -155,8 +155,10 @@ function shouldRequestNormalizedModelResolution(params: {
     slot === "service_address" ||
     slot === "customer_phone" ||
     slot === "customer_email" ||
+    slot === "datetime" ||
     expectedType === "phone" ||
     expectedType === "email" ||
+    expectedType === "datetime" ||
     validationMode === "confirm_or_replace"
   );
 }

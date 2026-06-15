@@ -514,8 +514,23 @@ export async function executeCanonicalBookingDatetimeStep(
 
     const suggestedTimesText = formattedSuggestedTimes.join(", ");
 
+    const hasSuggestedOrAvailableTimes = Boolean(
+      suggestedTimesText || availableTimesText
+    );
+
+    const unavailablePromptNeedsSuggestedTimes =
+      promptTemplate.includes("{suggested_times}") ||
+      promptTemplate.includes("{available_times}");
+
+    const safePromptTemplate =
+      isUnavailableReason &&
+      unavailablePromptNeedsSuggestedTimes &&
+      !hasSuggestedOrAvailableTimes
+        ? localizedRetryBase
+        : promptTemplate;
+
     const retryPromptResolved = resolveBookingFlowSpeech({
-      baseText: promptTemplate,
+      baseText: safePromptTemplate,
       locale: currentLocale,
       bookingData: {
         ...bookingDataWithSuggestedStarts,
@@ -527,13 +542,7 @@ export async function executeCanonicalBookingDatetimeStep(
       callerE164,
     });
 
-    const retryPromptFinal = isIncompleteDatetimeReason
-      ? retryPromptResolved
-      : suggestedTimesText || availableTimesText
-        ? retryPromptResolved
-        : unavailablePrompt
-          ? retryPromptResolved
-          : localizedRetryBase;
+    const retryPromptFinal = retryPromptResolved;
 
     const retryPrompt = twoSentencesMax(
       assertNonEmptyBookingSpeech({
