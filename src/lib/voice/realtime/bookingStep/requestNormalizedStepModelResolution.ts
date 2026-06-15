@@ -1,10 +1,13 @@
 // src/lib/voice/realtime/bookingStep/requestNormalizedStepModelResolution.ts
-import { USE_CALLER_PHONE_TOKEN } from "./resolvers/resolveRealtimePhoneValue";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,
   source?: string
 ) => void;
+
+const PHONE_CONFIRM_USE_INBOUND = "use_inbound_caller";
+const PHONE_CONFIRM_REPLACE = "replace_phone";
+const PHONE_CONFIRM_UNKNOWN = "unknown";
 
 function clean(value: unknown): string {
   return String(value ?? "").trim();
@@ -86,7 +89,7 @@ function buildConfirmationNormalizationInstructions(params: {
     `Caller latest answer: ${params.lastUserTranscript}`,
     "",
 
-    "Resolve the caller's latest answer into a booking confirmation intent.",
+    "Resolve the caller's latest answer into a booking confirmation protocol value.",
     "Use only the caller's latest answer.",
     "Do not guess.",
     "Do not invent missing data.",
@@ -94,7 +97,7 @@ function buildConfirmationNormalizationInstructions(params: {
     "Do not submit the caller's literal words for confirmation.",
     "",
 
-    "Allowed confirmation values:",
+    "Allowed protocol values:",
     "- confirm: the caller clearly approves creating the appointment.",
     "- cancel: the caller clearly rejects, cancels, or says the booking is not correct.",
     "- unknown: the caller's answer is unclear, unrelated, incomplete, noise, greeting, or not enough to confirm/cancel.",
@@ -106,11 +109,53 @@ function buildConfirmationNormalizationInstructions(params: {
     "- value: confirm OR cancel OR unknown",
     "Never use any previous step_key.",
     "Never use any previous date, time, service, name, phone, or old answer.",
+  ].join("\n");
+}
+
+function buildPhoneConfirmOrReplaceInstructions(params: {
+  pendingBookingStepKey: string;
+  pendingSlot: string;
+  expectedType: string;
+  validationMode: string;
+  useInboundCaller: boolean;
+  lastUserTranscript: string;
+}): string {
+  return [
+    ...buildInternalSilenceRules(),
+
+    "The caller answered a phone confirmation-or-replacement step.",
+    `Current booking step key: ${params.pendingBookingStepKey}`,
+    `Current booking slot: ${params.pendingSlot}`,
+    `Current expected type: ${params.expectedType}`,
+    `Current validation mode: ${params.validationMode}`,
+    `Current use inbound caller phone: ${params.useInboundCaller ? "true" : "false"}`,
+    `Caller latest answer: ${params.lastUserTranscript}`,
     "",
 
-    "Use confirm only when clear.",
-    "Use cancel only when clear.",
-    "Use unknown for anything unclear.",
+    "Resolve the caller's latest answer into a phone confirmation-or-replacement protocol value.",
+    "Use only the caller's latest answer.",
+    "Do not guess.",
+    "Do not invent missing data.",
+    "Do not use earlier turns as the answer.",
+    "Do not submit the caller's literal words when they are only confirming or rejecting the current calling number.",
+    "",
+
+    "Allowed protocol values:",
+    `- ${PHONE_CONFIRM_USE_INBOUND}: the caller clearly confirms that the current calling number is the best number to contact them.`,
+    `- ${PHONE_CONFIRM_REPLACE}: the caller clearly rejects using the current calling number but does not provide a replacement phone number.`,
+    `- ${PHONE_CONFIRM_UNKNOWN}: the caller's answer is unclear, unrelated, incomplete, noise, greeting, or not enough to confirm or replace the phone number.`,
+    "",
+
+    "Replacement phone rule:",
+    "- If the caller clearly provides a different phone number, submit only the normalized replacement phone number.",
+    "",
+
+    "Tool call requirements:",
+    "- tool: submit_booking_step",
+    `- step_key: ${params.pendingBookingStepKey}`,
+    `- value: ${PHONE_CONFIRM_USE_INBOUND} OR ${PHONE_CONFIRM_REPLACE} OR ${PHONE_CONFIRM_UNKNOWN} OR the normalized replacement phone number`,
+    "Never use any previous step_key.",
+    "Never use any previous date, time, service, name, phone, or old answer.",
   ].join("\n");
 }
 
@@ -119,29 +164,8 @@ function buildDefaultNormalizationInstructions(params: {
   pendingSlot: string;
   expectedType: string;
   validationMode: string;
-  useInboundCaller: boolean;
   lastUserTranscript: string;
 }): string {
-  const confirmOrReplacePhoneStep = isConfirmOrReplacePhoneStep({
-    expectedType: params.expectedType,
-    pendingSlot: params.pendingSlot,
-    validationMode: params.validationMode,
-    useInboundCaller: params.useInboundCaller,
-  });
-
-  const phoneRules = confirmOrReplacePhoneStep
-    ? [
-        "- This is a phone-number confirmation step using the inbound caller phone.",
-        `- If the caller clearly confirms using the current calling number, submit exactly this token as the value: ${USE_CALLER_PHONE_TOKEN}`,
-        "- Confirmation examples include: yes, yeah, yep, si, sí, sì, correcto, correct, ok, okay, confirmo.",
-        "- If the caller says a different phone number, submit only the normalized phone number.",
-        "- If the caller says no but does not provide another phone number, submit the caller's latest answer exactly as heard. Let the backend reject it and return the retry prompt.",
-      ]
-    : [
-        "- If this is a phone-number step and the caller says a phone number, submit only the normalized phone number.",
-        "- Do not submit the caller-phone token unless the current validation mode is confirm_or_replace and inbound caller phone usage is enabled.",
-      ];
-
   return [
     ...buildInternalSilenceRules(),
 
@@ -150,7 +174,6 @@ function buildDefaultNormalizationInstructions(params: {
     `Current booking slot: ${params.pendingSlot}`,
     `Current expected type: ${params.expectedType}`,
     `Current validation mode: ${params.validationMode}`,
-    `Current use inbound caller phone: ${params.useInboundCaller ? "true" : "false"}`,
     `Caller latest answer: ${params.lastUserTranscript}`,
     "",
 
@@ -167,7 +190,7 @@ function buildDefaultNormalizationInstructions(params: {
 
     "Rules:",
     "- If this is an address step, convert spoken numbers into address digits when clear.",
-    ...phoneRules,
+    "- If this is a phone-number step and the caller says a phone number, submit only the normalized phone number.",
     "- If this is an email step, normalize the email only if the caller clearly said one.",
     "- If the latest answer does not clearly answer this step, still call submit_booking_step with the caller's latest answer exactly as heard. Let the backend reject it and return the retry prompt.",
     "",
@@ -212,6 +235,13 @@ export function requestNormalizedStepModelResolution(params: {
     validationMode,
   });
 
+  const phoneConfirmOrReplaceStep = isConfirmOrReplacePhoneStep({
+    pendingSlot,
+    expectedType,
+    validationMode,
+    useInboundCaller,
+  });
+
   console.warn("[VOICE_REALTIME][NORMALIZED_STEP_MODEL_RESOLUTION_REQUESTED]", {
     callSid: params.callSid,
     source: params.source,
@@ -221,6 +251,7 @@ export function requestNormalizedStepModelResolution(params: {
     validationMode,
     useInboundCaller,
     isConfirmationStep: confirmationStep,
+    isPhoneConfirmOrReplaceStep: phoneConfirmOrReplaceStep,
     lastUserTranscript,
     lastUserTranscriptSeq: params.lastUserTranscriptSeq,
     pendingBookingStepPromptAnchorSeq: params.pendingBookingStepPromptAnchorSeq,
@@ -234,14 +265,22 @@ export function requestNormalizedStepModelResolution(params: {
         validationMode,
         lastUserTranscript,
       })
-    : buildDefaultNormalizationInstructions({
-        pendingBookingStepKey,
-        pendingSlot,
-        expectedType,
-        validationMode,
-        useInboundCaller,
-        lastUserTranscript,
-      });
+    : phoneConfirmOrReplaceStep
+      ? buildPhoneConfirmOrReplaceInstructions({
+          pendingBookingStepKey,
+          pendingSlot,
+          expectedType,
+          validationMode,
+          useInboundCaller,
+          lastUserTranscript,
+        })
+      : buildDefaultNormalizationInstructions({
+          pendingBookingStepKey,
+          pendingSlot,
+          expectedType,
+          validationMode,
+          lastUserTranscript,
+        });
 
   params.requestRealtimeResponse(
     {
@@ -250,6 +289,8 @@ export function requestNormalizedStepModelResolution(params: {
     },
     confirmationStep
       ? "booking_step_confirmation_model_resolution"
-      : "booking_step_normalized_model_resolution"
+      : phoneConfirmOrReplaceStep
+        ? "booking_step_phone_confirm_or_replace_model_resolution"
+        : "booking_step_normalized_model_resolution"
   );
 }

@@ -78,6 +78,12 @@ export function buildNextRealtimeStateFromToolResult(
   const resolvedPendingBookingStepRequired =
     nextRequiredStep?.required === true;
 
+  const resolvedPendingBookingStepValidationConfig =
+    nextRequiredStep?.validation_config &&
+    typeof nextRequiredStep.validation_config === "object"
+      ? nextRequiredStep.validation_config
+      : {};
+
   const nextStepExpectsUserInput =
     Boolean(resolvedPendingBookingStepKey) &&
     (resolvedPendingBookingStepRequired ||
@@ -145,6 +151,11 @@ export function buildNextRealtimeStateFromToolResult(
       shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
         ? undefined
         : resolvedPendingBookingStepExpectedType,
+
+    pendingBookingStepValidationConfig:
+      shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
+        ? undefined
+        : resolvedPendingBookingStepValidationConfig,
 
     pendingBookingStepPrompt:
       shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
