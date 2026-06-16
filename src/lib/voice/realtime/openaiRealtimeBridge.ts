@@ -179,6 +179,7 @@ export async function createOpenAiRealtimeBridge({
   let expectedAssistantPromptForActiveResponse = "";
   let exactPromptViolationHandledForActiveResponse = false;
   let pendingExactPromptRetry = false;
+  let cancelledExactPromptResponseId: string | null = null;
   let didLogSuppressedAudioForActiveResponse = false;
   let didLogInternalModelResolutionAudioSuppressed = false;
 
@@ -626,6 +627,7 @@ export async function createOpenAiRealtimeBridge({
         exactPromptViolationHandledForActiveResponse = true;
         suppressActiveAssistantAudio = true;
         pendingExactPromptRetry = true;
+        cancelledExactPromptResponseId = responseState.activeResponseId;
 
         console.error("[VOICE_REALTIME][EXACT_BOOKING_PROMPT_VIOLATION_CANCELLED]", {
           callSid,
@@ -875,6 +877,10 @@ export async function createOpenAiRealtimeBridge({
 
       const completedResponseSource = responseStateBeforeDone.activeResponseSource;
 
+      const isCancelledExactPromptResponse =
+        Boolean(cancelledExactPromptResponseId) &&
+        responseStateBeforeDone.activeResponseId === cancelledExactPromptResponseId;
+
       console.log("[VOICE_REALTIME][RESPONSE_DONE]", {
         callSid,
         responseId: responseStateBeforeDone.activeResponseId,
@@ -970,6 +976,7 @@ export async function createOpenAiRealtimeBridge({
       );
 
       if (
+        !isCancelledExactPromptResponse &&
         isBookingAssistantPromptResponse &&
         pendingBookingStepKeyAfterResponseDone &&
         bookingTurnStatusAfterResponseDone === "waiting_assistant_prompt"
@@ -1000,7 +1007,9 @@ export async function createOpenAiRealtimeBridge({
        * the booking turn may open after the transcript was already accepted.
        * This catch-up prevents the user from having to repeat the same answer.
        */
-      bookingCoordinator.catchUpBookingStepIfCallerAnsweredBeforeTurnOpened();
+      if (!isCancelledExactPromptResponse) {
+        bookingCoordinator.catchUpBookingStepIfCallerAnsweredBeforeTurnOpened();
+      }
 
       const flushedPendingResponse =
         responseController.flushPendingRealtimeResponse();
@@ -1013,10 +1022,13 @@ export async function createOpenAiRealtimeBridge({
         });
       }
 
-      expectedAssistantPromptForActiveResponse = "";
-      pendingExactPromptRetry = false;
-      exactPromptViolationHandledForActiveResponse = false;
-      didLogSuppressedAudioForActiveResponse = false;
+      if (!shouldRetryExactPrompt) {
+        expectedAssistantPromptForActiveResponse = "";
+        pendingExactPromptRetry = false;
+        exactPromptViolationHandledForActiveResponse = false;
+        cancelledExactPromptResponseId = null;
+        didLogSuppressedAudioForActiveResponse = false;
+      }
 
       if (shouldRetryExactPrompt) {
         console.warn("[VOICE_REALTIME][EXACT_BOOKING_PROMPT_RETRY_REQUESTED]", {
@@ -1061,6 +1073,12 @@ export async function createOpenAiRealtimeBridge({
           },
           "tool_followup:submit_booking_step:exact_retry"
         );
+
+        expectedAssistantPromptForActiveResponse = "";
+        pendingExactPromptRetry = false;
+        exactPromptViolationHandledForActiveResponse = false;
+        cancelledExactPromptResponseId = null;
+        didLogSuppressedAudioForActiveResponse = false;
       }
 
       return;
@@ -1144,6 +1162,7 @@ export async function createOpenAiRealtimeBridge({
       exactPromptViolationHandledForActiveResponse = false;
       pendingExactPromptRetry = false;
       didLogSuppressedAudioForActiveResponse = false;
+      cancelledExactPromptResponseId = null;
       didLogInternalModelResolutionAudioSuppressed = false;
       bargeInController.reset();
 
