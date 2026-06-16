@@ -13,7 +13,6 @@ import { handleRealtimeToolError } from "./toolErrors/handleRealtimeToolError";
 import { guardTenantReady } from "./toolGuards/guardTenantReady";
 import { handleBlockedSubmitBookingStep } from "./toolGuards/handleBlockedSubmitBookingStep";
 import { applyBookingRuntimeStateAfterToolResult } from "./bookingRuntimeState";
-import { canSubmitBookingStepNow } from "./bookingTurnState";
 import { guardGetBookingFlowIntent } from "./toolGuards/guardGetBookingFlowIntent";
 import { bootstrapSubmitBookingStepAfterFlowLoad } from "./toolGuards/bootstrapSubmitBookingStepAfterFlowLoad";
 import { clean } from "./utils/clean";
@@ -676,15 +675,6 @@ export async function handleRealtimeToolCall(
       lastUserTranscript,
     });
 
-    const turnGate = canSubmitBookingStepNow({
-      realtimeState,
-      submittedStepKey: clean(toolArgs.step_key),
-      lastUserTranscriptSeq:
-        typeof realtimeState.lastUserTranscriptSeq === "number"
-          ? realtimeState.lastUserTranscriptSeq
-          : -1,
-    });
-
     const submittedStepKey = clean(toolArgs.step_key);
     const modelValue = clean(toolArgs.value);
 
@@ -707,164 +697,6 @@ export async function handleRealtimeToolCall(
 
     const hasHumanTranscriptAfterAnchor =
       currentTranscriptSeq > promptAnchorSeq;
-
-    const canBypassTurnGateForTranscriptRace =
-      !turnGate.ok &&
-      turnGate.reason === "NO_NEW_USER_ANSWER" &&
-      freshness.canAcceptModelValueDuringTranscriptRace;
-
-    const canBypassTurnGateForEarlyAnswerDuringAssistantPrompt =
-      !turnGate.ok &&
-      turnGate.reason === "ASSISTANT_PROMPT_NOT_COMPLETED" &&
-      isSubmittingCurrentPendingStep &&
-      Boolean(modelValue) &&
-      hasHumanTranscriptAfterAnchor;
-
-    const currentTranscript = clean(lastUserTranscript);
-
-    const hasNoAcceptedHumanTranscript =
-      !currentTranscript ||
-      (typeof realtimeState.lastUserTranscriptSeq === "number" &&
-        typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number" &&
-        realtimeState.lastUserTranscriptSeq <= realtimeState.pendingBookingStepPromptAnchorSeq);
-
-    const isModelOnlySubmitWithoutAcceptedHumanInput =
-      submittedStepKey === "service" &&
-      Boolean(modelValue) &&
-      hasNoAcceptedHumanTranscript &&
-      !freshness.hasNewHumanTranscript &&
-      !freshness.canAcceptModelValueDuringTranscriptRace;
-
-    if (isModelOnlySubmitWithoutAcceptedHumanInput) {
-      const blockedResult: RealtimeToolResult = {
-        ok: false,
-        error: "BOOKING_STEP_WAITING_FOR_NEW_USER_INPUT",
-        message: "Ignored model-only submit without accepted human transcript.",
-        next_required_step: realtimeState.pendingBookingStepKey
-          ? {
-              step_key: realtimeState.pendingBookingStepKey,
-              prompt: realtimeState.pendingBookingStepPrompt || "",
-              required: realtimeState.pendingBookingStepRequired ?? true,
-            }
-          : undefined,
-      };
-
-      console.warn("[VOICE_REALTIME][BOOKING_SUBMIT_BLOCKED_MODEL_ONLY_WITHOUT_ACCEPTED_TRANSCRIPT]", {
-        callSid,
-        submittedStepKey,
-        modelValue,
-        currentTranscript,
-        bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
-        lastUserTranscriptSeq:
-          typeof realtimeState.lastUserTranscriptSeq === "number"
-            ? realtimeState.lastUserTranscriptSeq
-            : null,
-        pendingBookingStepPromptAnchorSeq:
-          typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
-            ? realtimeState.pendingBookingStepPromptAnchorSeq
-            : null,
-      });
-
-      sendRealtimeJson(openAiSocket, {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: callId,
-          output: JSON.stringify(blockedResult),
-        },
-      });
-
-      return {
-        consumed: true,
-        result: blockedResult,
-        realtimeState,
-        bookingFlowLoaded,
-        hangupRequestedByTool: false,
-        callEnding,
-        resetLastUserDigits: false,
-      };
-    }
-
-    if (
-      !turnGate.ok &&
-      !canBypassTurnGateForTranscriptRace &&
-      !canBypassTurnGateForEarlyAnswerDuringAssistantPrompt
-    ) {
-      const blockedResult: RealtimeToolResult = {
-        ok: false,
-        error: "BOOKING_STEP_NOT_READY_FOR_SUBMIT",
-        message: turnGate.reason,
-        next_required_step: realtimeState.pendingBookingStepKey
-          ? {
-              step_key: realtimeState.pendingBookingStepKey,
-              prompt: realtimeState.pendingBookingStepPrompt || "",
-              required: realtimeState.pendingBookingStepRequired ?? true,
-            }
-          : undefined,
-      };
-
-      console.warn("[VOICE_REALTIME][BOOKING_SUBMIT_BLOCKED_BY_TURN_STATE]", {
-        callSid,
-        reason: turnGate.reason,
-        submittedStepKey: clean(toolArgs.step_key),
-        pendingBookingStepKey: realtimeState.pendingBookingStepKey || "",
-        bookingTurnStatus: (realtimeState as any).bookingTurnStatus || "",
-        lastUserTranscript,
-        lastUserTranscriptSeq:
-          typeof realtimeState.lastUserTranscriptSeq === "number"
-            ? realtimeState.lastUserTranscriptSeq
-            : null,
-        pendingBookingStepPromptAnchorSeq:
-          typeof realtimeState.pendingBookingStepPromptAnchorSeq === "number"
-            ? realtimeState.pendingBookingStepPromptAnchorSeq
-            : null,
-      });
-
-      sendRealtimeJson(openAiSocket, {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: callId,
-          output: JSON.stringify(blockedResult),
-        },
-      });
-
-      const blockedRetryPrompt = clean(
-        (blockedResult as any)?.next_required_step?.prompt || ""
-      );
-
-      if (blockedRetryPrompt) {
-        requestRealtimeResponse(
-          buildExactBookingPromptResponse({
-            prompt: blockedRetryPrompt,
-            currentLocale,
-          }),
-          "tool_followup:submit_booking_step:blocked_retry"
-        );
-      }
-
-      return {
-        consumed: true,
-        result: blockedResult,
-        realtimeState,
-        bookingFlowLoaded,
-        hangupRequestedByTool: false,
-        callEnding,
-        resetLastUserDigits: false,
-      };
-    }
-
-    if (canBypassTurnGateForEarlyAnswerDuringAssistantPrompt) {
-      console.warn("[VOICE_REALTIME][BOOKING_SUBMIT_ACCEPTED_EARLY_DURING_ASSISTANT_PROMPT]", {
-        callSid,
-        submittedStepKey,
-        pendingStepKey,
-        modelValue,
-        lastUserTranscript,
-        currentTranscriptSeq,
-        promptAnchorSeq,
-      });
-    }
 
     if (!freshness.ok && !freshness.canAcceptModelValueDuringTranscriptRace) {
       return handleBlockedSubmitBookingStep({
