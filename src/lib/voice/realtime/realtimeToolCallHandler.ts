@@ -8,7 +8,6 @@ import { guardRealtimeEndCall } from "./toolGuards/guardRealtimeEndCall";
 import { guardSendBookingSms } from "./toolGuards/guardSendBookingSms";
 import { buildNextRealtimeStateFromToolResult } from "./toolState/buildNextRealtimeStateFromToolResult";
 import { buildEffectiveRealtimeToolArgs } from "./toolArgs/buildEffectiveRealtimeToolArgs";
-import { resolveRealtimeToolFollowupInstructions } from "./toolFollowup/resolveRealtimeToolFollowupInstructions";
 import { guardSubmitBookingStepFlowLoaded } from "./toolGuards/guardSubmitBookingStepFlowLoaded";
 import { handleRealtimeToolError } from "./toolErrors/handleRealtimeToolError";
 import { guardTenantReady } from "./toolGuards/guardTenantReady";
@@ -17,11 +16,9 @@ import { applyBookingRuntimeStateAfterToolResult } from "./bookingRuntimeState";
 import { canSubmitBookingStepNow } from "./bookingTurnState";
 import { guardGetBookingFlowIntent } from "./toolGuards/guardGetBookingFlowIntent";
 import { bootstrapSubmitBookingStepAfterFlowLoad } from "./toolGuards/bootstrapSubmitBookingStepAfterFlowLoad";
-import { buildSyntheticBookingStepFollowupInstructions } from "./toolFollowup/buildSyntheticBookingStepFollowupInstructions";
 import { clean } from "./utils/clean";
 import { sendRealtimeJson } from "./socket/sendRealtimeJson";
 import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBookingStepEffectiveArgs";
-import { resolveSyntheticDirectBookingFollowup } from "./toolFollowup/resolveSyntheticDirectBookingFollowup";
 import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateSubmitBookingStepEarly";
 import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppointment";
 import { handleRealtimeServerActionRequired } from "./toolExecution/handleRealtimeServerActionRequired";
@@ -106,6 +103,48 @@ function buildExactBookingPromptResponse(params: {
       },
     ],
   };
+}
+
+function buildDeterministicToolFollowupInstructions(params: {
+  toolName: string;
+  toolResult: RealtimeToolResult;
+}): string {
+  const result = params.toolResult || {};
+
+  const retryPrompt =
+    clean((result as any)?.next_required_step?.retry_prompt || "") ||
+    clean((result as any)?.retry_prompt || "");
+
+  if ((result as any)?.ok === false && retryPrompt) {
+    return retryPrompt;
+  }
+
+  const nextRequiredPrompt = clean(
+    (result as any)?.next_required_step?.prompt || ""
+  );
+
+  if (nextRequiredPrompt) {
+    return nextRequiredPrompt;
+  }
+
+  const unavailablePrompt =
+    clean((result as any)?.unavailable_prompt || "") ||
+    clean((result as any)?.next_required_step?.unavailable_prompt || "");
+
+  if (unavailablePrompt) {
+    return unavailablePrompt;
+  }
+
+  const configuredMessage =
+    clean((result as any)?.response_message || "") ||
+    clean((result as any)?.message || "") ||
+    clean((result as any)?.instructions || "");
+
+  if (configuredMessage) {
+    return configuredMessage;
+  }
+
+  return "";
 }
 
 function getPendingBookingStepValidationConfig(
@@ -997,45 +1036,6 @@ export async function handleRealtimeToolCall(
         nextRequiredStepKey: clean(toolResult?.next_required_step?.step_key || ""),
         nextRequiredPrompt: clean(toolResult?.next_required_step?.prompt || ""),
       });
-
-      const syntheticDirectFollowup = resolveSyntheticDirectBookingFollowup({
-        toolName,
-        callId,
-        toolResult: (toolResult || {}) as RealtimeToolResult,
-        nextRealtimeState,
-        currentLocale:
-          clean((nextRealtimeState as any)?.lang) ||
-          clean((realtimeState as any)?.lang) ||
-          currentLocale,
-      });
-
-      if (syntheticDirectFollowup?.shouldForceDirectFollowup) {
-        console.log("[VOICE_REALTIME][SYNTHETIC_DIRECT_FOLLOWUP_FORCED]", {
-          callSid,
-          ...syntheticDirectFollowup.logPayload,
-        });
-
-        requestRealtimeResponse(
-          buildExactBookingPromptResponse({
-            prompt: clean(
-              (toolResult as any)?.next_required_step?.prompt ||
-                syntheticDirectFollowup.instructions
-            ),
-            currentLocale,
-          }),
-          syntheticDirectFollowup.source
-        );
-
-        return {
-          consumed: true,
-          result: toolResult as RealtimeToolResult,
-          realtimeState: syntheticDirectFollowup.nextRealtimeState,
-          bookingFlowLoaded: nextBookingFlowLoaded,
-          hangupRequestedByTool,
-          callEnding: nextCallEnding,
-          resetLastUserDigits: true,
-        };
-      }
     }
 
     const actionRequired = clean((toolResult as any)?.action_required || "");
@@ -1138,12 +1138,6 @@ export async function handleRealtimeToolCall(
       };
     }
 
-    const followupLocale = String(
-      (nextRealtimeState as any)?.lang ||
-        (realtimeState as any)?.lang ||
-        ""
-    ).trim();
-
     const nextRequiredPrompt = clean(
       (toolResult as any)?.next_required_step?.prompt || ""
     );
@@ -1186,28 +1180,34 @@ export async function handleRealtimeToolCall(
       };
     }
 
-    const syntheticFollowupInstructions = isSyntheticToolCall
-      ? buildSyntheticBookingStepFollowupInstructions({
-          toolName,
-          toolResult,
-          currentLocale: followupLocale,
-        })
-      : "";
-
-    const followupInstructions =
-      syntheticFollowupInstructions ||
-      resolveRealtimeToolFollowupInstructions({
+    const deterministicFollowupInstructions =
+      buildDeterministicToolFollowupInstructions({
         toolName,
         toolResult: (toolResult || {}) as RealtimeToolResult,
-        currentLocale: followupLocale,
       });
 
-    requestRealtimeResponse(
-      {
-        instructions: followupInstructions,
-      },
-      `tool_followup:${toolName}`
-    );
+    if (deterministicFollowupInstructions) {
+      const shouldSpeakExactBookingPrompt =
+        Boolean(nextRequiredPrompt) ||
+        (toolName === "submit_booking_step" && Boolean(retryPrompt));
+
+      if (shouldSpeakExactBookingPrompt) {
+        requestRealtimeResponse(
+          buildExactBookingPromptResponse({
+            prompt: deterministicFollowupInstructions,
+            currentLocale,
+          }),
+          `tool_followup:${toolName}`
+        );
+      } else {
+        requestRealtimeResponse(
+          {
+            instructions: deterministicFollowupInstructions,
+          },
+          `tool_followup:${toolName}`
+        );
+      }
+    }
 
     return {
       consumed: true,
