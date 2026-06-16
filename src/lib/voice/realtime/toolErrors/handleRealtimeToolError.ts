@@ -1,14 +1,32 @@
 // src/lib/voice/realtime/toolErrors/handleRealtimeToolError.ts
 import type WebSocket from "ws";
-import {
-  buildToolFollowupInstructions,
-  type RealtimeToolResult,
-} from "../buildToolFollowupInstructions";
 import type { CallState } from "../../types";
+
+type RealtimeToolResult = {
+  ok: false;
+  error: string;
+  message?: string;
+  response_message?: string;
+  instructions?: string;
+};
 
 function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
   if (socket.readyState !== socket.OPEN) return;
   socket.send(JSON.stringify(payload));
+}
+
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function resolveToolErrorFollowupInstructions(
+  toolErrorResult: RealtimeToolResult
+): string {
+  return (
+    clean(toolErrorResult.response_message) ||
+    clean(toolErrorResult.message) ||
+    clean(toolErrorResult.instructions)
+  );
 }
 
 export function handleRealtimeToolError(params: {
@@ -64,15 +82,17 @@ export function handleRealtimeToolError(params: {
     },
   });
 
-  requestRealtimeResponse(
-    {
-      instructions: buildToolFollowupInstructions({
-        toolName,
-        toolResult: toolErrorResult,
-      }),
-    },
-    `tool_error:${toolName}`
-  );
+  const followupInstructions =
+    resolveToolErrorFollowupInstructions(toolErrorResult);
+
+  if (followupInstructions) {
+    requestRealtimeResponse(
+      {
+        instructions: followupInstructions,
+      },
+      `tool_error:${toolName}`
+    );
+  }
 
   return {
     consumed: true,

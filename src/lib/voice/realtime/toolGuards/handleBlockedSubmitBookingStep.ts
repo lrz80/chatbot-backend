@@ -4,7 +4,7 @@ import type { CallState } from "../../types";
 import type {
   SubmitBookingStepFreshnessResult,
 } from "./validateSubmitBookingStepFreshness";
-import type { RealtimeToolResult } from "../buildToolFollowupInstructions";
+import type { RealtimeToolResult } from "../toolTypes";
 
 type BlockedFreshness = Extract<
   SubmitBookingStepFreshnessResult,

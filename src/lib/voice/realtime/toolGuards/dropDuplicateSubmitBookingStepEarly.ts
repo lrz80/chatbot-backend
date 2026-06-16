@@ -1,7 +1,7 @@
 // src/lib/voice/realtime/toolGuards/dropDuplicateSubmitBookingStepEarly.ts
 import WebSocket from "ws";
 import type { CallState } from "../../types";
-import type { RealtimeToolResult } from "../buildToolFollowupInstructions";
+import type { RealtimeToolResult } from "../toolTypes";
 import { sendRealtimeJson } from "../socket/sendRealtimeJson";
 import { clean } from "../utils/clean";
 

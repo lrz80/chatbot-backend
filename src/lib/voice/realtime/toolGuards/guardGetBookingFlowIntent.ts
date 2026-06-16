@@ -1,7 +1,7 @@
 //src/lib/voice/realtime/toolGuards/guardGetBookingFlowIntent.ts
 import WebSocket from "ws";
 import type { CallState } from "../../types";
-import type { RealtimeToolResult } from "../buildToolFollowupInstructions";
+import type { RealtimeToolResult } from "../toolTypes";
 
 type GuardGetBookingFlowIntentParams = {
   toolName: string;

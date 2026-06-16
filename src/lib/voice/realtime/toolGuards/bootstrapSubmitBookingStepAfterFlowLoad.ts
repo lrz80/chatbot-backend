@@ -2,10 +2,9 @@
 import type WebSocket from "ws";
 import type { CallState } from "../../types";
 import { executeRealtimeTool } from "../realtimeToolExecutor";
-import { type RealtimeToolResult } from "../buildToolFollowupInstructions";
+import type { RealtimeToolResult } from "../toolTypes";
 import { buildNextRealtimeStateFromToolResult } from "../toolState/buildNextRealtimeStateFromToolResult";
 import { applyBookingRuntimeStateAfterToolResult } from "../bookingRuntimeState";
-import { resolveRealtimeToolFollowupInstructions } from "../toolFollowup/resolveRealtimeToolFollowupInstructions";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -77,6 +76,42 @@ function sendToolOutputIfNeeded(params: {
       output: JSON.stringify(params.output),
     },
   });
+}
+
+function resolveBootstrapSubmitFollowupInstructions(
+  submitResult: RealtimeToolResult
+): string {
+  const result = submitResult || {};
+
+  const retryPrompt =
+    clean((result as any)?.next_required_step?.retry_prompt || "") ||
+    clean((result as any)?.retry_prompt || "");
+
+  if ((result as any)?.ok === false && retryPrompt) {
+    return retryPrompt;
+  }
+
+  const nextRequiredPrompt = clean(
+    (result as any)?.next_required_step?.prompt || ""
+  );
+
+  if (nextRequiredPrompt) {
+    return nextRequiredPrompt;
+  }
+
+  const unavailablePrompt =
+    clean((result as any)?.unavailable_prompt || "") ||
+    clean((result as any)?.next_required_step?.unavailable_prompt || "");
+
+  if (unavailablePrompt) {
+    return unavailablePrompt;
+  }
+
+  return (
+    clean((result as any)?.response_message || "") ||
+    clean((result as any)?.message || "") ||
+    clean((result as any)?.instructions || "")
+  );
 }
 
 export async function bootstrapSubmitBookingStepAfterFlowLoad(
@@ -249,17 +284,18 @@ export async function bootstrapSubmitBookingStepAfterFlowLoad(
     output: submitResult,
   });
 
-  const followupInstructions = resolveRealtimeToolFollowupInstructions({
-    toolName: "submit_booking_step",
-    toolResult: (submitResult || {}) as RealtimeToolResult,
-  });
-
-  params.requestRealtimeResponse(
-    {
-      instructions: followupInstructions,
-    },
-    "tool_followup:submit_booking_step"
+  const followupInstructions = resolveBootstrapSubmitFollowupInstructions(
+    (submitResult || {}) as RealtimeToolResult
   );
+
+  if (followupInstructions) {
+    params.requestRealtimeResponse(
+      {
+        instructions: followupInstructions,
+      },
+      "tool_followup:submit_booking_step"
+    );
+  }
 
   return {
     handled: true,

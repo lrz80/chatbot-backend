@@ -2,7 +2,7 @@
 import WebSocket from "ws";
 import type { CallState } from "../types";
 import { executeRealtimeTool } from "./realtimeToolExecutor";
-import { type RealtimeToolResult } from "./buildToolFollowupInstructions";
+import type { RealtimeToolResult } from "./toolTypes";
 import { validateSubmitBookingStepFreshness } from "./toolGuards/validateSubmitBookingStepFreshness";
 import { guardRealtimeEndCall } from "./toolGuards/guardRealtimeEndCall";
 import { guardSendBookingSms } from "./toolGuards/guardSendBookingSms";

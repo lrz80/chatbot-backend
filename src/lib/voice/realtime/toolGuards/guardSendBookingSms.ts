@@ -1,7 +1,7 @@
 // src/lib/voice/realtime/toolGuards/guardSendBookingSms.ts
 import type WebSocket from "ws";
 import type { CallState } from "../../types";
-import type { RealtimeToolResult } from "../buildToolFollowupInstructions";
+import type { RealtimeToolResult } from "../toolTypes";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
