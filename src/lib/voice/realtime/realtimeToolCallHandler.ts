@@ -377,15 +377,36 @@ export async function handleRealtimeToolCall(
   });
 
   if (toolName === "submit_booking_step") {
-    console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_RESPONSE_CANCEL_REQUESTED]", {
-      callSid,
-      callId,
-      submittedStepKey: clean(toolArgs.step_key || ""),
-    });
+    const activeResponseSource = clean(
+      (realtimeState as any).activeResponseSource || ""
+    );
 
-    sendRealtimeJson(openAiSocket, {
-      type: "response.cancel",
-    });
+    const isInternalBookingStepModelResolution =
+      activeResponseSource.startsWith("booking_step_") &&
+      activeResponseSource.endsWith("_model_resolution");
+
+    if (isInternalBookingStepModelResolution) {
+      console.warn(
+        "[VOICE_REALTIME][SUBMIT_BOOKING_STEP_RESPONSE_CANCEL_SKIPPED_INTERNAL_RESOLUTION]",
+        {
+          callSid,
+          callId,
+          submittedStepKey: clean(toolArgs.step_key || ""),
+          activeResponseSource,
+        }
+      );
+    } else {
+      console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_RESPONSE_CANCEL_REQUESTED]", {
+        callSid,
+        callId,
+        submittedStepKey: clean(toolArgs.step_key || ""),
+        activeResponseSource,
+      });
+
+      sendRealtimeJson(openAiSocket, {
+        type: "response.cancel",
+      });
+    }
   }
 
   const directCreateAppointmentGuard = guardDirectCreateAppointment({
