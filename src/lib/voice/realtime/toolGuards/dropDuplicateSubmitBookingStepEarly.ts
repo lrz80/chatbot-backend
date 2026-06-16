@@ -82,7 +82,13 @@ export function dropDuplicateSubmitBookingStepEarly(
   const result: RealtimeToolResult = {
     ok: false,
     error: "STALE_DUPLICATE_SUBMIT_DROPPED",
-    message: "Ignored duplicate submit_booking_step tool call.",
+    next_required_step: realtimeState.pendingBookingStepKey
+      ? {
+          step_key: realtimeState.pendingBookingStepKey,
+          prompt: realtimeState.pendingBookingStepPrompt || "",
+          required: realtimeState.pendingBookingStepRequired ?? true,
+        }
+      : null,
   };
 
   console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_DUPLICATE_DROPPED_EARLY]", {

@@ -735,16 +735,15 @@ export async function handleRealtimeToolCall(
       const blockedResult: RealtimeToolResult = {
         ok: false,
         error: "STALE_SUBMIT_BOOKING_STEP_TOOL_CALL",
-        message: "Ignored stale submit_booking_step tool call.",
         next_required_step: realtimeState.pendingBookingStepKey
           ? {
               step_key: realtimeState.pendingBookingStepKey,
               prompt: realtimeState.pendingBookingStepPrompt || "",
               required: realtimeState.pendingBookingStepRequired ?? true,
             }
-          : undefined,
+          : null,
       };
-
+      
       console.warn("[VOICE_REALTIME][SUBMIT_BOOKING_STEP_DROPPED_STALE_TOOL_CALL]", {
         callSid,
         pendingStepKey: effectiveToolArgs.step_key,

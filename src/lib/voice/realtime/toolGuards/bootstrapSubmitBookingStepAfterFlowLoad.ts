@@ -151,7 +151,6 @@ export async function bootstrapSubmitBookingStepAfterFlowLoad(
     const blockedResult: RealtimeToolResult = {
       ok: false,
       error: "BOOKING_FLOW_NOT_LOADED",
-      message: "BOOKING_FLOW_BOOTSTRAP_FAILED",
     };
 
     sendToolOutputIfNeeded({
@@ -195,8 +194,7 @@ export async function bootstrapSubmitBookingStepAfterFlowLoad(
     const blockedResult: RealtimeToolResult = {
       ok: false,
       error: "BOOKING_BOOTSTRAP_STEP_MISMATCH",
-      message: "SUBMITTED_STEP_DOES_NOT_MATCH_LOADED_FLOW_STEP",
-      next_required_step: flowResult.next_required_step,
+      next_required_step: flowResult.next_required_step ?? null,
     };
 
     console.warn("[VOICE_REALTIME][BOOKING_BOOTSTRAP_STEP_MISMATCH]", {
