@@ -814,6 +814,29 @@ export async function createOpenAiRealtimeBridge({
           tenantId = transcriptResult.tenantId;
 
           bookingCoordinator.nudgeBookingStepProcessingAfterTranscript();
+
+          const hasPendingBookingStepAfterTranscript = Boolean(
+            clean((realtimeState as any).pendingBookingStepKey)
+          );
+
+          const bookingTurnStatusAfterTranscript = clean(
+            (realtimeState as any).bookingTurnStatus
+          );
+
+          const shouldWakeModelForFreeUserTranscript =
+            !hasPendingBookingStepAfterTranscript &&
+            !bookingTurnStatusAfterTranscript &&
+            !callEnding &&
+            !hangupRequestedByTool;
+
+          if (shouldWakeModelForFreeUserTranscript) {
+            requestRealtimeResponse(
+              {
+                tool_choice: "auto",
+              },
+              "bridge:user_transcript"
+            );
+          }
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {
