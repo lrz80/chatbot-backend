@@ -21,6 +21,7 @@ import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBooki
 import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateSubmitBookingStepEarly";
 import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppointment";
 import { handleRealtimeServerActionRequired } from "./toolExecution/handleRealtimeServerActionRequired";
+import { buildExactRealtimeSpeechResponse } from "./buildExactRealtimeSpeechResponse";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -61,46 +62,6 @@ function buildToollessResponse(
   return {
     instructions,
     tool_choice: "none",
-  };
-}
-
-function buildExactBookingPromptResponse(params: {
-  prompt: string;
-  currentLocale: VoiceLocale;
-}): Record<string, unknown> {
-  const prompt = clean(params.prompt);
-
-  return {
-    conversation: "none",
-    tool_choice: "none",
-    metadata: {
-      purpose: "exact_booking_prompt",
-      expected_prompt: prompt,
-    },
-    instructions: [
-      "You are a speech renderer for a live phone booking flow.",
-      "You must not reason, continue the conversation, interpret the previous caller answer, or use prior conversation context.",
-      "Your only task is to speak exactly the booking prompt provided in the input.",
-      "Do not add, remove, translate, paraphrase, explain, acknowledge, or prepend anything.",
-      "Do not mention availability, scheduling status, calendar, backend, validation, tools, or processing.",
-      `The active language is ${params.currentLocale}.`,
-    ].join("\n"),
-    input: [
-      {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: [
-              "Speak exactly this booking prompt and nothing else:",
-              "",
-              prompt,
-            ].join("\n"),
-          },
-        ],
-      },
-    ],
   };
 }
 
@@ -949,7 +910,7 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        buildExactBookingPromptResponse({
+        buildExactRealtimeSpeechResponse({
           prompt: retryPrompt,
           currentLocale,
         }),
@@ -991,7 +952,7 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        buildExactBookingPromptResponse({
+        buildExactRealtimeSpeechResponse({
           prompt: nextRequiredPrompt,
           currentLocale,
         }),
@@ -1022,7 +983,7 @@ export async function handleRealtimeToolCall(
 
       if (shouldSpeakExactBookingPrompt) {
         requestRealtimeResponse(
-          buildExactBookingPromptResponse({
+          buildExactRealtimeSpeechResponse({
             prompt: deterministicFollowupInstructions,
             currentLocale,
           }),

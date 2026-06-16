@@ -3,6 +3,7 @@ import type { CallState } from "../../types";
 import { executeRealtimeTool } from "../realtimeToolExecutor";
 import type { RealtimeToolResult } from "../toolTypes";
 import { clean } from "../utils/clean";
+import { buildExactRealtimeSpeechResponse } from "../buildExactRealtimeSpeechResponse";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -159,11 +160,16 @@ export async function handleRealtimeServerActionRequired(
   );
 
   if (finalFollowupInstructions) {
+    const finalLocale =
+      clean((finalRealtimeState as any)?.lang) ||
+      clean((nextRealtimeState as any)?.lang) ||
+      currentLocale;
+
     requestRealtimeResponse(
-      {
-        instructions: finalFollowupInstructions,
-        tool_choice: "none",
-      },
+      buildExactRealtimeSpeechResponse({
+        prompt: finalFollowupInstructions,
+        currentLocale: finalLocale,
+      }),
       `tool_followup:${actionRequired}`
     );
   }
