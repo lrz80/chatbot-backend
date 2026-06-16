@@ -539,21 +539,51 @@ export function renderBookingStepTemplateSafe(params: {
 
   const supportedKeys = new Set(getSupportedBookingTemplateKeys());
 
-  const rendered = template.replace(/\{([^{}]+)\}/g, (_, rawKey: string) => {
-    const key = clean(rawKey);
+  let rendered = "";
 
-    if (!supportedKeys.has(key)) {
-      throw new Error(`UNKNOWN_TEMPLATE_KEY:${key}`);
+  try {
+    rendered = template.replace(/\{([^{}]+)\}/g, (_, rawKey: string) => {
+      const key = clean(rawKey);
+
+      if (!supportedKeys.has(key)) {
+        throw new Error(`UNKNOWN_TEMPLATE_KEY:${key}`);
+      }
+
+      const value = clean(params.values[key]);
+
+      if (params.requireNonEmptyValues === true && !value) {
+        throw new Error(`EMPTY_TEMPLATE_VALUE:${key}`);
+      }
+
+      return value;
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+
+    if (message.startsWith("UNKNOWN_TEMPLATE_KEY:")) {
+      return {
+        ok: false,
+        text: "",
+        error: "UNKNOWN_TEMPLATE_KEY",
+        key: clean(message.replace("UNKNOWN_TEMPLATE_KEY:", "")),
+      };
     }
 
-    const value = clean(params.values[key]);
-
-    if (params.requireNonEmptyValues === true && !value) {
-      throw new Error(`EMPTY_TEMPLATE_VALUE:${key}`);
+    if (message.startsWith("EMPTY_TEMPLATE_VALUE:")) {
+      return {
+        ok: false,
+        text: "",
+        error: "EMPTY_TEMPLATE_VALUE",
+        key: clean(message.replace("EMPTY_TEMPLATE_VALUE:", "")),
+      };
     }
 
-    return value;
-  });
+    return {
+      ok: false,
+      text: "",
+      error: "MALFORMED_TEMPLATE",
+    };
+  }
 
   const cleanedRendered = clean(rendered);
 
