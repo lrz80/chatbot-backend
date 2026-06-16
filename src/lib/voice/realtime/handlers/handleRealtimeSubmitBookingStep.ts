@@ -442,7 +442,13 @@ export async function handleRealtimeSubmitBookingStep(
     return {
       ok: false,
       error: freshness.error,
-      message: "Waiting for a fresh user answer before submitting this booking step.",
+      next_required_step: freshness.pendingStepKey
+        ? {
+            step_key: freshness.pendingStepKey,
+            prompt: bookingContext.state.pendingBookingStepPrompt || "",
+            required: bookingContext.state.pendingBookingStepRequired ?? true,
+          }
+        : null,
     };
   }
 
