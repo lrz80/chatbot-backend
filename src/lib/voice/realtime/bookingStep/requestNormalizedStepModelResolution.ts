@@ -368,7 +368,6 @@ export function requestNormalizedStepModelResolution(params: {
 
   params.requestRealtimeResponse(
     {
-      conversation: "none",
       instructions,
       tool_choice: "required",
       input: [
