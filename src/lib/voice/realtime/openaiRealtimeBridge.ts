@@ -266,7 +266,6 @@ export async function createOpenAiRealtimeBridge({
     getRealtimeState: () => realtimeState,
     getLastUserTranscript: () => lastUserTranscript,
     getLastUserTranscriptSeq: () => lastUserTranscriptSeq,
-    enqueueRealtimeToolCall: toolCallQueue.enqueueRealtimeToolCall,
     enqueueSubmitBookingStepFromTranscript:
       toolCallQueue.enqueueSubmitBookingStepFromTranscript,
     requestRealtimeResponse,
@@ -586,10 +585,6 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (event.type === "response.function_call_arguments.done") {
-      if (bookingCoordinator.deferSubmitBookingStepUntilTranscriptIfNeeded(event)) {
-        return;
-      }
-
       toolCallQueue.enqueueRealtimeToolCall(event);
       return;
     }
@@ -818,14 +813,7 @@ export async function createOpenAiRealtimeBridge({
           localeLocked = transcriptResult.localeLocked;
           tenantId = transcriptResult.tenantId;
 
-          const didFlushDeferredSubmit =
-            bookingCoordinator.flushDeferredSubmitBookingStepIfReady(
-              "transcript_accepted"
-            );
-
-          if (!didFlushDeferredSubmit) {
-            bookingCoordinator.nudgeBookingStepProcessingAfterTranscript();
-          }
+          bookingCoordinator.nudgeBookingStepProcessingAfterTranscript();
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {
@@ -990,8 +978,6 @@ export async function createOpenAiRealtimeBridge({
        * This catch-up prevents the user from having to repeat the same answer.
        */
       bookingCoordinator.catchUpBookingStepIfCallerAnsweredBeforeTurnOpened();
-
-      bookingCoordinator.flushDeferredSubmitBookingStepIfReady("response_done");
 
       const flushedPendingResponse =
         responseController.flushPendingRealtimeResponse();
