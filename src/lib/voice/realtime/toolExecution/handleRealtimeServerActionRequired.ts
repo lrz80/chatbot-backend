@@ -2,7 +2,6 @@
 import type { CallState } from "../../types";
 import { executeRealtimeTool } from "../realtimeToolExecutor";
 import type { RealtimeToolResult } from "../buildToolFollowupInstructions";
-import { resolveRealtimeToolFollowupInstructions } from "../toolFollowup/resolveRealtimeToolFollowupInstructions";
 import { clean } from "../utils/clean";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
@@ -62,6 +61,35 @@ function clearConsumedPendingAction(state: CallState): CallState {
   return nextState as CallState;
 }
 
+function resolveServerActionFollowupInstructions(
+  serverActionResult: RealtimeToolResult
+): string {
+  const result = serverActionResult || {};
+
+  const retryPrompt =
+    clean((result as any)?.next_required_step?.retry_prompt || "") ||
+    clean((result as any)?.retry_prompt || "");
+
+  if ((result as any)?.ok === false && retryPrompt) {
+    return retryPrompt;
+  }
+
+  const nextRequiredPrompt = clean(
+    (result as any)?.next_required_step?.prompt || ""
+  );
+
+  if (nextRequiredPrompt) {
+    return nextRequiredPrompt;
+  }
+
+  const responseMessage =
+    clean((result as any)?.response_message || "") ||
+    clean((result as any)?.message || "") ||
+    clean((result as any)?.instructions || "");
+
+  return responseMessage;
+}
+
 export async function handleRealtimeServerActionRequired(
   params: HandleRealtimeServerActionRequiredParams
 ): Promise<HandleRealtimeServerActionRequiredResult> {
@@ -76,7 +104,6 @@ export async function handleRealtimeServerActionRequired(
     realtimeCfg,
     callSid,
     currentLocale,
-    realtimeState,
     nextRealtimeState,
     nextBookingFlowLoaded,
     nextCallEnding,
@@ -127,18 +154,9 @@ export async function handleRealtimeServerActionRequired(
       ? clearConsumedPendingAction(nextRealtimeState)
       : nextRealtimeState;
 
-  const followupInstructions = resolveRealtimeToolFollowupInstructions({
-    toolName: actionRequired,
-    toolResult: (serverActionResult || {}) as RealtimeToolResult,
-    currentLocale:
-      clean((finalRealtimeState as any)?.lang) ||
-      clean((realtimeState as any)?.lang) ||
-      currentLocale,
-  });
-
-  const finalFollowupInstructions =
-    clean(followupInstructions) ||
-    clean((serverActionResult as any)?.message || "");
+  const finalFollowupInstructions = resolveServerActionFollowupInstructions(
+    (serverActionResult || {}) as RealtimeToolResult
+  );
 
   if (finalFollowupInstructions) {
     requestRealtimeResponse(
