@@ -16,11 +16,23 @@ function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
   socket.send(JSON.stringify(payload));
 }
 
-function buildBlockedBookingStepResult(error: string): RealtimeToolResult {
+function buildBlockedBookingStepResult(params: {
+  error: string;
+  freshness: BlockedFreshness;
+  realtimeState: CallState;
+}): RealtimeToolResult {
+  const prompt = String(params.realtimeState.pendingBookingStepPrompt ?? "").trim();
+
   return {
     ok: false,
-    error,
-    message: error,
+    error: params.error,
+    next_required_step: params.freshness.pendingStepKey
+      ? {
+          step_key: params.freshness.pendingStepKey,
+          prompt,
+          required: params.realtimeState.pendingBookingStepRequired ?? true,
+        }
+      : null,
   };
 }
 
@@ -51,7 +63,11 @@ export function handleBlockedSubmitBookingStep(params: {
     callEnding,
   } = params;
 
-  const blockedResult = buildBlockedBookingStepResult(freshness.error);
+  const blockedResult = buildBlockedBookingStepResult({
+    error: freshness.error,
+    freshness,
+    realtimeState,
+  });
 
   console.warn(
     "[VOICE_REALTIME][BOOKING_STEP_SUBMIT_BLOCKED_STALE_OR_DUPLICATE_INPUT]",
