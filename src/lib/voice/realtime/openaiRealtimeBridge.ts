@@ -39,7 +39,6 @@ import {
   safeJsonParseRealtimeEvent,
 } from "./openAiRealtimeEvents";
 import { createRealtimeToolCallQueue } from "./realtimeToolCallQueue";
-import { createUserTranscriptFollowupController } from "./userTranscriptFollowupController";
 import { createRealtimeBargeInController } from "./realtimeBargeInController";
 
 type BridgeParams = {
@@ -272,16 +271,6 @@ export async function createOpenAiRealtimeBridge({
       toolCallQueue.enqueueSubmitBookingStepFromTranscript,
     requestRealtimeResponse,
   });
-
-  const userTranscriptFollowupController =
-    createUserTranscriptFollowupController({
-      getCallSid: () => callSid,
-      getRealtimeState: () => realtimeState,
-      getLastUserTranscript: () => lastUserTranscript,
-      getLastUserTranscriptSeq: () => lastUserTranscriptSeq,
-      getBookingFlowLoaded: () => bookingFlowLoaded,
-      requestRealtimeResponse,
-    });
 
   function performTwilioHangup(source: string): void {
     if (goodbyeHangupFallbackTimer) {
@@ -837,35 +826,6 @@ export async function createOpenAiRealtimeBridge({
           if (!didFlushDeferredSubmit) {
             bookingCoordinator.nudgeBookingStepProcessingAfterTranscript();
           }
-
-          const bookingTurnStatus = clean((realtimeState as any).bookingTurnStatus);
-          const pendingBookingStepKey = clean((realtimeState as any).pendingBookingStepKey);
-
-          const currentTranscriptSeq =
-            typeof lastUserTranscriptSeq === "number" ? lastUserTranscriptSeq : -1;
-
-          const pendingPromptAnchorSeq =
-            typeof (realtimeState as any).pendingBookingStepPromptAnchorSeq === "number"
-              ? (realtimeState as any).pendingBookingStepPromptAnchorSeq
-              : -1;
-
-          const isAnswerToPendingBookingStep =
-            Boolean(pendingBookingStepKey) &&
-            bookingTurnStatus === "waiting_user_answer" &&
-            currentTranscriptSeq > pendingPromptAnchorSeq;
-
-          if (isAnswerToPendingBookingStep) {
-            console.warn("[VOICE_REALTIME][USER_TRANSCRIPT_FOLLOWUP_SKIPPED_BOOKING_ANSWER]", {
-              callSid,
-              pendingBookingStepKey,
-              bookingTurnStatus,
-              lastUserTranscript,
-              lastUserTranscriptSeq,
-              pendingBookingStepPromptAnchorSeq: pendingPromptAnchorSeq,
-            });
-          } else {
-            userTranscriptFollowupController.requestFollowupAfterAcceptedUserTranscript();
-          }
         })
         .catch((error) => {
           console.error("[VOICE_REALTIME][TRANSCRIPT_HANDLER_FATAL_ERROR]", {
@@ -1164,8 +1124,7 @@ export async function createOpenAiRealtimeBridge({
       lastUserDigits = "";
       lastUserTranscriptSeq = 0;
       bookingCoordinator.reset();
-      userTranscriptFollowupController.reset();
-
+      
       assistantSpeaking = false;
       lastAssistantAudioDeltaAtMs = 0;
       lastAssistantAudioDoneAtMs = 0;
