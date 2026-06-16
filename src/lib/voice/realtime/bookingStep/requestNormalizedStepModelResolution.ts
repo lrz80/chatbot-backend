@@ -358,17 +358,45 @@ export function requestNormalizedStepModelResolution(params: {
             lastUserTranscript,
           });
 
+  const responseSource = confirmationStep
+    ? "booking_step_confirmation_model_resolution"
+    : phoneConfirmOrReplaceStep
+      ? "booking_step_phone_confirm_or_replace_model_resolution"
+      : datetimeStep
+        ? "booking_step_datetime_model_resolution"
+        : "booking_step_normalized_model_resolution";
+
   params.requestRealtimeResponse(
     {
+      conversation: "none",
       instructions,
       tool_choice: "required",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                "Internal booking step resolver input.",
+                "",
+                `Current booking step key: ${pendingBookingStepKey}`,
+                `Current booking slot: ${pendingSlot}`,
+                `Current expected type: ${expectedType}`,
+                `Current validation mode: ${validationMode}`,
+                `Current use inbound caller phone: ${useInboundCaller ? "true" : "false"}`,
+                `Caller latest answer: ${lastUserTranscript}`,
+                "",
+                "Use only this input.",
+                "Call submit_booking_step exactly once.",
+                `The submit_booking_step step_key must be: ${pendingBookingStepKey}`,
+              ].join("\n"),
+            },
+          ],
+        },
+      ],
     },
-    confirmationStep
-      ? "booking_step_confirmation_model_resolution"
-      : phoneConfirmOrReplaceStep
-        ? "booking_step_phone_confirm_or_replace_model_resolution"
-        : datetimeStep
-          ? "booking_step_datetime_model_resolution"
-          : "booking_step_normalized_model_resolution"
+    responseSource
   );
 }
