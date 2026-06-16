@@ -114,19 +114,53 @@ function buildRealtimeTemplateValues(
   const baseValues = buildBookingPromptTemplateValues(bookingState);
   const displayValues = buildDisplayTemplateAliases(baseValues);
 
-  const datetimeValue =
-    clean(displayValues.datetime) ||
-    clean(displayValues.appointment_datetime) ||
-    clean(displayValues.start_time) ||
-    clean(displayValues.startTime);
+const datetimeValue =
+  resolveDatetimeDisplayValue(displayValues.datetime) ||
+  resolveDatetimeDisplayValue(displayValues.appointment_datetime) ||
+  resolveDatetimeDisplayValue(displayValues.start_time) ||
+  resolveDatetimeDisplayValue(displayValues.startTime);
 
-  if (datetimeValue) {
-    displayValues.datetime = displayValues.datetime || datetimeValue;
-    displayValues.datetime_display =
-      displayValues.datetime_display || datetimeValue;
-  }
+if (datetimeValue) {
+  displayValues.datetime = datetimeValue;
+  displayValues.datetime_display = datetimeValue;
+}
 
   return displayValues;
+}
+
+function resolveDatetimeDisplayValue(value: unknown): string {
+  const raw = clean(value);
+
+  if (!raw) {
+    return "";
+  }
+
+  if (!raw.startsWith("{")) {
+    return raw;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+
+    if (!parsed || typeof parsed !== "object") {
+      return raw;
+    }
+
+    const status = clean((parsed as any).status).toLowerCase();
+
+    if (status !== "resolved") {
+      return "";
+    }
+
+    return (
+      clean((parsed as any).raw) ||
+      [clean((parsed as any).date_text), clean((parsed as any).time_text)]
+        .filter(Boolean)
+        .join(" ")
+    );
+  } catch {
+    return raw;
+  }
 }
 
 export function buildRealtimeNextRequiredStep(params: {
