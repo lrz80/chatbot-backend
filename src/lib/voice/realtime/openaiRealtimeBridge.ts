@@ -911,6 +911,77 @@ export async function createOpenAiRealtimeBridge({
         lastUserTranscriptSeq,
       });
 
+      if (isCancelledExactPromptResponse) {
+        responseController.markResponseDone({
+          lastUserTranscriptSeq,
+        });
+
+        realtimeState = attachLatestUserTranscriptSeq({
+          realtimeState: {
+            ...realtimeState,
+            bookingTurnStatus: "waiting_assistant_prompt",
+          } as CallState,
+          lastUserTranscriptSeq,
+        });
+
+        console.warn("[VOICE_REALTIME][CANCELLED_EXACT_PROMPT_RESPONSE_NOT_OPENING_TURN]", {
+          callSid,
+          responseId: responseStateBeforeDone.activeResponseId,
+          completedResponseSource,
+          retryExactPrompt,
+          pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
+          bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
+        });
+
+        if (shouldRetryExactPrompt && retryExactPrompt) {
+          requestRealtimeResponse(
+            {
+              conversation: "none",
+              tool_choice: "none",
+              metadata: {
+                purpose: "exact_booking_prompt_retry",
+                expected_prompt: retryExactPrompt,
+              },
+              instructions: [
+                "You are a speech renderer for a live phone booking flow.",
+                "Speak exactly the booking prompt provided in the input.",
+                "Do not use conversation history.",
+                "Do not reason.",
+                "Do not mention availability.",
+                "Do not add any other words.",
+              ].join("\n"),
+              input: [
+                {
+                  type: "message",
+                  role: "user",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: [
+                        "Speak exactly this booking prompt and nothing else:",
+                        "",
+                        retryExactPrompt,
+                      ].join("\n"),
+                    },
+                  ],
+                },
+              ],
+            },
+            "tool_followup:submit_booking_step:exact_retry"
+          );
+        }
+
+        expectedAssistantPromptForActiveResponse = retryExactPrompt;
+        pendingExactPromptRetry = false;
+        exactPromptViolationHandledForActiveResponse = false;
+        cancelledExactPromptResponseId = null;
+        didLogSuppressedAudioForActiveResponse = false;
+        lastAssistantTranscript = "";
+        currentAssistantTranscript = "";
+
+        return;
+      }
+
       const pendingBookingStepKey = clean(
         (realtimeState as any).pendingBookingStepKey
       );
