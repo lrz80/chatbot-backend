@@ -8,7 +8,10 @@ type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,
-  source?: string
+  source?: string,
+  options?: {
+    sendToolOutputToOpenAi?: boolean;
+  }
 ) => void;
 
 type RealtimeToolCallQueueParams = {
@@ -280,7 +283,10 @@ export function createRealtimeToolCallQueue(
           transcript: value,
           transcriptSeq,
         }),
-        "booking_step_model_resolution"
+        "booking_step_model_resolution",
+        {
+          sendToolOutputToOpenAi: false,
+        }
       );
 
       return;

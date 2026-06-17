@@ -13,12 +13,14 @@ type RequestRealtimeResponseParams = {
   source: string;
   shouldInterruptActiveResponse: boolean;
   startedAtUserTranscriptSeq: number;
+  sendToolOutputToOpenAi?: boolean;
 };
 
 type ResponseControllerState = {
   activeResponseId: string | null;
   activeResponseSource: string | null;
   activeResponseStartedAtUserTranscriptSeq: number;
+  activeResponseSendToolOutputToOpenAi: boolean;
   pendingResponseCreate: Record<string, unknown> | null;
   pendingResponseSource: string | null;
   awaitingResponseSource: string | null;
@@ -29,6 +31,7 @@ type AwaitingResponseCreateState = {
   source: string;
   startedAtUserTranscriptSeq: number;
   retryCount: number;
+  sendToolOutputToOpenAi: boolean;
 };
 
 const RESPONSE_CREATE_ACK_TIMEOUT_MS = 1200;
@@ -74,10 +77,12 @@ export function createRealtimeResponseController(
   let activeResponseId: string | null = null;
   let activeResponseSource: string | null = null;
   let activeResponseStartedAtUserTranscriptSeq = 0;
+  let activeResponseSendToolOutputToOpenAi = true;
 
   let pendingResponseCreate: Record<string, unknown> | null = null;
   let pendingResponseSource: string | null = null;
   let pendingResponseStartedAtUserTranscriptSeq: number | null = null;
+  let pendingResponseSendToolOutputToOpenAi = true;
 
   let awaitingResponseSource: string | null = null;
   let awaitingResponseCreate: AwaitingResponseCreateState | null = null;
@@ -141,6 +146,7 @@ export function createRealtimeResponseController(
       activeResponseId,
       activeResponseSource,
       activeResponseStartedAtUserTranscriptSeq,
+      activeResponseSendToolOutputToOpenAi,
       pendingResponseCreate,
       pendingResponseSource,
       awaitingResponseSource,
@@ -152,6 +158,7 @@ export function createRealtimeResponseController(
     source,
     shouldInterruptActiveResponse,
     startedAtUserTranscriptSeq,
+    sendToolOutputToOpenAi = true,
   }: RequestRealtimeResponseParams): void {
     const callSid = params.getCallSid();
     const streamSid = params.getStreamSid();
@@ -168,6 +175,7 @@ export function createRealtimeResponseController(
       pendingResponseCreate = event;
       pendingResponseSource = source;
       pendingResponseStartedAtUserTranscriptSeq = startedAtUserTranscriptSeq;
+      pendingResponseSendToolOutputToOpenAi = sendToolOutputToOpenAi;
 
       console.warn("[VOICE_REALTIME][RESPONSE_CREATE_QUEUED]", {
         callSid,
@@ -214,6 +222,7 @@ export function createRealtimeResponseController(
       source,
       startedAtUserTranscriptSeq,
       retryCount: 0,
+      sendToolOutputToOpenAi,
     };
 
     const responsePayload = getObject(event.response);
@@ -254,10 +263,12 @@ export function createRealtimeResponseController(
     const source = clean(pendingResponseSource || "");
     const startedAtUserTranscriptSeq =
       pendingResponseStartedAtUserTranscriptSeq ?? activeResponseStartedAtUserTranscriptSeq;
+    const sendToolOutputToOpenAi = pendingResponseSendToolOutputToOpenAi;
 
     pendingResponseCreate = null;
     pendingResponseSource = null;
     pendingResponseStartedAtUserTranscriptSeq = null;
+    pendingResponseSendToolOutputToOpenAi = true;
 
     activeResponseStartedAtUserTranscriptSeq = startedAtUserTranscriptSeq;
 
@@ -267,6 +278,7 @@ export function createRealtimeResponseController(
       source,
       startedAtUserTranscriptSeq,
       retryCount: 0,
+      sendToolOutputToOpenAi,
     };
 
     const responsePayload = getObject(event.response);
@@ -305,6 +317,8 @@ export function createRealtimeResponseController(
     activeResponseSource = awaitingResponseSource;
     activeResponseStartedAtUserTranscriptSeq =
       paramsForResponse.startedAtUserTranscriptSeq;
+    activeResponseSendToolOutputToOpenAi =
+      awaitingResponseCreate?.sendToolOutputToOpenAi !== false;
 
     awaitingResponseSource = null;
     awaitingResponseCreate = null;
@@ -319,6 +333,7 @@ export function createRealtimeResponseController(
 
     activeResponseId = null;
     activeResponseSource = null;
+    activeResponseSendToolOutputToOpenAi = true;
     activeResponseStartedAtUserTranscriptSeq =
       paramsForResponse.lastUserTranscriptSeq;
 

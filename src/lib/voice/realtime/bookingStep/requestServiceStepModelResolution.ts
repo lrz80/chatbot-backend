@@ -5,7 +5,10 @@ type RequestRealtimeResponse = (
     instructions: string;
     tool_choice?: "auto" | "none" | "required";
   },
-  source: string
+  source: string,
+  options?: {
+    sendToolOutputToOpenAi?: boolean;
+  }
 ) => void;
 
 function clean(value: unknown): string {
@@ -84,6 +87,9 @@ export function requestServiceStepModelResolution(params: {
       ].join("\n"),
       tool_choice: "auto",
     },
-    "booking_step_service_model_resolution"
+    "booking_step_service_model_resolution",
+    {
+      sendToolOutputToOpenAi: false,
+    }
   );
 }

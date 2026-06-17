@@ -340,7 +340,10 @@ export async function createOpenAiRealtimeBridge({
 
   function requestRealtimeResponse(
     response?: Record<string, unknown>,
-    source = "unknown"
+    source = "unknown",
+    options: {
+      sendToolOutputToOpenAi?: boolean;
+    } = {}
   ): void {
     const normalizedSource = clean(source);
 
@@ -426,6 +429,7 @@ export async function createOpenAiRealtimeBridge({
       source: normalizedSource,
       shouldInterruptActiveResponse,
       startedAtUserTranscriptSeq: lastUserTranscriptSeq,
+      sendToolOutputToOpenAi: options.sendToolOutputToOpenAi !== false,
     });
   }
 
@@ -586,7 +590,14 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (event.type === "response.function_call_arguments.done") {
-      toolCallQueue.enqueueRealtimeToolCall(event);
+      const responseState = responseController.getState();
+
+      toolCallQueue.enqueueRealtimeToolCall({
+        ...event,
+        sendToolOutputToOpenAi:
+          responseState.activeResponseSendToolOutputToOpenAi !== false,
+      });
+
       return;
     }
 
