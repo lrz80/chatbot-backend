@@ -48,7 +48,10 @@ type HandleRealtimeServerActionRequiredResult =
       resetLastUserDigits: true;
     };
 
-const SERVER_EXECUTABLE_ACTIONS = new Set(["create_appointment"]);
+const SERVER_EXECUTABLE_ACTIONS = new Set([
+  "create_appointment",
+  "send_booking_sms",
+]);
 
 function clearConsumedPendingAction(state: CallState): CallState {
   const nextState = {
@@ -183,7 +186,8 @@ export async function handleRealtimeServerActionRequired(
   });
 
   const baseFinalRealtimeState =
-    actionRequired === "create_appointment"
+    actionRequired === "create_appointment" ||
+    actionRequired === "send_booking_sms"
       ? clearConsumedPendingAction(nextRealtimeState)
       : nextRealtimeState;
 
