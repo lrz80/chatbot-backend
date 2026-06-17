@@ -869,12 +869,14 @@ export async function createOpenAiRealtimeBridge({
       assistantSpeaking = false;
       lastAssistantAudioDoneAtMs = Date.now();
 
+      const retryExactPrompt =
+        clean(expectedAssistantPromptForActiveResponse) ||
+        clean((realtimeState as any).pendingBookingStepPrompt || "");
+
       const shouldRetryExactPrompt =
         pendingExactPromptRetry &&
-        Boolean(expectedAssistantPromptForActiveResponse) &&
+        Boolean(retryExactPrompt) &&
         Boolean(clean((realtimeState as any).pendingBookingStepKey));
-
-      const retryExactPrompt = expectedAssistantPromptForActiveResponse;
 
       suppressActiveAssistantAudio = false;
 
