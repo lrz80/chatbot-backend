@@ -847,14 +847,6 @@ export async function handleRealtimeToolCall(
 
       const instructions = clean(response?.instructions || "");
 
-      if (isCreateAppointmentFollowup && instructions) {
-        requestRealtimeResponse(
-          buildToollessResponse(instructions),
-          source || "tool_followup:create_appointment"
-        );
-        return;
-      }
-
       requestRealtimeResponse(response, source);
     };
 
