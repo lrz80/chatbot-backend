@@ -47,18 +47,32 @@ function normalizeKey(value: unknown): string {
   return clean(value).toLowerCase();
 }
 
-function isProtocolValueForStep(params: {
+function isProtocolConfirmationValue(value: unknown): boolean {
+  const normalized = normalizeKey(value);
+
+  return (
+    normalized === "confirm" ||
+    normalized === "cancel" ||
+    normalized === "unknown"
+  );
+}
+
+function getPendingBookingStepExpectedType(state: CallState): string {
+  return normalizeKey((state as any)?.pendingBookingStepExpectedType);
+}
+
+function isConfirmationLikePendingStep(params: {
+  realtimeState: CallState;
   stepKey: string;
-  value: string;
 }): boolean {
   const stepKey = normalizeKey(params.stepKey);
-  const value = normalizeKey(params.value);
+  const expectedType = getPendingBookingStepExpectedType(params.realtimeState);
 
-  if (stepKey === "confirm" || stepKey === "confirmation") {
-    return value === "confirm" || value === "cancel" || value === "unknown";
-  }
-
-  return false;
+  return (
+    expectedType === "confirmation" ||
+    stepKey === "confirm" ||
+    stepKey === "confirmation"
+  );
 }
 
 function buildSyntheticSubmitBookingStepEvent(params: {
@@ -171,16 +185,18 @@ function buildPendingStepModelResolutionResponse(params: {
 }
 
 function shouldResolvePendingStepWithModel(params: {
+  realtimeState: CallState;
   stepKey: string;
   value: string;
 }): boolean {
-  const stepKey = normalizeKey(params.stepKey);
-
-  if (isProtocolValueForStep(params)) {
+  if (isProtocolConfirmationValue(params.value)) {
     return false;
   }
 
-  return stepKey === "confirm" || stepKey === "confirmation";
+  return isConfirmationLikePendingStep({
+    realtimeState: params.realtimeState,
+    stepKey: params.stepKey,
+  });
 }
 
 export function createRealtimeToolCallQueue(
@@ -267,6 +283,7 @@ export function createRealtimeToolCallQueue(
 
     if (
       shouldResolvePendingStepWithModel({
+        realtimeState: params.getRealtimeState(),
         stepKey,
         value,
       })
