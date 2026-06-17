@@ -591,11 +591,15 @@ export async function createOpenAiRealtimeBridge({
 
     if (event.type === "response.function_call_arguments.done") {
       const responseState = responseController.getState();
+      const activeResponseSource = clean(responseState.activeResponseSource || "");
+
+      const isInternalBookingModelResolution =
+        activeResponseSource.startsWith("booking_step_") &&
+        activeResponseSource.endsWith("_model_resolution");
 
       toolCallQueue.enqueueRealtimeToolCall({
         ...event,
-        sendToolOutputToOpenAi:
-          responseState.activeResponseSendToolOutputToOpenAi !== false,
+        sendToolOutputToOpenAi: !isInternalBookingModelResolution,
       });
 
       return;

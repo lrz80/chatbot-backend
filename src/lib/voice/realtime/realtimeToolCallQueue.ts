@@ -196,6 +196,7 @@ export function createRealtimeToolCallQueue(
 
         const toolCallResult = await handleRealtimeToolCall({
           event,
+          sendToolOutputToOpenAi: event.sendToolOutputToOpenAi !== false,
           openAiSocket: params.openAiSocket,
           requestRealtimeResponse: params.requestRealtimeResponse,
           callSid: params.getCallSid(),

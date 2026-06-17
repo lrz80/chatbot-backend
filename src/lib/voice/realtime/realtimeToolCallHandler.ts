@@ -27,6 +27,7 @@ type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
 type HandleRealtimeToolCallParams = {
   event: any;
+  sendToolOutputToOpenAi?: boolean;
   openAiSocket: WebSocket;
   requestRealtimeResponse: (
     response?: Record<string, unknown>,
@@ -149,6 +150,7 @@ export async function handleRealtimeToolCall(
 ): Promise<HandleRealtimeToolCallResult> {
   const {
     event,
+    sendToolOutputToOpenAi = true,
     openAiSocket,
     requestRealtimeResponse,
     callSid,
@@ -807,7 +809,10 @@ export async function handleRealtimeToolCall(
       next_required_step: toolResult?.next_required_step,
     });
 
-    if (!isSyntheticToolCall) {
+    const shouldSendFunctionCallOutput =
+      !isSyntheticToolCall && sendToolOutputToOpenAi !== false;
+
+    if (shouldSendFunctionCallOutput) {
       sendRealtimeJson(openAiSocket, {
         type: "conversation.item.create",
         item: {
@@ -817,10 +822,12 @@ export async function handleRealtimeToolCall(
         },
       });
     } else {
-      console.log("[VOICE_REALTIME][SYNTHETIC_TOOL_OUTPUT_NOT_SENT_TO_OPENAI]", {
+      console.log("[VOICE_REALTIME][TOOL_OUTPUT_NOT_SENT_TO_OPENAI]", {
         callSid,
         toolName,
         callId,
+        synthetic: isSyntheticToolCall,
+        sendToolOutputToOpenAi,
         ok: toolResult?.ok,
         error: toolResult?.error,
         nextRequiredStepKey: clean(toolResult?.next_required_step?.step_key || ""),
