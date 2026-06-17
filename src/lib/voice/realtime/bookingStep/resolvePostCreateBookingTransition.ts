@@ -55,7 +55,6 @@ function isActionablePostCreateStep(step: BookingFlowStepLike): boolean {
    * This step is optional, but still actionable because the caller must answer
    * yes/no before the server may call send_booking_sms or skip_booking_sms.
    */
-  if (stepKey === "offer_booking_sms") return true;
 
   if (step.required === true) return true;
   if (expectedType === "confirmation") return true;

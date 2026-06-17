@@ -62,6 +62,34 @@ function clearConsumedPendingAction(state: CallState): CallState {
   return nextState as CallState;
 }
 
+function applyServerActionNextRequiredStep(
+  state: CallState,
+  serverActionResult: RealtimeToolResult
+): CallState {
+  const nextStep = (serverActionResult as any)?.next_required_step;
+
+  if (!nextStep || typeof nextStep !== "object") {
+    return state;
+  }
+
+  const stepKey = clean(nextStep.step_key || "");
+  const prompt = clean(nextStep.prompt || "");
+  const required = nextStep.required === true;
+
+  if (!stepKey || !prompt) {
+    return state;
+  }
+
+  return {
+    ...state,
+    pendingBookingStepKey: stepKey,
+    pendingBookingStepPrompt: prompt,
+    pendingBookingStepRequired: required,
+    bookingTurnStatus: "waiting_assistant_prompt",
+    next_required_step: nextStep,
+  } as CallState;
+}
+
 function resolveServerActionFollowupInstructions(
   serverActionResult: RealtimeToolResult
 ): string {
@@ -75,12 +103,10 @@ function resolveServerActionFollowupInstructions(
     return retryPrompt;
   }
 
-  const nextRequiredPrompt = clean(
-    (result as any)?.next_required_step?.prompt || ""
-  );
+  const assistantPrompt = clean((result as any)?.assistant_prompt || "");
 
-  if (nextRequiredPrompt) {
-    return nextRequiredPrompt;
+  if (assistantPrompt) {
+    return assistantPrompt;
   }
 
   const responseMessage =
@@ -88,7 +114,11 @@ function resolveServerActionFollowupInstructions(
     clean((result as any)?.message || "") ||
     clean((result as any)?.instructions || "");
 
-  return responseMessage;
+  if (responseMessage) {
+    return responseMessage;
+  }
+
+  return clean((result as any)?.next_required_step?.prompt || "");
 }
 
 export async function handleRealtimeServerActionRequired(
@@ -150,10 +180,15 @@ export async function handleRealtimeServerActionRequired(
     message: serverActionResult?.message,
   });
 
-  const finalRealtimeState =
+  const baseFinalRealtimeState =
     actionRequired === "create_appointment"
       ? clearConsumedPendingAction(nextRealtimeState)
       : nextRealtimeState;
+
+  const finalRealtimeState = applyServerActionNextRequiredStep(
+    baseFinalRealtimeState,
+    (serverActionResult || {}) as RealtimeToolResult
+  );
 
   const finalFollowupInstructions = resolveServerActionFollowupInstructions(
     (serverActionResult || {}) as RealtimeToolResult
