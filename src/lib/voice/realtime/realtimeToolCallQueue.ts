@@ -58,7 +58,10 @@ function isProtocolConfirmationValue(value: unknown): boolean {
 }
 
 function getPendingBookingStepExpectedType(state: CallState): string {
-  return normalizeKey((state as any)?.pendingBookingStepExpectedType);
+  return (
+    normalizeKey((state as any)?.pendingBookingStepExpectedType) ||
+    normalizeKey((state as any)?.next_required_step?.expected_type)
+  );
 }
 
 function isConfirmationLikePendingStep(params: {

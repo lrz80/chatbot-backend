@@ -75,6 +75,7 @@ function applyServerActionNextRequiredStep(
   const stepKey = clean(nextStep.step_key || "");
   const prompt = clean(nextStep.prompt || "");
   const required = nextStep.required === true;
+  const expectedType = clean(nextStep.expected_type || "");
 
   if (!stepKey || !prompt) {
     return state;
@@ -85,6 +86,7 @@ function applyServerActionNextRequiredStep(
     pendingBookingStepKey: stepKey,
     pendingBookingStepPrompt: prompt,
     pendingBookingStepRequired: required,
+    pendingBookingStepExpectedType: expectedType,
     bookingTurnStatus: "waiting_assistant_prompt",
     next_required_step: nextStep,
   } as CallState;
