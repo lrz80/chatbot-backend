@@ -335,6 +335,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   }
 
   if (
+    !isWaitingForBookingAnswer &&
     isLikelyAssistantEcho({
       transcript,
       lastAssistantTranscript: params.lastAssistantTranscript,
@@ -394,6 +395,7 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
 
   if (msSinceAssistantAudioDone < effectiveMinMsAfterAssistantAudio) {
     if (
+      !isWaitingForBookingAnswer &&
       isLikelyAssistantEcho({
         transcript,
         lastAssistantTranscript: params.lastAssistantTranscript,
@@ -408,15 +410,17 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     }
 
     /**
-     * En booking, cualquier transcript demasiado cerca del audio de Aamy
-     * es de alto riesgo: eco, ruido, barge-in falso o corte de audio.
-     * No debe alimentar lastUserTranscript ni avanzar steps.
+     * If a booking step is waiting for the caller, do not go silent just because
+     * the transcript arrived close to assistant audio.
+     *
+     * Let the booking validator decide:
+     * - valid short answers like "sí" advance
+     * - invalid or echo-like text returns the configured retry prompt
      */
     if (isWaitingForBookingAnswer) {
       return {
-        ignore: true,
+        ignore: false,
         interruptAssistant: false,
-        reason: "TOO_CLOSE_TO_ASSISTANT_AUDIO",
         msSinceAssistantAudioDone,
       };
     }
