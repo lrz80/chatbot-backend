@@ -835,6 +835,27 @@ export async function handleRealtimeToolCall(
       });
     }
 
+    if (toolName === "end_call" && toolResult?.ok === true) {
+      console.warn("[VOICE_REALTIME][END_CALL_GOODBYE_FOLLOWUP_REQUESTED]", {
+        callSid,
+        callId,
+        currentLocale,
+      });
+
+      requestRealtimeResponse(
+        {
+          instructions: [
+            "Say a short, natural goodbye in the caller's active language.",
+            "Do not ask another question.",
+            "Do not offer more help.",
+            "Do not mention tools.",
+            "Do not continue the conversation.",
+          ].join("\n"),
+        },
+        "tool_followup:end_call"
+      );
+    }
+
     const actionRequired = clean((toolResult as any)?.action_required || "");
 
     const requestServerActionRealtimeResponse: typeof requestRealtimeResponse = (
