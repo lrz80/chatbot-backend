@@ -19,6 +19,12 @@ type HandleRealtimeResponseDoneParams = {
   endCallGoodbyeResponseId: string | null;
   callEnding: boolean;
   onEndCallGoodbyeCompleted: () => void;
+  bookingTurnOpenPlaybackGraceMs?: number;
+  scheduleBookingTurnOpenAfterPlaybackGrace?: (params: {
+    realtimeState: CallState;
+    logPayload: Record<string, unknown>;
+    graceMs: number;
+  }) => void;
 };
 
 type HandleRealtimeResponseDoneResult = {
@@ -61,24 +67,46 @@ export function handleRealtimeResponseDone(
     isBookingQuestionResponseSource(params.completedResponseSource) &&
     getBookingTurnStatus(nextRealtimeState) === "waiting_assistant_prompt"
   ) {
-    nextRealtimeState = markBookingWaitingForUserAnswer({
+    const openedState = markBookingWaitingForUserAnswer({
       realtimeState: nextRealtimeState,
       lastUserTranscriptSeq: params.lastUserTranscriptSeq,
     });
 
-    console.log("[VOICE_REALTIME][BOOKING_TURN_OPENED_FOR_USER_ANSWER]", {
+    const logPayload = {
       callSid: params.callSid,
       completedResponseSource: params.completedResponseSource,
-      bookingTurnStatus: (nextRealtimeState as any).bookingTurnStatus || "",
-      pendingBookingStepKey: nextRealtimeState.pendingBookingStepKey || "",
-      pendingBookingStepPrompt: nextRealtimeState.pendingBookingStepPrompt || "",
+      bookingTurnStatus: (openedState as any).bookingTurnStatus || "",
+      pendingBookingStepKey: openedState.pendingBookingStepKey || "",
+      pendingBookingStepPrompt: openedState.pendingBookingStepPrompt || "",
       pendingBookingStepPromptAnchorSeq:
-        typeof nextRealtimeState.pendingBookingStepPromptAnchorSeq === "number"
-          ? nextRealtimeState.pendingBookingStepPromptAnchorSeq
+        typeof openedState.pendingBookingStepPromptAnchorSeq === "number"
+          ? openedState.pendingBookingStepPromptAnchorSeq
           : null,
       lastUserTranscript: params.lastUserTranscript,
       lastUserTranscriptSeq: params.lastUserTranscriptSeq,
-    });
+    };
+
+    const graceMs =
+      typeof params.bookingTurnOpenPlaybackGraceMs === "number"
+        ? params.bookingTurnOpenPlaybackGraceMs
+        : 0;
+
+    if (graceMs > 0 && params.scheduleBookingTurnOpenAfterPlaybackGrace) {
+      console.log("[VOICE_REALTIME][BOOKING_TURN_OPEN_DELAYED_FOR_PLAYBACK_GRACE]", {
+        ...logPayload,
+        graceMs,
+      });
+
+      params.scheduleBookingTurnOpenAfterPlaybackGrace({
+        realtimeState: openedState,
+        logPayload,
+        graceMs,
+      });
+    } else {
+      nextRealtimeState = openedState;
+
+      console.log("[VOICE_REALTIME][BOOKING_TURN_OPENED_FOR_USER_ANSWER]", logPayload);
+    }
   }
 
   if (completedEndCallGoodbye) {

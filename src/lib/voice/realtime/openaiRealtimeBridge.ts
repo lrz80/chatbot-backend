@@ -1062,6 +1062,53 @@ export async function createOpenAiRealtimeBridge({
         onEndCallGoodbyeCompleted: () => {
           scheduleTwilioHangupAfterGoodbye("response_done_callback");
         },
+        bookingTurnOpenPlaybackGraceMs: 900,
+        scheduleBookingTurnOpenAfterPlaybackGrace: ({
+          realtimeState: delayedRealtimeState,
+          logPayload,
+          graceMs,
+        }) => {
+          const delayedPendingStepKey = clean(
+            (delayedRealtimeState as any).pendingBookingStepKey
+          );
+
+          setTimeout(() => {
+            if (callEnding || hangupRequestedByTool) {
+              return;
+            }
+
+            const currentPendingStepKey = clean(
+              (realtimeState as any).pendingBookingStepKey
+            );
+
+            const currentBookingTurnStatus = clean(
+              (realtimeState as any).bookingTurnStatus
+            );
+
+            if (
+              !delayedPendingStepKey ||
+              currentPendingStepKey !== delayedPendingStepKey ||
+              currentBookingTurnStatus !== "waiting_assistant_prompt"
+            ) {
+              console.log("[VOICE_REALTIME][BOOKING_TURN_OPEN_AFTER_GRACE_SKIPPED]", {
+                callSid,
+                delayedPendingStepKey,
+                currentPendingStepKey,
+                currentBookingTurnStatus,
+                graceMs,
+              });
+
+              return;
+            }
+
+            realtimeState = delayedRealtimeState;
+
+            console.log("[VOICE_REALTIME][BOOKING_TURN_OPENED_AFTER_PLAYBACK_GRACE]", {
+              ...logPayload,
+              graceMs,
+            });
+          }, graceMs);
+        },
       });
 
       realtimeState = attachLatestUserTranscriptSeq({
