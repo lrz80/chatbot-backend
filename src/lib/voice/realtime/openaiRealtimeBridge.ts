@@ -840,13 +840,27 @@ export async function createOpenAiRealtimeBridge({
             (realtimeState as any).bookingTurnStatus
           );
 
-          const shouldWakeModelForFreeUserTranscript =
+          const isFreeConversationTurn =
             !hasPendingBookingStepAfterTranscript &&
-            !bookingTurnStatusAfterTranscript &&
+            (
+              !bookingTurnStatusAfterTranscript ||
+              bookingTurnStatusAfterTranscript === "idle"
+            );
+
+          const shouldWakeModelForFreeUserTranscript =
+            isFreeConversationTurn &&
             !callEnding &&
             !hangupRequestedByTool;
 
           if (shouldWakeModelForFreeUserTranscript) {
+            console.log("[VOICE_REALTIME][FREE_USER_TRANSCRIPT_MODEL_WAKE_REQUESTED]", {
+              callSid,
+              lastUserTranscript,
+              lastUserTranscriptSeq,
+              bookingTurnStatus: bookingTurnStatusAfterTranscript,
+              pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
+            });
+
             requestRealtimeResponse(
               {
                 tool_choice: "auto",
