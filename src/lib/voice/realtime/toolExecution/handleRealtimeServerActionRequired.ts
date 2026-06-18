@@ -209,15 +209,16 @@ export async function handleRealtimeServerActionRequired(
     if (actionRequired === "send_booking_sms") {
       requestRealtimeResponse(
         {
+          tool_choice: "none",
           instructions: [
             "You are continuing a live phone conversation after a booking SMS was sent.",
-            "Do not render the backend message word-for-word unless it sounds natural.",
             "Tell the caller that the SMS was sent.",
             "Then ask whether they need anything else.",
             "Use the caller's active language.",
             `The active language is ${finalLocale}.`,
             `Backend SMS result message: ${JSON.stringify(finalFollowupInstructions)}`,
-            "Do not call another tool in this response.",
+            "Do not mention tools.",
+            "Do not call any tool.",
           ].join("\n"),
         },
         `tool_followup:${actionRequired}`
