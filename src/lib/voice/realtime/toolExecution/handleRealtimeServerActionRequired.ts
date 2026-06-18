@@ -206,13 +206,31 @@ export async function handleRealtimeServerActionRequired(
       clean((nextRealtimeState as any)?.lang) ||
       currentLocale;
 
-    requestRealtimeResponse(
-      buildExactRealtimeSpeechResponse({
-        prompt: finalFollowupInstructions,
-        currentLocale: finalLocale,
-      }),
-      `tool_followup:${actionRequired}`
-    );
+    if (actionRequired === "send_booking_sms") {
+      requestRealtimeResponse(
+        {
+          instructions: [
+            "You are continuing a live phone conversation after a booking SMS was sent.",
+            "Do not render the backend message word-for-word unless it sounds natural.",
+            "Tell the caller that the SMS was sent.",
+            "Then ask whether they need anything else.",
+            "Use the caller's active language.",
+            `The active language is ${finalLocale}.`,
+            `Backend SMS result message: ${JSON.stringify(finalFollowupInstructions)}`,
+            "Do not call another tool in this response.",
+          ].join("\n"),
+        },
+        `tool_followup:${actionRequired}`
+      );
+    } else {
+      requestRealtimeResponse(
+        buildExactRealtimeSpeechResponse({
+          prompt: finalFollowupInstructions,
+          currentLocale: finalLocale,
+        }),
+        `tool_followup:${actionRequired}`
+      );
+    }
   }
 
   return {
