@@ -194,6 +194,54 @@ function resolveStructuredDatetimeProtocolValue(params: {
   return null;
 }
 
+function isConfirmationProtocolValue(value: unknown): boolean {
+  const normalized = clean(value).toLowerCase();
+
+  return (
+    normalized === "confirm" ||
+    normalized === "cancel" ||
+    normalized === "unknown"
+  );
+}
+
+function resolveRealtimeConfirmationProtocolValue(params: {
+  value: string;
+  rawTranscriptValue: string;
+  modelValue: string;
+}): RealtimeSubmittedStepValueResult {
+  const modelValue = clean(params.modelValue).toLowerCase();
+  const value = clean(params.value).toLowerCase();
+
+  if (isConfirmationProtocolValue(modelValue)) {
+    return {
+      ok: true,
+      value: modelValue,
+      rawTranscriptValue: params.rawTranscriptValue,
+      modelValue: params.modelValue,
+      source: "model",
+    };
+  }
+
+  if (isConfirmationProtocolValue(value)) {
+    return {
+      ok: true,
+      value,
+      rawTranscriptValue: params.rawTranscriptValue,
+      modelValue: params.modelValue,
+      source: "model",
+    };
+  }
+
+  return {
+    ok: false,
+    error: "INCOMPATIBLE_TEXT_VALUE",
+    value: "",
+    rawTranscriptValue: params.rawTranscriptValue,
+    modelValue: params.modelValue,
+    source: "none",
+  };
+}
+
 export function resolveRealtimeSubmittedStepValue(params: {
   step: BookingFlowStepLike;
   value: string;
@@ -237,6 +285,14 @@ export function resolveRealtimeSubmittedStepValue(params: {
       modelValue,
       source: "none",
     };
+  }
+
+  if (expectedType === "confirmation" || slot === "confirmation") {
+    return resolveRealtimeConfirmationProtocolValue({
+      value,
+      rawTranscriptValue,
+      modelValue,
+    });
   }
 
   if (validationKind === "structured") {

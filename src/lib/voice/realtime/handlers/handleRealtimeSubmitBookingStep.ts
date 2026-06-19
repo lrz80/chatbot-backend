@@ -270,12 +270,10 @@ function buildSubmitValueCandidates(params: {
     primarySource === "model" &&
     isAllowedConfirmationProtocolValue(primaryValue)
   ) {
-    return [
-      {
-        source: "model",
-        value: normalizeKey(primaryValue),
-      },
-    ];
+    orderedCandidates.push({
+      source: "model",
+      value: primaryValue,
+    });
   }
 
   if (transcriptValue) {
