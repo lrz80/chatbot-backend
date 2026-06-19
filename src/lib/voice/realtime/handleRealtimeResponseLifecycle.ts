@@ -39,6 +39,7 @@ function isBookingQuestionResponseSource(source: string | null): boolean {
 
   return (
     cleanSource === "tool_followup:get_booking_flow" ||
+    cleanSource === "tool_followup:create_appointment" ||
     cleanSource.startsWith("tool_followup:submit_booking_step")
   );
 }
