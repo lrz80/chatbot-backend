@@ -85,7 +85,7 @@ export function requestServiceStepModelResolution(params: {
         "Always call submit_booking_step exactly once.",
         "Do not advance to another booking step yourself.",
       ].join("\n"),
-      tool_choice: "auto",
+      tool_choice: "required",
     },
     "booking_step_service_model_resolution",
     {

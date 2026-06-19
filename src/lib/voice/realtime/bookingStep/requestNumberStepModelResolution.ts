@@ -67,7 +67,7 @@ export function requestNumberStepModelResolution(params: {
         "Never explain anything.",
         "Examples of valid normalized values: 20 libras, 30 pounds, 12 kg, 4 people.",
       ].join("\n"),
-      tool_choice: "auto",
+      tool_choice: "required",
     },
     "booking_step_number_model_resolution"
   );
