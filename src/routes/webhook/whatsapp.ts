@@ -82,6 +82,10 @@ import type { VisualTurnEvidence } from '../../lib/channels/engine/turn/types';
 
 import { userExternalLinkGuard } from "../../lib/guards/userExternalLinkGuard";
 
+import { normalizeCatalogRole } from "../../lib/catalog/normalizeCatalogRole";
+import { renderGenericPriceSummaryReply } from "../../lib/services/pricing/renderGenericPriceSummaryReply";
+import { composeBusinessInfoAnswer } from "../../lib/channels/engine/businessInfo/composeBusinessInfoAnswer";
+
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
   tenant?: any;
@@ -953,56 +957,6 @@ export async function procesarMensajeWhatsApp(
     const wantsBusinessFacets =
       asksPrices || asksSchedules || asksLocation || asksAvailability;
 
-    const canonicalBusinessInfoBody = wantsBusinessFacets
-      ? await resolveBusinessInfoFacetsCanonicalBody({
-          pool,
-          tenantId: tenant.id,
-          canal,
-          idiomaDestino,
-          userInput,
-          promptBaseMem,
-          infoClave: String(tenant?.info_clave || ""),
-          convoCtx,
-          facets: {
-            asksPrices,
-            asksSchedules,
-            asksLocation,
-            asksAvailability,
-          },
-          routingHints: (signals as any)?.detectedRoutingHints || null,
-        })
-      : await resolveBusinessInfoOverviewCanonicalBody({
-          tenantId: tenant.id,
-          canal,
-          idiomaDestino,
-          userInput,
-          promptBaseMem,
-          infoClave: String(tenant?.info_clave || ""),
-          convoCtx,
-          overviewMode,
-        });
-
-    const normalizedCanonicalBody = String(canonicalBusinessInfoBody || "").trim();
-
-    if (!normalizedCanonicalBody) {
-      console.warn("[BUSINESS_INFO][EMPTY_CANONICAL_BODY]", {
-        tenantId: tenant.id,
-        canal,
-        contactoNorm,
-        userInput,
-        routeIntent,
-        wantsBusinessFacets,
-        continuedBusinessInfoIntent,
-        facets: {
-          asksPrices,
-          asksSchedules,
-          asksLocation,
-          asksAvailability,
-        },
-      });
-      return false;
-    }
-
     const resolvedBusinessIntent =
       wantsBusinessFacets
         ? asksPrices && asksSchedules
@@ -1034,6 +988,137 @@ export async function procesarMensajeWhatsApp(
           sourceDomain: "business_info",
         })
       : null;
+
+    if (wantsBusinessFacets) {
+      const composedBusinessInfo = await composeBusinessInfoAnswer({
+        pool,
+        tenantId: tenant.id,
+        canal,
+        idiomaDestino,
+        userInput,
+        contactoNorm,
+        messageId: messageId || null,
+        promptBaseMem,
+        infoClave: String(tenant?.info_clave || ""),
+        convoCtx,
+        detectedIntent: resolvedBusinessIntent,
+        intentFallback: routeIntent,
+        detectedFacets: {
+          asksPrices,
+          asksSchedules,
+          asksLocation,
+          asksAvailability,
+        },
+        detectedCommercial,
+        routingHints: (signals as any)?.detectedRoutingHints || null,
+        externalAction: nextActionContext
+          ? {
+              type: "link",
+              targetUrl: nextActionContext.targetUrl,
+            }
+          : null,
+        normalizeCatalogRole,
+        traducirTexto: traducirMensaje,
+        renderGenericPriceSummaryReply,
+        maxLines: MAX_WHATSAPP_LINES,
+      });
+
+      if (!composedBusinessInfo.handled || !composedBusinessInfo.reply) {
+        console.warn("[BUSINESS_INFO][EMPTY_COMPOSED_ANSWER]", {
+          tenantId: tenant.id,
+          canal,
+          contactoNorm,
+          userInput,
+          routeIntent,
+          resolvedBusinessIntent,
+          wantsBusinessFacets,
+          continuedBusinessInfoIntent,
+          facets: {
+            asksPrices,
+            asksSchedules,
+            asksLocation,
+            asksAvailability,
+          },
+          source: composedBusinessInfo.source || null,
+        });
+
+        return false;
+      }
+
+      const finalBusinessInfoText = await ensureReplyLanguage(
+        String(composedBusinessInfo.reply || "").trim(),
+        idiomaDestino
+      );
+
+      if (!finalBusinessInfoText) {
+        return false;
+      }
+
+      const executedBusinessInfoPatch = buildExecutedDomainContextPatch({
+        executedDomain: "business_info",
+        executedIntent: composedBusinessInfo.intent || resolvedBusinessIntent,
+        assistantText: finalBusinessInfoText,
+        actionContext: nextActionContext,
+      });
+
+      const mergedBusinessInfoPatch = {
+        ...(composedBusinessInfo.ctxPatch || {}),
+        ...executedBusinessInfoPatch,
+      };
+
+      transition({ patchCtx: mergedBusinessInfoPatch });
+
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        ...mergedBusinessInfoPatch,
+      };
+
+      INTENCION_FINAL_CANONICA =
+        composedBusinessInfo.intent || resolvedBusinessIntent;
+
+      lastIntent =
+        composedBusinessInfo.intent || resolvedBusinessIntent;
+
+      await replyAndExit(
+        finalBusinessInfoText,
+        composedBusinessInfo.source || "business_info",
+        composedBusinessInfo.intent || resolvedBusinessIntent
+      );
+
+      return true;
+    }
+
+    const canonicalBusinessInfoBody = await resolveBusinessInfoOverviewCanonicalBody({
+      tenantId: tenant.id,
+      canal,
+      idiomaDestino,
+      userInput,
+      promptBaseMem,
+      infoClave: String(tenant?.info_clave || ""),
+      convoCtx,
+      overviewMode,
+    });
+
+    const normalizedCanonicalBody = String(canonicalBusinessInfoBody || "").trim();
+
+    if (!normalizedCanonicalBody) {
+      console.warn("[BUSINESS_INFO][EMPTY_CANONICAL_BODY]", {
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        userInput,
+        routeIntent,
+        wantsBusinessFacets,
+        continuedBusinessInfoIntent,
+        facets: {
+          asksPrices,
+          asksSchedules,
+          asksLocation,
+          asksAvailability,
+        },
+      });
+      return false;
+    }
 
     const rendered = await renderFastpathDmReply({
       tenantId: tenant.id,
