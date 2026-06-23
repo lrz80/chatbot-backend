@@ -22,6 +22,7 @@ type ComposeFacetReplyArgs = {
   messageId: string | null;
   promptBaseMem: string;
   infoClave: string;
+  convoCtx?: any;
 
   detectedIntent: string | null;
   intentFallback: string | null;
@@ -45,18 +46,22 @@ function resolveFacetIntent(args: {
   intentFallback: string | null;
   detectedFacets?: IntentFacets | null;
 }): string {
-  const detected = String(args.detectedIntent || "").trim();
-  if (detected) return detected;
-
-  const fallback = String(args.intentFallback || "").trim();
-  if (fallback) return fallback;
-
   const facets = args.detectedFacets;
+
+  if (facets?.asksPrices && facets?.asksSchedules) {
+    return "precio_y_horario";
+  }
 
   if (facets?.asksPrices) return "precio";
   if (facets?.asksSchedules) return "horario";
   if (facets?.asksLocation) return "ubicacion";
   if (facets?.asksAvailability) return "disponibilidad";
+
+  const detected = String(args.detectedIntent || "").trim();
+  if (detected) return detected;
+
+  const fallback = String(args.intentFallback || "").trim();
+  if (fallback) return fallback;
 
   return "info_general";
 }
@@ -93,6 +98,7 @@ export async function composeFacetReply(
     messageId,
     promptBaseMem,
     infoClave,
+    convoCtx,
     detectedIntent,
     intentFallback,
     detectedFacets,
@@ -130,6 +136,7 @@ export async function composeFacetReply(
     userInput,
     promptBaseMem,
     infoClave,
+    convoCtx: convoCtx || {},
     facets: {
       asksSchedules: detectedFacets?.asksSchedules === true,
       asksLocation: detectedFacets?.asksLocation === true,
