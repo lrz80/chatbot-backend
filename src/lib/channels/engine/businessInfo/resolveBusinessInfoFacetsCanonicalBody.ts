@@ -21,8 +21,9 @@ type Args = {
   userInput: string;
   promptBaseMem: string;
   infoClave: string;
-  convoCtx?: any;
+  convoCtx: any;
   facets: {
+    asksPrices?: boolean;
     asksSchedules?: boolean;
     asksLocation?: boolean;
     asksAvailability?: boolean;

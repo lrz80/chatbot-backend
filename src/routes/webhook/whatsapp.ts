@@ -876,7 +876,13 @@ export async function procesarMensajeWhatsApp(
       return false;
     }
 
-    return params.asksSchedules && params.resolvedBusinessIntent === "horario";
+    return (
+      params.asksSchedules &&
+      (
+        params.resolvedBusinessIntent === "horario" ||
+        params.resolvedBusinessIntent === "precio_y_horario"
+      )
+    );
   }
 
   async function tryBusinessInfoOutsideFastpath(params: {
@@ -887,6 +893,7 @@ export async function procesarMensajeWhatsApp(
     const routeIntent = String(params.intent || "").trim() || "info_general";
     const overviewMode = params.overviewMode ?? "general_overview";
 
+    const explicitAsksPrices = params.detectedFacets?.asksPrices === true;
     const explicitAsksSchedules = params.detectedFacets?.asksSchedules === true;
     const explicitAsksLocation = params.detectedFacets?.asksLocation === true;
     const explicitAsksAvailability = params.detectedFacets?.asksAvailability === true;
@@ -916,12 +923,13 @@ export async function procesarMensajeWhatsApp(
       !explicitAsksAvailability &&
       continuedBusinessInfoIntent === "disponibilidad";
 
+    const asksPrices = explicitAsksPrices;
     const asksSchedules = explicitAsksSchedules || inheritedAsksSchedules;
     const asksLocation = explicitAsksLocation || inheritedAsksLocation;
     const asksAvailability = explicitAsksAvailability || inheritedAsksAvailability;
 
     const wantsBusinessFacets =
-      asksSchedules || asksLocation || asksAvailability;
+      asksPrices || asksSchedules || asksLocation || asksAvailability;
 
     const canonicalBusinessInfoBody = wantsBusinessFacets
       ? await resolveBusinessInfoFacetsCanonicalBody({
@@ -934,6 +942,7 @@ export async function procesarMensajeWhatsApp(
           infoClave: String(tenant?.info_clave || ""),
           convoCtx,
           facets: {
+            asksPrices,
             asksSchedules,
             asksLocation,
             asksAvailability,
@@ -963,6 +972,7 @@ export async function procesarMensajeWhatsApp(
         wantsBusinessFacets,
         continuedBusinessInfoIntent,
         facets: {
+          asksPrices,
           asksSchedules,
           asksLocation,
           asksAvailability,
@@ -973,7 +983,11 @@ export async function procesarMensajeWhatsApp(
 
     const resolvedBusinessIntent =
       wantsBusinessFacets
-        ? asksSchedules && !asksLocation && !asksAvailability
+        ? asksPrices && asksSchedules
+          ? "precio_y_horario"
+          : asksPrices
+          ? "precio"
+          : asksSchedules && !asksLocation && !asksAvailability
           ? "horario"
           : asksLocation && !asksSchedules && !asksAvailability
           ? "ubicacion"
@@ -1017,6 +1031,12 @@ export async function procesarMensajeWhatsApp(
           : "info_general_overview_db",
         intent: resolvedBusinessIntent,
         catalogPayload: undefined,
+        externalAction: nextActionContext
+          ? {
+              type: "link",
+              targetUrl: nextActionContext.targetUrl,
+            }
+          : undefined,
       },
       detectedIntent: resolvedBusinessIntent,
       intentFallback: resolvedBusinessIntent,
