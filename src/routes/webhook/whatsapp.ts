@@ -72,6 +72,7 @@ import type { VisualTurnEvidence } from '../../lib/channels/engine/turn/types';
 
 import { userExternalLinkGuard } from "../../lib/guards/userExternalLinkGuard";
 import { executeDomainRouterTurn } from "../../lib/channels/engine/domain/executeDomainRouterTurn";
+import { applyStaleSelectionContextReset } from "../../lib/channels/engine/state/applyStaleSelectionContextReset";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -1094,170 +1095,24 @@ export async function procesarMensajeWhatsApp(
 
   // ===============================
   // 🧹 RESET de selección vieja si entra una intención nueva clara
-  // SIN usar detectedInterest ni regex de vertical
   // ===============================
   {
-    const intentNow = INTENCION_FINAL_CANONICA || detectedIntent || null;
+    const staleSelectionReset = applyStaleSelectionContextReset({
+      convoCtx,
+      userInput,
+      intentNow: INTENCION_FINAL_CANONICA || detectedIntent || null,
+      detectedFacets,
+    });
 
-    const hasStaleSelectionContext =
-      Boolean((convoCtx as any)?.expectingVariant) ||
-      Boolean((convoCtx as any)?.selectedServiceId) ||
-      Boolean((convoCtx as any)?.last_plan_list?.length) ||
-      Boolean((convoCtx as any)?.last_package_list?.length) ||
-      Boolean((convoCtx as any)?.pending_link_lookup) ||
-      Boolean((convoCtx as any)?.pendingCatalogChoice) ||
-      Boolean((convoCtx as any)?.last_service_id) ||
-      Boolean((convoCtx as any)?.structuredService) ||
-      (
-        Array.isArray((convoCtx as any)?.presentedVariantOptions) &&
-        (convoCtx as any).presentedVariantOptions.length > 0
-      ) ||
-      (
-        Array.isArray((convoCtx as any)?.last_variant_options) &&
-        (convoCtx as any).last_variant_options.length > 0
-      ) ||
-      Boolean((convoCtx as any)?.continuationContext?.lastTurn);
-
-    const rawInput = String(userInput || "").trim();
-    const inputTokens = rawInput
-      .split(" ")
-      .map((token) => token.trim())
-      .filter(Boolean);
-
-    const numericInput = Number(rawInput);
-
-    const isNumericSelection =
-      Number.isInteger(numericInput) &&
-      numericInput >= 1 &&
-      numericInput <= 9 &&
-      String(numericInput) === rawInput;
-
-    const hasQuestionMark =
-      rawInput.includes("?") || rawInput.includes("¿");
-
-    const isShortFreeText =
-      rawInput.length > 0 && rawInput.length <= 20;
-
-    const isClearlyLongSentence =
-      inputTokens.length >= 5;
-
-    const isLowAutonomySelectionCandidate =
-      isShortFreeText &&
-      !hasQuestionMark &&
-      !isClearlyLongSentence;
-
-    const hasPendingCatalogChoiceForSelection =
-      Boolean((convoCtx as any)?.pendingCatalogChoice) &&
-      Array.isArray((convoCtx as any)?.pendingCatalogChoice?.options) &&
-      (convoCtx as any).pendingCatalogChoice.options.length > 0;
-
-    const hasActiveSelectionContext =
-      Boolean((convoCtx as any)?.pending_link_lookup) ||
-      Boolean((convoCtx as any)?.pending_price_lookup) ||
-      Boolean((convoCtx as any)?.expectingVariant) ||
-      hasPendingCatalogChoiceForSelection ||
-      (Array.isArray((convoCtx as any)?.pending_link_options) &&
-        (convoCtx as any).pending_link_options.length > 0) ||
-      (Array.isArray((convoCtx as any)?.last_plan_list) &&
-        (convoCtx as any).last_plan_list.length > 0);
-
-    const looksLikeSelectionReply =
-      isNumericSelection ||
-      (
-        hasActiveSelectionContext &&
-        isLowAutonomySelectionCandidate
-      );
-
-    const shouldResetStaleSelectionContext =
-      Boolean(intentNow) &&
-      hasStaleSelectionContext &&
-      !looksLikeSelectionReply &&
-      (
-        detectedFacets?.asksSchedules === true ||
-        detectedFacets?.asksPrices === true ||
-        detectedFacets?.asksLocation === true ||
-        detectedFacets?.asksAvailability === true ||
-        intentNow === "agendar" ||
-        intentNow === "booking_start" ||
-        intentNow === "info_servicio" ||
-        intentNow === "precio" ||
-        intentNow === "planes_precios" ||
-        intentNow === "horario"
-      );
-
-    if (shouldResetStaleSelectionContext) {
-      (convoCtx as any).expectingVariant = false;
-      (convoCtx as any).selectedServiceId = null;
-
-      (convoCtx as any).last_plan_list = null;
-      (convoCtx as any).last_plan_list_at = null;
-
-      (convoCtx as any).last_package_list = null;
-      (convoCtx as any).last_package_list_at = null;
-
-      (convoCtx as any).last_list_kind = null;
-      (convoCtx as any).last_list_kind_at = null;
-
-      (convoCtx as any).pending_link_lookup = null;
-      (convoCtx as any).pending_link_at = null;
-      (convoCtx as any).pending_link_options = null;
-
-      (convoCtx as any).last_service_id = null;
-      (convoCtx as any).last_service_name = null;
-      (convoCtx as any).last_service_label = null;
-
-      (convoCtx as any).last_entity_kind = null;
-      (convoCtx as any).last_entity_at = null;
-
-      (convoCtx as any).structuredService = null;
-
-      (convoCtx as any).pendingCatalogChoice = null;
-      (convoCtx as any).pendingCatalogChoiceAt = null;
-
-      (convoCtx as any).lastPresentedEntityIds = null;
-      (convoCtx as any).lastPresentedFamilyKeys = null;
-
-      (convoCtx as any).expectingVariantForEntityId = null;
-      (convoCtx as any).expectedVariantIntent = null;
-
-      (convoCtx as any).presentedVariantOptions = null;
-      (convoCtx as any).last_variant_options = null;
-      (convoCtx as any).last_variant_options_at = null;
-
-      (convoCtx as any).continuationContext = null;
-      (convoCtx as any).last_assistant_turn = null;
+    if (staleSelectionReset.shouldReset) {
+      transition({ patchCtx: staleSelectionReset.ctxPatch });
 
       finalCtxPatch = {
         ...finalCtxPatch,
-        expectingVariant: false,
-        selectedServiceId: null,
-        last_plan_list: null,
-        last_plan_list_at: null,
-        last_package_list: null,
-        last_package_list_at: null,
-        last_list_kind: null,
-        last_list_kind_at: null,
-        pending_link_lookup: null,
-        pending_link_at: null,
-        pending_link_options: null,
-        last_service_id: null,
-        last_service_name: null,
-        last_service_label: null,
-        last_entity_kind: null,
-        last_entity_at: null,
-        structuredService: null,
-        pendingCatalogChoice: null,
-        pendingCatalogChoiceAt: null,
-        lastPresentedEntityIds: null,
-        lastPresentedFamilyKeys: null,
-        expectingVariantForEntityId: null,
-        expectedVariantIntent: null,
-        presentedVariantOptions: null,
-        last_variant_options: null,
-        last_variant_options_at: null,
-        continuationContext: null,
-        last_assistant_turn: null,
+        ...staleSelectionReset.ctxPatch,
       };
+
+      convoCtx = staleSelectionReset.nextCtx;
     }
   }
 
