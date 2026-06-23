@@ -75,6 +75,7 @@ import { userExternalLinkGuard } from "../../lib/guards/userExternalLinkGuard";
 import { executeBusinessInfoTurn } from "../../lib/channels/engine/businessInfo/executeBusinessInfoTurn";
 import { executeExternalActionContinuation } from "../../lib/channels/engine/businessInfo/executeExternalActionContinuation";
 import { executeCatalogTurn } from "../../lib/channels/engine/catalog/executeCatalogTurn";
+import { executeDomainRouterTurn } from "../../lib/channels/engine/domain/executeDomainRouterTurn";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -684,205 +685,6 @@ export async function procesarMensajeWhatsApp(
         resolvedIntent === "info_general"
       )
     );
-  }
-
-  async function tryBusinessInfoOutsideFastpath(params: {
-    intent: string | null;
-    detectedFacets?: IntentFacets | null;
-    overviewMode?: "general_overview" | "guided_entry";
-  }): Promise<boolean> {
-    const businessInfoResult = await executeBusinessInfoTurn({
-      pool,
-      tenant,
-      canal,
-      idiomaDestino,
-      userInput,
-      contactoNorm,
-      messageId: messageId || null,
-      promptBaseMem,
-      infoClave: String(tenant?.info_clave || ""),
-      convoCtx,
-      detectedIntent: params.intent,
-      intentFallback: params.intent,
-      detectedFacets: params.detectedFacets || null,
-      detectedCommercial,
-      routingHints: (signals as any)?.detectedRoutingHints || null,
-      overviewMode: params.overviewMode ?? "general_overview",
-      maxLines: MAX_WHATSAPP_LINES,
-    });
-
-    if (!businessInfoResult.handled || !businessInfoResult.reply) {
-      console.warn("[WHATSAPP][BUSINESS_INFO_NOT_HANDLED]", {
-        tenantId: tenant.id,
-        canal,
-        contactoNorm,
-        userInput,
-        intent: params.intent,
-        overviewMode: params.overviewMode ?? "general_overview",
-        source: businessInfoResult.source || null,
-        resultIntent: businessInfoResult.intent || null,
-      });
-
-      return false;
-    }
-
-    const finalBusinessInfoText = await ensureReplyLanguage(
-      String(businessInfoResult.reply || "").trim(),
-      idiomaDestino
-    );
-
-    if (!finalBusinessInfoText) {
-      return false;
-    }
-
-    transition({ patchCtx: businessInfoResult.ctxPatch || {} });
-
-    finalCtxPatch = {
-      ...finalCtxPatch,
-      ...(businessInfoResult.ctxPatch || {}),
-    };
-
-    INTENCION_FINAL_CANONICA =
-      businessInfoResult.intent || params.intent || null;
-
-    lastIntent =
-      businessInfoResult.intent || params.intent || null;
-
-    await replyAndExit(
-      finalBusinessInfoText,
-      businessInfoResult.source || "business_info",
-      businessInfoResult.intent || params.intent || null
-    );
-
-    return true;
-  }
-
-  async function tryExternalActionContextContinuation(params: {
-    intent: string | null;
-    detectedFacets?: IntentFacets | null;
-  }): Promise<boolean> {
-    const externalActionResult = await executeExternalActionContinuation({
-      tenantId: tenant.id,
-      canal,
-      idiomaDestino,
-      userInput,
-      contactoNorm,
-      messageId: messageId || null,
-      promptBaseMem,
-      convoCtx,
-      detectedIntent: params.intent,
-      detectedFacets: params.detectedFacets || null,
-      detectedCommercial,
-      maxLines: MAX_WHATSAPP_LINES,
-    });
-
-    if (!externalActionResult.handled || !externalActionResult.reply) {
-      return false;
-    }
-
-    const finalActionText = await ensureReplyLanguage(
-      String(externalActionResult.reply || "").trim(),
-      idiomaDestino
-    );
-
-    if (!finalActionText) {
-      return false;
-    }
-
-    transition({ patchCtx: externalActionResult.ctxPatch || {} });
-
-    finalCtxPatch = {
-      ...finalCtxPatch,
-      ...(externalActionResult.ctxPatch || {}),
-    };
-
-    INTENCION_FINAL_CANONICA =
-      externalActionResult.intent || "external_action";
-
-    lastIntent =
-      externalActionResult.intent || "external_action";
-
-    await replyAndExit(
-      finalActionText,
-      externalActionResult.source || "external_action_link",
-      externalActionResult.intent || "external_action"
-    );
-
-    return true;
-  }
-
-  async function tryCatalogOutsideHybridDecision(params: {
-    intent: string | null;
-    detectedFacets?: IntentFacets | null;
-    convoCtxForCatalog: any;
-    catalogReferenceClassification?: any;
-    canonicalCatalogResolution?: {
-      resolutionKind: string;
-      resolvedServiceId?: string | null;
-      resolvedServiceName?: string | null;
-      variantOptions?: Array<{
-        variantId: string;
-        variantName: string;
-      }>;
-    };
-  }): Promise<boolean> {
-    const catalogResult = await executeCatalogTurn({
-      pool,
-      tenantId: tenant.id,
-      canal,
-      idiomaDestino,
-      userInput,
-      contactoNorm,
-      messageId: messageId || null,
-      promptBaseMem,
-      infoClave: String(tenant?.info_clave || ""),
-      inBooking: Boolean(inBooking0),
-      convoCtx: params.convoCtxForCatalog,
-      ctxPatch: finalCtxPatch || {},
-      detectedIntent: params.intent,
-      detectedFacets: params.detectedFacets || null,
-      detectedCommercial,
-      catalogReferenceClassification: params.catalogReferenceClassification,
-      canonicalCatalogResolution: params.canonicalCatalogResolution,
-      maxDisambiguationOptions: 10,
-      maxLines: MAX_WHATSAPP_LINES,
-    });
-
-    if (catalogResult.ctxPatch) {
-      transition({ patchCtx: catalogResult.ctxPatch });
-
-      finalCtxPatch = {
-        ...finalCtxPatch,
-        ...catalogResult.ctxPatch,
-      };
-    }
-
-    if (!catalogResult.handled || !catalogResult.reply) {
-      return false;
-    }
-
-    const finalCatalogText = await ensureReplyLanguage(
-      String(catalogResult.reply || "").trim(),
-      idiomaDestino
-    );
-
-    if (!finalCatalogText) {
-      return false;
-    }
-
-    INTENCION_FINAL_CANONICA =
-      catalogResult.intent || INTENCION_FINAL_CANONICA || null;
-
-    lastIntent =
-      catalogResult.intent || lastIntent || null;
-
-    await replyAndExit(
-      finalCatalogText,
-      catalogResult.source || "catalog_route",
-      catalogResult.intent || null
-    );
-
-    return true;
   }
 
   // ===============================
@@ -1651,75 +1453,82 @@ export async function procesarMensajeWhatsApp(
         detectedCommercial,
       });
 
-    if (hybridRes.routeTarget === "catalog") {
-      const catalogReferenceClassification =
-        hybridRes.routeContext?.catalogReferenceClassification ||
-        (signals as any)?.catalogReferenceClassification ||
-        undefined;
+    const catalogReferenceClassification =
+      hybridRes.routeContext?.catalogReferenceClassification ||
+      (signals as any)?.catalogReferenceClassification ||
+      undefined;
 
-      const canonicalCatalogResolution =
-        hybridRes.routeContext?.canonicalCatalogResolution || undefined;
+    const canonicalCatalogResolution =
+      hybridRes.routeContext?.canonicalCatalogResolution || undefined;
 
-      const handledCatalog = await tryCatalogOutsideHybridDecision({
-        intent: nextIntent,
-        detectedFacets: nextDetectedFacets,
-        convoCtxForCatalog: convoCtx,
-        catalogReferenceClassification,
-        canonicalCatalogResolution,
-      });
+    const domainRouterResult = await executeDomainRouterTurn({
+      pool,
+      tenant,
+      canal,
+      idiomaDestino,
+      userInput,
+      contactoNorm,
+      messageId: messageId || null,
+      promptBaseMem,
+      infoClave: String(tenant?.info_clave || ""),
+      inBooking: Boolean(inBooking0),
+      convoCtx,
+      ctxPatch: finalCtxPatch || {},
+      routeTarget: hybridRes.routeTarget,
+      shouldUseGuidedEntryOutsideFastpath,
+      detectedIntent: nextIntent,
+      detectedFacets: nextDetectedFacets,
+      detectedCommercial,
+      routingHints: (signals as any)?.detectedRoutingHints || null,
+      catalogReferenceClassification,
+      canonicalCatalogResolution,
+      maxLines: MAX_WHATSAPP_LINES,
+    });
 
-      if (handledCatalog) {
-        return;
-      }
+    if (domainRouterResult.ctxPatch) {
+      transition({ patchCtx: domainRouterResult.ctxPatch });
 
-      const isAmbiguousCatalogFamilyTurn =
-        canonicalCatalogResolution?.resolutionKind === "ambiguous" &&
-        (
-          catalogReferenceClassification?.kind === "catalog_family" ||
-          catalogReferenceClassification?.targetLevel === "family" ||
-          catalogReferenceClassification?.targetLevel === "multi_service" ||
-          catalogReferenceClassification?.routeIntent === "catalog_family"
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        ...domainRouterResult.ctxPatch,
+      };
+    }
+
+    if (domainRouterResult.handled && domainRouterResult.reply) {
+      const finalDomainText = await ensureReplyLanguage(
+        String(domainRouterResult.reply || "").trim(),
+        idiomaDestino
+      );
+
+      if (finalDomainText) {
+        INTENCION_FINAL_CANONICA =
+          domainRouterResult.intent || nextIntent || null;
+
+        lastIntent =
+          domainRouterResult.intent || nextIntent || null;
+
+        await replyAndExit(
+          finalDomainText,
+          domainRouterResult.source || "domain_router",
+          domainRouterResult.intent || nextIntent || null
         );
 
-      if (isAmbiguousCatalogFamilyTurn) {
-        console.log("[WHATSAPP][AMBIGUOUS_CATALOG_FAMILY_DEFERRED]", {
-          tenantId: tenant.id,
-          canal,
-          contactoNorm,
-          userInput,
-          detectedIntent: nextIntent,
-          canonicalCatalogResolutionKind:
-            canonicalCatalogResolution?.resolutionKind || null,
-        });
+        return;
       }
     }
 
     if (
-      hybridRes.routeTarget === "business_info" ||
-      shouldUseGuidedEntryOutsideFastpath
+      domainRouterResult.reason === "ambiguous_catalog_family_deferred"
     ) {
-      const handledExternalAction =
-        await tryExternalActionContextContinuation({
-          intent: nextIntent,
-          detectedFacets: nextDetectedFacets,
-        });
-
-      if (handledExternalAction) {
-        return;
-      }
-
-
-      const handledBusinessInfo = await tryBusinessInfoOutsideFastpath({
-        intent: nextIntent,
-        detectedFacets: nextDetectedFacets,
-        overviewMode: shouldUseGuidedEntryOutsideFastpath
-          ? "guided_entry"
-          : "general_overview",
+      console.log("[WHATSAPP][AMBIGUOUS_CATALOG_FAMILY_DEFERRED]", {
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        userInput,
+        detectedIntent: nextIntent,
+        canonicalCatalogResolutionKind:
+          canonicalCatalogResolution?.resolutionKind || null,
       });
-
-      if (handledBusinessInfo) {
-        return;
-      }
     }
 
     if (
@@ -1736,16 +1545,7 @@ export async function procesarMensajeWhatsApp(
           hybridRes.routeContext?.canonicalCatalogResolution?.resolutionKind || null,
       });
     }
-  } else {
-    console.log("🔒 DOMAIN ROUTER SKIPPED", {
-      bookingStep0,
-      hasPendingCta,
-      reason: inBooking0
-        ? "booking_activo"
-        : "pending_cta_awaiting_confirmation",
-    });
   }
-
   // ===============================
   // 🤖 STATE MACHINE TURN (extraído a helper)
   //    🔒 NO corre si hay booking activo
