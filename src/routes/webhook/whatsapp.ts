@@ -905,19 +905,41 @@ export async function procesarMensajeWhatsApp(
         ? String(continuationLastTurn.intent || "").trim().toLowerCase()
         : "";
 
+    const currentCatalogScope = String(
+      (signals as any)?.detectedRoutingHints?.catalogScope || "none"
+    )
+      .trim()
+      .toLowerCase();
+
+    const currentBusinessInfoScope = String(
+      (signals as any)?.detectedRoutingHints?.businessInfoScope || "none"
+    )
+      .trim()
+      .toLowerCase();
+
+    const shouldAllowBusinessInfoIntentInheritance =
+      currentCatalogScope === "none" &&
+      currentBusinessInfoScope !== "none";
+
     const inheritedAsksSchedules =
+      shouldAllowBusinessInfoIntentInheritance &&
+      !explicitAsksPrices &&
       !explicitAsksSchedules &&
       !explicitAsksLocation &&
       !explicitAsksAvailability &&
       continuedBusinessInfoIntent === "horario";
 
     const inheritedAsksLocation =
+      shouldAllowBusinessInfoIntentInheritance &&
+      !explicitAsksPrices &&
       !explicitAsksSchedules &&
       !explicitAsksLocation &&
       !explicitAsksAvailability &&
       continuedBusinessInfoIntent === "ubicacion";
 
     const inheritedAsksAvailability =
+      shouldAllowBusinessInfoIntentInheritance &&
+      !explicitAsksPrices &&
       !explicitAsksSchedules &&
       !explicitAsksLocation &&
       !explicitAsksAvailability &&

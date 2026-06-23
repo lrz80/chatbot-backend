@@ -750,7 +750,14 @@ export async function handleFastpathHybridTurn(
     asksLocation !== true &&
     asksAvailability !== true;
 
+  const hasCurrentCatalogScope =
+    Boolean(
+      detectedRoutingHints?.catalogScope &&
+        detectedRoutingHints.catalogScope !== "none"
+    );
+
   const isGuidedBusinessEntryTurn =
+    !hasCurrentCatalogScope &&
     !asksSchedules &&
     !asksPrices &&
     !asksLocation &&
