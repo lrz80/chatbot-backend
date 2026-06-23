@@ -358,7 +358,7 @@ function decideHybridDomain(input: {
 
   if (input.isMixedScheduleAndPriceTurn) {
     return {
-      routeTarget: "continue_pipeline",
+      routeTarget: "business_info",
       reason: "mixed_turn",
     };
   }
