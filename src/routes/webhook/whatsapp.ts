@@ -65,14 +65,7 @@ import { runEstimateFlowTurn } from "../../lib/estimateFlow/runEstimateFlowTurn"
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { queryWithTimeout } from "../../lib/dbQuery";
 
-import { renderFastpathDmReply } from "../../lib/channels/engine/fastpath/renderFastpathDmReply";
-
 import { resolveUnhandledTurnFallback } from "../../lib/channels/engine/fallback/resolveUnhandledTurnFallback";
-import { runCatalogDomainTurn } from "../../lib/fastpath/runCatalogDomainTurn";
-import {
-  buildFastpathReplyPolicy,
-  buildStaticFastpathReplyPolicy,
-} from "../../lib/channels/engine/fastpath/buildFastpathReplyPolicy";
 
 import { buildCatalogTurnAugmentation } from '../../lib/channels/engine/turn/buildCatalogTurnAugmentation';
 import type { VisualTurnEvidence } from '../../lib/channels/engine/turn/types';
@@ -81,6 +74,7 @@ import { userExternalLinkGuard } from "../../lib/guards/userExternalLinkGuard";
 
 import { executeBusinessInfoTurn } from "../../lib/channels/engine/businessInfo/executeBusinessInfoTurn";
 import { executeExternalActionContinuation } from "../../lib/channels/engine/businessInfo/executeExternalActionContinuation";
+import { executeCatalogTurn } from "../../lib/channels/engine/catalog/executeCatalogTurn";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -96,26 +90,6 @@ type IntentFacets = {
   asksSchedules?: boolean;
   asksLocation?: boolean;
   asksAvailability?: boolean;
-};
-
-type ExternalActionConfig = {
-  id: string;
-  enabled: boolean;
-  channel: "link";
-  dispatchPolicy: "affirmative_continuation";
-  url: string;
-  allowedDomains?: Array<"business_info" | "catalog" | "booking" | "other">;
-  canonicalBody?: string | null;
-  canonicalBodyByLang?: Partial<Record<LangCode, string>>;
-};
-
-type ExternalActionContext = {
-  type: "external_action";
-  channel: "link";
-  dispatchPolicy: "affirmative_continuation";
-  targetUrl: string;
-  sourceDomain: "business_info" | "catalog" | "booking" | "other";
-  createdAt: string;
 };
 
 const router = Router();
@@ -712,36 +686,6 @@ export async function procesarMensajeWhatsApp(
     );
   }
 
-  function shouldAcknowledgePostEstimateCompletion(params: {
-    activeFlow: string | null;
-    activeStep: string | null;
-    detectedIntent: string | null;
-    intentFallback: string | null;
-    userInput: string;
-  }): boolean {
-    const activeFlow = String(params.activeFlow || "").trim().toLowerCase();
-    const activeStep = String(params.activeStep || "").trim().toLowerCase();
-    const resolvedIntent = String(
-      params.intentFallback || params.detectedIntent || ""
-    )
-      .trim()
-      .toLowerCase();
-
-    if (activeFlow !== "estimate_flow") {
-      return false;
-    }
-
-    if (activeStep !== "scheduled") {
-      return false;
-    }
-
-    if (resolvedIntent === "saludo" || resolvedIntent === "despedida") {
-      return true;
-    }
-
-    return false;
-  }
-
   async function tryBusinessInfoOutsideFastpath(params: {
     intent: string | null;
     detectedFacets?: IntentFacets | null;
@@ -882,71 +826,8 @@ export async function procesarMensajeWhatsApp(
       }>;
     };
   }): Promise<boolean> {
-    const catalogRes = await runCatalogDomainTurn({
+    const catalogResult = await executeCatalogTurn({
       pool,
-      tenantId: tenant.id,
-      canal,
-      idiomaDestino,
-      userInput,
-      inBooking: Boolean(inBooking0),
-      convoCtx: params.convoCtxForCatalog as any,
-      infoClave: String(tenant?.info_clave || ""),
-      detectedIntent: params.intent,
-      detectedFacets: params.detectedFacets || {},
-      catalogReferenceClassification: params.catalogReferenceClassification,
-      maxDisambiguationOptions: 10,
-      catalogRouteContext: {
-        canonicalCatalogResolution: params.canonicalCatalogResolution,
-      },
-    });
-
-    if (catalogRes.ctxPatch) {
-      transition({ patchCtx: catalogRes.ctxPatch });
-      finalCtxPatch = {
-        ...finalCtxPatch,
-        ...catalogRes.ctxPatch,
-      };
-    }
-
-    if (!catalogRes.handled) {
-      return false;
-    }
-
-    const catalogReply =
-      "reply" in catalogRes && typeof catalogRes.reply === "string"
-        ? catalogRes.reply
-        : "";
-
-    const catalogPayload =
-      "catalogPayload" in catalogRes
-        ? catalogRes.catalogPayload ?? undefined
-        : undefined;
-
-    const catalogSource =
-      "source" in catalogRes && typeof catalogRes.source === "string"
-        ? catalogRes.source
-        : null;
-
-    const catalogIntent =
-      "intent" in catalogRes && typeof catalogRes.intent === "string"
-        ? catalogRes.intent
-        : params.intent;
-
-    const catalogAwaitingEffect =
-      "awaitingEffect" in catalogRes
-        ? catalogRes.awaitingEffect ?? null
-        : null;
-
-    const rawCatalogText = String(catalogReply || "").trim();
-    const hasCatalogPayload = Boolean(catalogPayload);
-
-    // Las respuestas de desambiguación pueden venir sin texto
-    // y renderizarse desde catalogPayload
-    if (!rawCatalogText && !hasCatalogPayload) {
-      return false;
-    }
-
-    const rendered = await renderFastpathDmReply({
       tenantId: tenant.id,
       canal,
       idiomaDestino,
@@ -954,99 +835,34 @@ export async function procesarMensajeWhatsApp(
       contactoNorm,
       messageId: messageId || null,
       promptBaseMem,
-      fastpathText: rawCatalogText,
-      fp: {
-        reply: rawCatalogText,
-        source: catalogSource || "catalog_route",
-        intent: catalogIntent,
-        awaitingEffect: catalogAwaitingEffect,
-        catalogPayload,
-      },
-      detectedIntent: catalogIntent,
-      intentFallback: catalogIntent,
-      structuredService: {
-        serviceId:
-          catalogPayload?.kind === "resolved_catalog_answer"
-            ? catalogPayload.serviceId || null
-            : catalogPayload?.kind === "variant_choice"
-            ? catalogPayload.serviceId || null
-            : null,
-        serviceName:
-          catalogPayload?.kind === "resolved_catalog_answer"
-            ? catalogPayload.serviceName || null
-            : catalogPayload?.kind === "variant_choice"
-            ? catalogPayload.serviceName || null
-            : null,
-        serviceLabel:
-          catalogPayload?.kind === "resolved_catalog_answer"
-            ? catalogPayload.serviceName || null
-            : catalogPayload?.kind === "variant_choice"
-            ? catalogPayload.serviceName || null
-            : null,
-        hasResolution:
-          catalogPayload?.kind === "resolved_catalog_answer" &&
-          (
-            Boolean(catalogPayload.serviceId) ||
-            Boolean(catalogPayload.variantId)
-          ),
-      },
-      replyPolicy: buildFastpathReplyPolicy({
-        canal,
-        fp: {
-          handled: true,
-          source: catalogSource || "catalog_route",
-          intent: catalogIntent,
-          reply: rawCatalogText,
-          ctxPatch: finalCtxPatch || {},
-          awaitingEffect: catalogAwaitingEffect,
-        },
-        detectedIntent: catalogIntent,
-        intentFallback: catalogIntent,
-        detectedCommercial,
-        catalogRoutingSignal: params.catalogReferenceClassification ?? null,
-        catalogReferenceClassification: params.catalogReferenceClassification ?? null,
-        structuredService: {
-          serviceId:
-            catalogPayload?.kind === "resolved_catalog_answer"
-              ? catalogPayload.serviceId || null
-              : catalogPayload?.kind === "variant_choice"
-              ? catalogPayload.serviceId || null
-              : null,
-          serviceName:
-            catalogPayload?.kind === "resolved_catalog_answer"
-              ? catalogPayload.serviceName || null
-              : catalogPayload?.kind === "variant_choice"
-              ? catalogPayload.serviceName || null
-              : null,
-          serviceLabel:
-            catalogPayload?.kind === "resolved_catalog_answer"
-              ? catalogPayload.variantName || catalogPayload.serviceName || null
-              : catalogPayload?.kind === "variant_choice"
-              ? catalogPayload.serviceName || null
-              : null,
-          hasResolution:
-            catalogPayload?.kind === "resolved_catalog_answer" &&
-            (
-              Boolean(catalogPayload.serviceId) ||
-              Boolean(catalogPayload.variantId)
-            ),
-        },
-        ctxPatch: finalCtxPatch || {},
-      }),
+      infoClave: String(tenant?.info_clave || ""),
+      inBooking: Boolean(inBooking0),
+      convoCtx: params.convoCtxForCatalog,
       ctxPatch: finalCtxPatch || {},
+      detectedIntent: params.intent,
+      detectedFacets: params.detectedFacets || null,
+      detectedCommercial,
+      catalogReferenceClassification: params.catalogReferenceClassification,
+      canonicalCatalogResolution: params.canonicalCatalogResolution,
+      maxDisambiguationOptions: 10,
       maxLines: MAX_WHATSAPP_LINES,
     });
 
-    if (rendered.ctxPatch) {
-      transition({ patchCtx: rendered.ctxPatch });
+    if (catalogResult.ctxPatch) {
+      transition({ patchCtx: catalogResult.ctxPatch });
+
       finalCtxPatch = {
         ...finalCtxPatch,
-        ...rendered.ctxPatch,
+        ...catalogResult.ctxPatch,
       };
     }
 
+    if (!catalogResult.handled || !catalogResult.reply) {
+      return false;
+    }
+
     const finalCatalogText = await ensureReplyLanguage(
-      String(rendered.reply || "").trim(),
+      String(catalogResult.reply || "").trim(),
       idiomaDestino
     );
 
@@ -1055,15 +871,15 @@ export async function procesarMensajeWhatsApp(
     }
 
     INTENCION_FINAL_CANONICA =
-      catalogIntent || INTENCION_FINAL_CANONICA || null;
+      catalogResult.intent || INTENCION_FINAL_CANONICA || null;
 
     lastIntent =
-      catalogIntent || lastIntent || null;
+      catalogResult.intent || lastIntent || null;
 
     await replyAndExit(
       finalCatalogText,
-      catalogSource || "catalog_route",
-      catalogIntent || null
+      catalogResult.source || "catalog_route",
+      catalogResult.intent || null
     );
 
     return true;
