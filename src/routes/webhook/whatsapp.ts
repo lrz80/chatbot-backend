@@ -71,10 +71,6 @@ import { buildCatalogTurnAugmentation } from '../../lib/channels/engine/turn/bui
 import type { VisualTurnEvidence } from '../../lib/channels/engine/turn/types';
 
 import { userExternalLinkGuard } from "../../lib/guards/userExternalLinkGuard";
-
-import { executeBusinessInfoTurn } from "../../lib/channels/engine/businessInfo/executeBusinessInfoTurn";
-import { executeExternalActionContinuation } from "../../lib/channels/engine/businessInfo/executeExternalActionContinuation";
-import { executeCatalogTurn } from "../../lib/channels/engine/catalog/executeCatalogTurn";
 import { executeDomainRouterTurn } from "../../lib/channels/engine/domain/executeDomainRouterTurn";
 
 // Puedes ponerlo debajo de los imports
