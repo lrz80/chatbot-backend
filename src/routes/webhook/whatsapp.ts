@@ -80,6 +80,7 @@ import type { VisualTurnEvidence } from '../../lib/channels/engine/turn/types';
 import { userExternalLinkGuard } from "../../lib/guards/userExternalLinkGuard";
 
 import { executeBusinessInfoTurn } from "../../lib/channels/engine/businessInfo/executeBusinessInfoTurn";
+import { executeExternalActionContinuation } from "../../lib/channels/engine/businessInfo/executeExternalActionContinuation";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -531,120 +532,6 @@ export async function procesarMensajeWhatsApp(
     return tokenCount <= 3;
   }
 
-  function selectExternalActionForDomain(params: {
-    tenant: any;
-    sourceDomain: "business_info" | "catalog" | "booking" | "other";
-  }): ExternalActionContext | null {
-    const bookingUrl =
-      String(
-        params.tenant?.booking_url ||
-        params.tenant?.bookingUrl ||
-        params.tenant?.settings?.booking?.booking_url ||
-        ""
-      ).trim();
-
-    console.log("[EXTERNAL_ACTION][SELECT_INPUT]", {
-      sourceDomain: params.sourceDomain,
-      tenantBookingUrl: params.tenant?.booking_url ?? null,
-      tenantBookingUrlCamel: params.tenant?.bookingUrl ?? null,
-      tenantSettingsBookingUrl:
-        params.tenant?.settings?.booking?.booking_url ?? null,
-    });
-
-    if (!bookingUrl) {
-      console.log("[EXTERNAL_ACTION][SELECT_NONE]", {
-        reason: "missing_booking_url",
-        sourceDomain: params.sourceDomain,
-      });
-      return null;
-    }
-
-    if (params.sourceDomain !== "business_info") {
-      console.log("[EXTERNAL_ACTION][SELECT_NONE]", {
-        reason: "unsupported_source_domain",
-        sourceDomain: params.sourceDomain,
-        bookingUrl,
-      });
-      return null;
-    }
-
-    const action: ExternalActionContext = {
-      type: "external_action",
-      channel: "link",
-      dispatchPolicy: "affirmative_continuation",
-      targetUrl: bookingUrl,
-      sourceDomain: params.sourceDomain,
-      createdAt: new Date().toISOString(),
-    };
-
-    console.log("[EXTERNAL_ACTION][SELECTED]", action);
-
-    return action;
-  }
-
-  function buildExecutedDomainContextPatch(params: {
-    executedDomain: "business_info" | "catalog";
-    executedIntent: string | null;
-    assistantText: string;
-    actionContext?: ExternalActionContext | null;
-    catalogRefs?: {
-      serviceId?: string | null;
-      familyId?: string | null;
-      variantId?: string | null;
-    } | null;
-  }) {
-    const createdAt = new Date().toISOString();
-
-    const references =
-      params.executedDomain === "catalog"
-        ? {
-            serviceId: params.catalogRefs?.serviceId ?? null,
-            familyId: params.catalogRefs?.familyId ?? null,
-            variantId: params.catalogRefs?.variantId ?? null,
-          }
-        : {
-            serviceId: null,
-            familyId: null,
-            variantId: null,
-          };
-
-    const canonicalSource =
-      params.executedDomain === "catalog" ? "catalog" : "business_info";
-
-    const continuationLastTurn = {
-      domain: params.executedDomain,
-      references,
-      intent: params.executedIntent || null,
-      userText: userInput,
-      assistantText: params.assistantText,
-      canonicalSource,
-      createdAt,
-    };
-
-    return {
-      continuationContext: {
-        lastTurn: continuationLastTurn,
-      },
-      last_assistant_turn: continuationLastTurn,
-      actionContext: params.actionContext ?? null,
-
-      // importante: evita arrastrar resolución catalogal vieja
-      ...(params.executedDomain === "business_info"
-        ? {
-            structuredService: null,
-            pendingCatalogChoice: null,
-            pendingCatalogChoiceAt: null,
-            expectingVariant: false,
-            expectingVariantForEntityId: null,
-            expectedVariantIntent: null,
-            presentedVariantOptions: null,
-            last_variant_options: null,
-            last_variant_options_at: null,
-          }
-        : {}),
-    };
-  }
-
   // ✅ google_calendar_enabled flag (source of truth)
   let bookingEnabled = false;
   try {
@@ -855,35 +742,6 @@ export async function procesarMensajeWhatsApp(
     return false;
   }
 
-  function shouldPersistExternalActionForBusinessInfo(params: {
-    resolvedBusinessIntent: string;
-    overviewMode: "general_overview" | "guided_entry";
-    wantsBusinessFacets: boolean;
-    asksSchedules: boolean;
-    asksLocation: boolean;
-    asksAvailability: boolean;
-  }): boolean {
-    if (params.overviewMode === "guided_entry") {
-      return false;
-    }
-
-    if (!params.wantsBusinessFacets) {
-      return false;
-    }
-
-    if (params.asksLocation || params.asksAvailability) {
-      return false;
-    }
-
-    return (
-      params.asksSchedules &&
-      (
-        params.resolvedBusinessIntent === "horario" ||
-        params.resolvedBusinessIntent === "precio_y_horario"
-      )
-    );
-  }
-
   async function tryBusinessInfoOutsideFastpath(params: {
     intent: string | null;
     detectedFacets?: IntentFacets | null;
@@ -959,49 +817,7 @@ export async function procesarMensajeWhatsApp(
     intent: string | null;
     detectedFacets?: IntentFacets | null;
   }): Promise<boolean> {
-    const actionContext = convoCtx?.actionContext as ExternalActionContext | null;
-
-    if (!actionContext || typeof actionContext !== "object") {
-      return false;
-    }
-
-    if (actionContext.type !== "external_action") {
-      return false;
-    }
-
-    if (actionContext.channel !== "link") {
-      return false;
-    }
-
-    if (actionContext.dispatchPolicy !== "affirmative_continuation") {
-      return false;
-    }
-
-    if (!String(actionContext.targetUrl || "").trim()) {
-      return false;
-    }
-
-    const explicitAsksSchedules = params.detectedFacets?.asksSchedules === true;
-    const explicitAsksLocation = params.detectedFacets?.asksLocation === true;
-    const explicitAsksAvailability = params.detectedFacets?.asksAvailability === true;
-
-    if (explicitAsksSchedules || explicitAsksLocation || explicitAsksAvailability) {
-      return false;
-    }
-
-    const resolvedIntent = String(params.intent || "").trim().toLowerCase() || null;
-
-    const looksLikeAffirmativeContinuation =
-      shouldTreatTurnAsPendingCtaConfirmation({
-        userInput,
-        resolvedIntent,
-      });
-
-    if (!looksLikeAffirmativeContinuation) {
-      return false;
-    }
-
-    const rendered = await renderFastpathDmReply({
+    const externalActionResult = await executeExternalActionContinuation({
       tenantId: tenant.id,
       canal,
       idiomaDestino,
@@ -1009,62 +825,19 @@ export async function procesarMensajeWhatsApp(
       contactoNorm,
       messageId: messageId || null,
       promptBaseMem,
-      fastpathText: actionContext.targetUrl,
-      fp: {
-        reply: actionContext.targetUrl,
-        source: "external_action_link",
-        intent: "external_action",
-        externalAction: {
-          type: "link",
-          targetUrl: actionContext.targetUrl,
-        },
-        catalogPayload: undefined,
-      },
-      detectedIntent: "external_action",
-      intentFallback: "external_action",
-      structuredService: {
-        serviceId: null,
-        serviceName: null,
-        serviceLabel: null,
-        hasResolution: false,
-      },
-      replyPolicy: buildStaticFastpathReplyPolicy({
-        canal,
-        answerType: "action_link",
-        replySourceKind: "business_info",
-        responsePolicyMode: "grounded_frame_only",
-        hasResolvedEntity: false,
-        isCatalogDbReply: false,
-        isPriceSummaryReply: false,
-        isPriceDisambiguationReply: false,
-        isGroundedCatalogReply: false,
-        isGroundedCatalogOverviewDm: false,
-        shouldForceSalesClosingQuestion: false,
-        shouldUseGroundedFrameOnly: true,
-        canonicalBodyOwnsClosing: false,
-        clarificationTarget: null,
-        commercialPolicy: {
-          purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
-          wantsBooking: detectedCommercial?.wantsBooking === true,
-          wantsQuote: detectedCommercial?.wantsQuote === true,
-          wantsHuman: detectedCommercial?.wantsHuman === true,
-          urgency: detectedCommercial?.urgency ?? "low",
-          shouldUseSalesTone: true,
-          shouldUseSoftClosing: true,
-          shouldUseDirectClosing: false,
-          shouldSuggestHumanHandoff: detectedCommercial?.wantsHuman === true,
-        },
-      }),
-      ctxPatch: {
-        ...(finalCtxPatch || {}),
-        actionContext: null,
-        last_bot_action: "external_action_sent",
-      },
+      convoCtx,
+      detectedIntent: params.intent,
+      detectedFacets: params.detectedFacets || null,
+      detectedCommercial,
       maxLines: MAX_WHATSAPP_LINES,
     });
 
+    if (!externalActionResult.handled || !externalActionResult.reply) {
+      return false;
+    }
+
     const finalActionText = await ensureReplyLanguage(
-      String(rendered.reply || "").trim(),
+      String(externalActionResult.reply || "").trim(),
       idiomaDestino
     );
 
@@ -1072,31 +845,23 @@ export async function procesarMensajeWhatsApp(
       return false;
     }
 
-    const executedExternalActionPatch = buildExecutedDomainContextPatch({
-      executedDomain: "business_info",
-      executedIntent: "external_action",
-      assistantText: finalActionText,
-      actionContext: null,
-    });
+    transition({ patchCtx: externalActionResult.ctxPatch || {} });
 
-    const mergedExternalActionPatch = {
-      ...(rendered.ctxPatch || {}),
-      ...executedExternalActionPatch,
-    };
-
-    transition({ patchCtx: mergedExternalActionPatch });
     finalCtxPatch = {
       ...finalCtxPatch,
-      ...mergedExternalActionPatch,
+      ...(externalActionResult.ctxPatch || {}),
     };
 
-    INTENCION_FINAL_CANONICA = "external_action";
-    lastIntent = "external_action";
+    INTENCION_FINAL_CANONICA =
+      externalActionResult.intent || "external_action";
+
+    lastIntent =
+      externalActionResult.intent || "external_action";
 
     await replyAndExit(
       finalActionText,
-      "external_action_link",
-      "external_action"
+      externalActionResult.source || "external_action_link",
+      externalActionResult.intent || "external_action"
     );
 
     return true;
