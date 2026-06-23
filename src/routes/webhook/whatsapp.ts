@@ -27,7 +27,7 @@ import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
 import { buildTurnContext } from "../../lib/conversation/buildTurnContext";
 import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { createStateMachine } from "../../lib/conversation/stateMachine";
-import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/followups/followUpScheduler";
+import { cancelPendingFollowUps } from "../../lib/followups/followUpScheduler";
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
 import { saveAssistantMessageAndEmit } from "../../lib/channels/engine/messages/saveAssistantMessageAndEmit";
 
@@ -41,7 +41,6 @@ import {
 } from "../../lib/analytics/capiEvents";
 import {
   ensureClienteBase,
-  upsertIdiomaClienteDB,
   getSelectedChannelDB,
   upsertSelectedChannelDB,
 } from "../../lib/channels/engine/clients/clientDb";
@@ -67,11 +66,9 @@ import { traducirMensaje } from '../../lib/traducirMensaje';
 import { queryWithTimeout } from "../../lib/dbQuery";
 
 import { renderFastpathDmReply } from "../../lib/channels/engine/fastpath/renderFastpathDmReply";
-import { resolveBusinessInfoOverviewCanonicalBody } from "../../lib/channels/engine/businessInfo/resolveBusinessInfoOverviewCanonicalBody";
 
 import { resolveUnhandledTurnFallback } from "../../lib/channels/engine/fallback/resolveUnhandledTurnFallback";
 import { runCatalogDomainTurn } from "../../lib/fastpath/runCatalogDomainTurn";
-import { resolveBusinessInfoFacetsCanonicalBody } from "../../lib/channels/engine/businessInfo/resolveBusinessInfoFacetsCanonicalBody";
 import {
   buildFastpathReplyPolicy,
   buildStaticFastpathReplyPolicy,
@@ -82,9 +79,7 @@ import type { VisualTurnEvidence } from '../../lib/channels/engine/turn/types';
 
 import { userExternalLinkGuard } from "../../lib/guards/userExternalLinkGuard";
 
-import { normalizeCatalogRole } from "../../lib/catalog/normalizeCatalogRole";
-import { renderGenericPriceSummaryReply } from "../../lib/services/pricing/renderGenericPriceSummaryReply";
-import { composeBusinessInfoAnswer } from "../../lib/channels/engine/businessInfo/composeBusinessInfoAnswer";
+import { executeBusinessInfoTurn } from "../../lib/channels/engine/businessInfo/executeBusinessInfoTurn";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -894,301 +889,43 @@ export async function procesarMensajeWhatsApp(
     detectedFacets?: IntentFacets | null;
     overviewMode?: "general_overview" | "guided_entry";
   }): Promise<boolean> {
-    const routeIntent = String(params.intent || "").trim() || "info_general";
-    const overviewMode = params.overviewMode ?? "general_overview";
-
-    const explicitAsksPrices = params.detectedFacets?.asksPrices === true;
-    const explicitAsksSchedules = params.detectedFacets?.asksSchedules === true;
-    const explicitAsksLocation = params.detectedFacets?.asksLocation === true;
-    const explicitAsksAvailability = params.detectedFacets?.asksAvailability === true;
-
-    const continuationLastTurn = convoCtx?.continuationContext?.lastTurn ?? null;
-
-    const continuedBusinessInfoIntent =
-      continuationLastTurn?.domain === "business_info"
-        ? String(continuationLastTurn.intent || "").trim().toLowerCase()
-        : "";
-
-    const currentCatalogScope = String(
-      (signals as any)?.detectedRoutingHints?.catalogScope || "none"
-    )
-      .trim()
-      .toLowerCase();
-
-    const currentBusinessInfoScope = String(
-      (signals as any)?.detectedRoutingHints?.businessInfoScope || "none"
-    )
-      .trim()
-      .toLowerCase();
-
-    const shouldAllowBusinessInfoIntentInheritance =
-      currentCatalogScope === "none" &&
-      currentBusinessInfoScope !== "none";
-
-    const inheritedAsksSchedules =
-      shouldAllowBusinessInfoIntentInheritance &&
-      !explicitAsksPrices &&
-      !explicitAsksSchedules &&
-      !explicitAsksLocation &&
-      !explicitAsksAvailability &&
-      continuedBusinessInfoIntent === "horario";
-
-    const inheritedAsksLocation =
-      shouldAllowBusinessInfoIntentInheritance &&
-      !explicitAsksPrices &&
-      !explicitAsksSchedules &&
-      !explicitAsksLocation &&
-      !explicitAsksAvailability &&
-      continuedBusinessInfoIntent === "ubicacion";
-
-    const inheritedAsksAvailability =
-      shouldAllowBusinessInfoIntentInheritance &&
-      !explicitAsksPrices &&
-      !explicitAsksSchedules &&
-      !explicitAsksLocation &&
-      !explicitAsksAvailability &&
-      continuedBusinessInfoIntent === "disponibilidad";
-
-    const asksPrices = explicitAsksPrices;
-    const asksSchedules = explicitAsksSchedules || inheritedAsksSchedules;
-    const asksLocation = explicitAsksLocation || inheritedAsksLocation;
-    const asksAvailability = explicitAsksAvailability || inheritedAsksAvailability;
-
-    const wantsBusinessFacets =
-      asksPrices || asksSchedules || asksLocation || asksAvailability;
-
-    const resolvedBusinessIntent =
-      wantsBusinessFacets
-        ? asksPrices && asksSchedules
-          ? "precio_y_horario"
-          : asksPrices
-          ? "precio"
-          : asksSchedules && !asksLocation && !asksAvailability
-          ? "horario"
-          : asksLocation && !asksSchedules && !asksAvailability
-          ? "ubicacion"
-          : asksAvailability && !asksSchedules && !asksLocation
-          ? "disponibilidad"
-          : "info_general"
-        : routeIntent;
-
-    const shouldPersistExternalAction =
-      shouldPersistExternalActionForBusinessInfo({
-        resolvedBusinessIntent,
-        overviewMode,
-        wantsBusinessFacets,
-        asksSchedules,
-        asksLocation,
-        asksAvailability,
-      });
-
-    const nextActionContext = shouldPersistExternalAction
-      ? selectExternalActionForDomain({
-          tenant,
-          sourceDomain: "business_info",
-        })
-      : null;
-
-    if (wantsBusinessFacets) {
-      const composedBusinessInfo = await composeBusinessInfoAnswer({
-        pool,
-        tenantId: tenant.id,
-        canal,
-        idiomaDestino,
-        userInput,
-        contactoNorm,
-        messageId: messageId || null,
-        promptBaseMem,
-        infoClave: String(tenant?.info_clave || ""),
-        convoCtx,
-        detectedIntent: resolvedBusinessIntent,
-        intentFallback: routeIntent,
-        detectedFacets: {
-          asksPrices,
-          asksSchedules,
-          asksLocation,
-          asksAvailability,
-        },
-        detectedCommercial,
-        routingHints: (signals as any)?.detectedRoutingHints || null,
-        externalAction: nextActionContext
-          ? {
-              type: "link",
-              targetUrl: nextActionContext.targetUrl,
-            }
-          : null,
-        normalizeCatalogRole,
-        traducirTexto: traducirMensaje,
-        renderGenericPriceSummaryReply,
-        maxLines: MAX_WHATSAPP_LINES,
-      });
-
-      if (!composedBusinessInfo.handled || !composedBusinessInfo.reply) {
-        console.warn("[BUSINESS_INFO][EMPTY_COMPOSED_ANSWER]", {
-          tenantId: tenant.id,
-          canal,
-          contactoNorm,
-          userInput,
-          routeIntent,
-          resolvedBusinessIntent,
-          wantsBusinessFacets,
-          continuedBusinessInfoIntent,
-          facets: {
-            asksPrices,
-            asksSchedules,
-            asksLocation,
-            asksAvailability,
-          },
-          source: composedBusinessInfo.source || null,
-        });
-
-        return false;
-      }
-
-      const finalBusinessInfoText = await ensureReplyLanguage(
-        String(composedBusinessInfo.reply || "").trim(),
-        idiomaDestino
-      );
-
-      if (!finalBusinessInfoText) {
-        return false;
-      }
-
-      const executedBusinessInfoPatch = buildExecutedDomainContextPatch({
-        executedDomain: "business_info",
-        executedIntent: composedBusinessInfo.intent || resolvedBusinessIntent,
-        assistantText: finalBusinessInfoText,
-        actionContext: nextActionContext,
-      });
-
-      const mergedBusinessInfoPatch = {
-        ...(composedBusinessInfo.ctxPatch || {}),
-        ...executedBusinessInfoPatch,
-      };
-
-      transition({ patchCtx: mergedBusinessInfoPatch });
-
-      finalCtxPatch = {
-        ...finalCtxPatch,
-        ...mergedBusinessInfoPatch,
-      };
-
-      INTENCION_FINAL_CANONICA =
-        composedBusinessInfo.intent || resolvedBusinessIntent;
-
-      lastIntent =
-        composedBusinessInfo.intent || resolvedBusinessIntent;
-
-      await replyAndExit(
-        finalBusinessInfoText,
-        composedBusinessInfo.source || "business_info",
-        composedBusinessInfo.intent || resolvedBusinessIntent
-      );
-
-      return true;
-    }
-
-    const canonicalBusinessInfoBody = await resolveBusinessInfoOverviewCanonicalBody({
-      tenantId: tenant.id,
-      canal,
-      idiomaDestino,
-      userInput,
-      promptBaseMem,
-      infoClave: String(tenant?.info_clave || ""),
-      convoCtx,
-      overviewMode,
-    });
-
-    const normalizedCanonicalBody = String(canonicalBusinessInfoBody || "").trim();
-
-    if (!normalizedCanonicalBody) {
-      console.warn("[BUSINESS_INFO][EMPTY_CANONICAL_BODY]", {
-        tenantId: tenant.id,
-        canal,
-        contactoNorm,
-        userInput,
-        routeIntent,
-        wantsBusinessFacets,
-        continuedBusinessInfoIntent,
-        facets: {
-          asksPrices,
-          asksSchedules,
-          asksLocation,
-          asksAvailability,
-        },
-      });
-      return false;
-    }
-
-    const rendered = await renderFastpathDmReply({
-      tenantId: tenant.id,
+    const businessInfoResult = await executeBusinessInfoTurn({
+      pool,
+      tenant,
       canal,
       idiomaDestino,
       userInput,
       contactoNorm,
       messageId: messageId || null,
       promptBaseMem,
-      fastpathText: normalizedCanonicalBody,
-      fp: {
-        reply: normalizedCanonicalBody,
-        source: wantsBusinessFacets
-          ? "info_clave_db"
-          : overviewMode === "guided_entry"
-          ? "info_general_guided_entry_db"
-          : "info_general_overview_db",
-        intent: resolvedBusinessIntent,
-        catalogPayload: undefined,
-        externalAction: nextActionContext
-          ? {
-              type: "link",
-              targetUrl: nextActionContext.targetUrl,
-            }
-          : undefined,
-      },
-      detectedIntent: resolvedBusinessIntent,
-      intentFallback: resolvedBusinessIntent,
-      structuredService: {
-        serviceId: null,
-        serviceName: null,
-        serviceLabel: null,
-        hasResolution: false,
-      },
-      replyPolicy: buildStaticFastpathReplyPolicy({
-        canal,
-        answerType: wantsBusinessFacets ? "direct_answer" : "overview",
-        replySourceKind: "business_info",
-        responsePolicyMode: "grounded_frame_only",
-        hasResolvedEntity: false,
-        isCatalogDbReply: false,
-        isPriceSummaryReply: false,
-        isPriceDisambiguationReply: false,
-        isGroundedCatalogReply: false,
-        isGroundedCatalogOverviewDm: !wantsBusinessFacets,
-        shouldForceSalesClosingQuestion: false,
-        shouldUseGroundedFrameOnly: true,
-        canonicalBodyOwnsClosing: false,
-        clarificationTarget: null,
-        commercialPolicy: {
-          purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
-          wantsBooking: detectedCommercial?.wantsBooking === true,
-          wantsQuote: detectedCommercial?.wantsQuote === true,
-          wantsHuman: detectedCommercial?.wantsHuman === true,
-          urgency: detectedCommercial?.urgency ?? "low",
-          shouldUseSalesTone: true,
-          shouldUseSoftClosing: true,
-          shouldUseDirectClosing: false,
-          shouldSuggestHumanHandoff: detectedCommercial?.wantsHuman === true,
-        },
-      }),
-      ctxPatch: {
-        ...(finalCtxPatch || {}),
-        actionContext: nextActionContext,
-      },
+      infoClave: String(tenant?.info_clave || ""),
+      convoCtx,
+      detectedIntent: params.intent,
+      intentFallback: params.intent,
+      detectedFacets: params.detectedFacets || null,
+      detectedCommercial,
+      routingHints: (signals as any)?.detectedRoutingHints || null,
+      overviewMode: params.overviewMode ?? "general_overview",
       maxLines: MAX_WHATSAPP_LINES,
     });
 
+    if (!businessInfoResult.handled || !businessInfoResult.reply) {
+      console.warn("[WHATSAPP][BUSINESS_INFO_NOT_HANDLED]", {
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        userInput,
+        intent: params.intent,
+        overviewMode: params.overviewMode ?? "general_overview",
+        source: businessInfoResult.source || null,
+        resultIntent: businessInfoResult.intent || null,
+      });
+
+      return false;
+    }
+
     const finalBusinessInfoText = await ensureReplyLanguage(
-      String(rendered.reply || "").trim(),
+      String(businessInfoResult.reply || "").trim(),
       idiomaDestino
     );
 
@@ -1196,33 +933,23 @@ export async function procesarMensajeWhatsApp(
       return false;
     }
 
-    const executedBusinessInfoPatch = buildExecutedDomainContextPatch({
-      executedDomain: "business_info",
-      executedIntent: resolvedBusinessIntent,
-      assistantText: finalBusinessInfoText,
-      actionContext: nextActionContext,
-    });
+    transition({ patchCtx: businessInfoResult.ctxPatch || {} });
 
-    const mergedBusinessInfoPatch = {
-      ...(rendered.ctxPatch || {}),
-      ...executedBusinessInfoPatch,
-    };
-
-    transition({ patchCtx: mergedBusinessInfoPatch });
     finalCtxPatch = {
       ...finalCtxPatch,
-      ...mergedBusinessInfoPatch,
+      ...(businessInfoResult.ctxPatch || {}),
     };
 
-    INTENCION_FINAL_CANONICA = resolvedBusinessIntent;
-    lastIntent = resolvedBusinessIntent;
+    INTENCION_FINAL_CANONICA =
+      businessInfoResult.intent || params.intent || null;
+
+    lastIntent =
+      businessInfoResult.intent || params.intent || null;
 
     await replyAndExit(
       finalBusinessInfoText,
-      wantsBusinessFacets
-        ? "business_info_facets_outside_fastpath"
-        : "business_info_outside_fastpath",
-      resolvedBusinessIntent
+      businessInfoResult.source || "business_info",
+      businessInfoResult.intent || params.intent || null
     );
 
     return true;
