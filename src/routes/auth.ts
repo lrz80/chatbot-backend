@@ -60,7 +60,7 @@ router.post('/register', async (req: Request, res: Response) => {
   const normalizedTimezone =
     typeof timezone === "string" && timezone.trim()
       ? timezone.trim()
-      : "UTC";
+      : "America/New_York";
 
   try {
     const exists = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
@@ -95,7 +95,7 @@ router.post('/register', async (req: Request, res: Response) => {
         NOW(),
         false,
         NULL,
-        jsonb_build_object('timezone', $4)
+        jsonb_build_object('timezone', $4::text)
       )`,
       [uid, owner_name, slug, normalizedTimezone]
     );
