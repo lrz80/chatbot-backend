@@ -77,78 +77,91 @@ router.post('/register', async (req: Request, res: Response) => {
 
     console.log("🌐 Enlace de verificación:", verification_link);
 
-    // ✅ Crear tenant antes del usuario
-    await pool.query(
-      `INSERT INTO tenants (
-        id,
-        name,
-        slug,
-        created_at,
-        membresia_activa,
-        membresia_vigencia,
-        settings
-      )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        NOW(),
-        false,
-        NULL,
-        jsonb_build_object('timezone', $4::text)
-      )`,
-      [uid, owner_name, slug, normalizedTimezone]
-    );
-
-    // ✅ Crear usuario con tenant_id
     const normalizedTelefono = String(telefono).trim();
 
-    await pool.query(
-      `INSERT INTO users (
-        uid,
-        tenant_id,
-        email,
-        password,
-        role,
-        owner_name,
-        telefono,
-        created_at,
-        verificado,
-        token_verificacion,
-        sms_opt_in,
-        sms_opt_in_at,
-        sms_opt_in_source,
-        sms_phone_number
-      )
-      VALUES (
-        $1::uuid,
-        $2::uuid,
-        $3::text,
-        $4::text,
-        $5::text,
-        $6::text,
-        $7::text,
-        NOW(),
-        false,
-        $8::text,
-        $9::boolean,
-        CASE WHEN $9::boolean = true THEN NOW() ELSE NULL END,
-        CASE WHEN $9::boolean = true THEN 'registration'::text ELSE NULL END,
-        CASE WHEN $9::boolean = true THEN $10::text ELSE NULL END
-      )`,
-      [
-        uid,
-        uid,
-        email,
-        password_hash,
-        "admin",
-        owner_name,
-        normalizedTelefono,
-        token_verificacion,
-        normalizedSmsOptIn,
-        normalizedTelefono,
-      ]
-    );
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      // ✅ Crear tenant
+      await client.query(
+        `INSERT INTO tenants (
+          id,
+          name,
+          slug,
+          created_at,
+          membresia_activa,
+          membresia_vigencia,
+          settings
+        )
+        VALUES (
+          $1::uuid,
+          $2::text,
+          $3::text,
+          NOW(),
+          false,
+          NULL,
+          jsonb_build_object('timezone', $4::text)
+        )`,
+        [uid, owner_name, slug, normalizedTimezone]
+      );
+
+      // ✅ Crear usuario con tenant_id
+      await client.query(
+        `INSERT INTO users (
+          uid,
+          tenant_id,
+          email,
+          password,
+          role,
+          owner_name,
+          telefono,
+          created_at,
+          verificado,
+          token_verificacion,
+          sms_opt_in,
+          sms_opt_in_at,
+          sms_opt_in_source,
+          sms_phone_number
+        )
+        VALUES (
+          $1::uuid,
+          $2::uuid,
+          $3::text,
+          $4::text,
+          $5::text,
+          $6::text,
+          $7::text,
+          NOW(),
+          false,
+          $8::text,
+          $9::boolean,
+          CASE WHEN $9::boolean = true THEN NOW() ELSE NULL END,
+          CASE WHEN $9::boolean = true THEN 'registration'::text ELSE NULL END,
+          CASE WHEN $9::boolean = true THEN $10::text ELSE NULL END
+        )`,
+        [
+          uid,
+          uid,
+          email,
+          password_hash,
+          "admin",
+          owner_name,
+          normalizedTelefono,
+          token_verificacion,
+          normalizedSmsOptIn,
+          normalizedTelefono,
+        ]
+      );
+
+      await client.query("COMMIT");
+    } catch (dbError) {
+      await client.query("ROLLBACK");
+      throw dbError;
+    } finally {
+      client.release();
+    }
 
     try {
       await sendVerificationEmail(email, verification_link, 'es');
