@@ -194,25 +194,36 @@ export async function handleRealtimeCreateAppointment(
     const settingsRow = settingsResult.rows[0];
 
     if (!settingsRow) {
-    return {
+      const bookingState = buildRealtimeBookingState({
+        steps,
+        state: bookingContext.state,
+        explicitCurrentIndex: null,
+        finalConfirmationGranted: true,
+        readyToCreate: false,
+      });
+
+      const createFailedPromptTranslations =
+        typeof bookingContext.cfg?.appointment_create_failed_prompt_translations ===
+          "object" &&
+        bookingContext.cfg?.appointment_create_failed_prompt_translations !== null
+          ? bookingContext.cfg.appointment_create_failed_prompt_translations
+          : {};
+
+      const configuredPrompt =
+        clean(createFailedPromptTranslations[bookingContext.currentLocale]) ||
+        clean(bookingContext.cfg?.appointment_create_failed_prompt);
+
+      return {
         ok: false,
         error: "APPOINTMENT_SETTINGS_NOT_FOUND",
         message: "Appointment settings are not configured for this tenant.",
-        booking_state: buildRealtimeBookingState({
-        steps,
-        state: bookingContext.state,
-        explicitCurrentIndex: currentIndex >= 0 ? currentIndex : null,
-        }),
-        next_required_step: buildNextRequiredStep({
-        steps,
-        bookingState: buildRealtimeBookingState({
-            steps,
-            state: bookingContext.state,
-            explicitCurrentIndex: currentIndex >= 0 ? currentIndex : null,
-        }),
-        locale: bookingContext.currentLocale,
-        }),
-    };
+        assistant_prompt: configuredPrompt,
+        booking_outcome: "failed_configuration",
+        customer_action_required: true,
+        action_required: null,
+        booking_state: bookingState,
+        next_required_step: null,
+      };
     }
 
     const stepKeyToSlot = Object.fromEntries(
