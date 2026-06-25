@@ -225,6 +225,12 @@ export async function createOpenAiRealtimeBridge({
     setLastAssistantAudioDoneAtMs: (value) => {
       lastAssistantAudioDoneAtMs = value;
     },
+
+    getBookingTurnStatus: () =>
+      clean((realtimeState as any).bookingTurnStatus),
+
+    getPendingBookingStepKey: () =>
+      clean((realtimeState as any).pendingBookingStepKey),
   });
 
   const toolCallQueue = createRealtimeToolCallQueue({

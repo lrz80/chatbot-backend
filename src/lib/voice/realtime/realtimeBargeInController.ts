@@ -4,6 +4,8 @@ import WebSocket from "ws";
 type RealtimeResponseControllerLike = {
   getState: () => {
     activeResponseId?: string | null;
+    activeResponseStartedAtMs?: number | null;
+    activeResponseCreatedAtMs?: number | null;
   };
 };
 
@@ -18,9 +20,18 @@ type RealtimeBargeInControllerParams = {
   setAssistantSpeaking: (value: boolean) => void;
   getLastAssistantAudioDeltaAtMs: () => number;
   setLastAssistantAudioDoneAtMs: (value: number) => void;
+
+  /**
+   * Optional booking state getters.
+   * They keep this controller generic and avoid hardcoding business logic.
+   */
+  getBookingTurnStatus?: () => string | null;
+  getPendingBookingStepKey?: () => string | null;
 };
 
 const MIN_MS_AFTER_ASSISTANT_AUDIO_TO_ALLOW_BARGE_IN = 650;
+const MIN_MS_AFTER_ACTIVE_RESPONSE_START_TO_ALLOW_BARGE_IN = 1200;
+const MIN_MS_AFTER_BOOKING_PROMPT_START_TO_ALLOW_BARGE_IN = 1500;
 const BARGE_IN_DEBOUNCE_MS = 300;
 
 function clean(value: unknown): string {
@@ -40,6 +51,39 @@ export function createRealtimeBargeInController(
   reset: () => void;
 } {
   let lastBargeInAtMs = 0;
+  let observedActiveResponseId = "";
+  let observedActiveResponseStartedAtMs = 0;
+
+  function getActiveResponseAgeMs(params: {
+    activeResponseId: string;
+    responseStartedAtMs: number | null;
+    now: number;
+  }): number | null {
+    const { activeResponseId, responseStartedAtMs, now } = params;
+
+    if (!activeResponseId) {
+      observedActiveResponseId = "";
+      observedActiveResponseStartedAtMs = 0;
+      return null;
+    }
+
+    /**
+     * Prefer the response controller timestamp if available.
+     * Fallback to first time this barge-in controller observes the active response.
+     */
+    if (responseStartedAtMs && responseStartedAtMs > 0) {
+      observedActiveResponseId = activeResponseId;
+      observedActiveResponseStartedAtMs = responseStartedAtMs;
+      return now - responseStartedAtMs;
+    }
+
+    if (observedActiveResponseId !== activeResponseId) {
+      observedActiveResponseId = activeResponseId;
+      observedActiveResponseStartedAtMs = now;
+    }
+
+    return now - observedActiveResponseStartedAtMs;
+  }
 
   function interruptAssistantAudio(source: string): boolean {
     if (params.getCallEnding()) {
@@ -57,17 +101,36 @@ export function createRealtimeBargeInController(
     const assistantSpeaking = params.getAssistantSpeaking();
     const lastAssistantAudioDeltaAtMs = params.getLastAssistantAudioDeltaAtMs();
 
+    const responseStartedAtMs =
+      typeof responseState.activeResponseStartedAtMs === "number" &&
+      responseState.activeResponseStartedAtMs > 0
+        ? responseState.activeResponseStartedAtMs
+        : typeof responseState.activeResponseCreatedAtMs === "number" &&
+            responseState.activeResponseCreatedAtMs > 0
+          ? responseState.activeResponseCreatedAtMs
+          : null;
+
+    const activeResponseAgeMs = getActiveResponseAgeMs({
+      activeResponseId,
+      responseStartedAtMs,
+      now,
+    });
+
     const msSinceLastAssistantAudio =
       lastAssistantAudioDeltaAtMs > 0
         ? now - lastAssistantAudioDeltaAtMs
         : null;
 
+    const bookingTurnStatus = clean(params.getBookingTurnStatus?.());
+    const pendingBookingStepKey = clean(params.getPendingBookingStepKey?.());
+
+    const isBookingPromptBeingSpoken =
+      Boolean(pendingBookingStepKey) &&
+      bookingTurnStatus === "waiting_assistant_prompt";
+
     /**
      * Regla principal:
      * Si no hay respuesta activa y Aamy no está hablando, no hay nada que cortar.
-     *
-     * Antes se cortaba por "audio reciente" aunque activeResponseId fuera null
-     * y assistantSpeaking fuera false. Eso mandaba Twilio clear sin razón.
      */
     if (!activeResponseId && !assistantSpeaking) {
       console.log("[VOICE_REALTIME][BARGE_IN_IGNORED_NO_ACTIVE_ASSISTANT_OUTPUT]", {
@@ -77,14 +140,72 @@ export function createRealtimeBargeInController(
         activeResponseId: null,
         assistantSpeaking,
         msSinceLastAssistantAudio,
+        activeResponseAgeMs,
+        bookingTurnStatus,
+        pendingBookingStepKey,
       });
 
       return false;
     }
 
     /**
-     * No cortes a Aamy justo cuando empieza a hablar.
-     * Esto evita que eco/ruido/input_audio_buffer.speech_started corte el prompt.
+     * Protección general:
+     * No cortes una respuesta apenas comienza.
+     *
+     * Esto evita que ruido, eco o speech_started prematuro corten el primer prompt.
+     */
+    const isTooSoonAfterActiveResponseStart =
+      activeResponseAgeMs !== null &&
+      activeResponseAgeMs < MIN_MS_AFTER_ACTIVE_RESPONSE_START_TO_ALLOW_BARGE_IN;
+
+    if (isTooSoonAfterActiveResponseStart) {
+      console.log("[VOICE_REALTIME][BARGE_IN_IGNORED_TOO_SOON_AFTER_RESPONSE_START]", {
+        callSid: params.getCallSid(),
+        streamSid: params.getStreamSid(),
+        source,
+        activeResponseId: activeResponseId || null,
+        assistantSpeaking,
+        activeResponseAgeMs,
+        minMsAfterActiveResponseStart:
+          MIN_MS_AFTER_ACTIVE_RESPONSE_START_TO_ALLOW_BARGE_IN,
+        bookingTurnStatus,
+        pendingBookingStepKey,
+      });
+
+      return false;
+    }
+
+    /**
+     * Protección especial para prompts del booking flow.
+     *
+     * No es hardcode por negocio ni por idioma.
+     * Solo protege cualquier step activo del booking engine mientras el prompt se está hablando.
+     */
+    const isTooSoonDuringBookingPrompt =
+      isBookingPromptBeingSpoken &&
+      activeResponseAgeMs !== null &&
+      activeResponseAgeMs < MIN_MS_AFTER_BOOKING_PROMPT_START_TO_ALLOW_BARGE_IN;
+
+    if (isTooSoonDuringBookingPrompt) {
+      console.log("[VOICE_REALTIME][BARGE_IN_IGNORED_DURING_BOOKING_PROMPT_START]", {
+        callSid: params.getCallSid(),
+        streamSid: params.getStreamSid(),
+        source,
+        activeResponseId: activeResponseId || null,
+        assistantSpeaking,
+        activeResponseAgeMs,
+        minMsAfterBookingPromptStart:
+          MIN_MS_AFTER_BOOKING_PROMPT_START_TO_ALLOW_BARGE_IN,
+        bookingTurnStatus,
+        pendingBookingStepKey,
+      });
+
+      return false;
+    }
+
+    /**
+     * Protección por audio reciente.
+     * Se mantiene, pero ya no depende exclusivamente de este timestamp.
      */
     const isTooSoonAfterAssistantAudio =
       msSinceLastAssistantAudio !== null &&
@@ -100,6 +221,9 @@ export function createRealtimeBargeInController(
         msSinceLastAssistantAudio,
         minMsAfterAssistantAudio:
           MIN_MS_AFTER_ASSISTANT_AUDIO_TO_ALLOW_BARGE_IN,
+        activeResponseAgeMs,
+        bookingTurnStatus,
+        pendingBookingStepKey,
       });
 
       return false;
@@ -117,6 +241,9 @@ export function createRealtimeBargeInController(
       activeResponseId: activeResponseId || null,
       assistantSpeaking,
       msSinceLastAssistantAudio,
+      activeResponseAgeMs,
+      bookingTurnStatus,
+      pendingBookingStepKey,
     });
 
     if (activeResponseId) {
@@ -149,6 +276,8 @@ export function createRealtimeBargeInController(
 
   function reset(): void {
     lastBargeInAtMs = 0;
+    observedActiveResponseId = "";
+    observedActiveResponseStartedAtMs = 0;
   }
 
   return {
