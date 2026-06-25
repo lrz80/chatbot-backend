@@ -95,6 +95,7 @@ import appointmentBookingFlowRoutes from "./routes/appointment-booking-flow";
 import appointmentServiceSchedulesRouter from "./routes/appointment-service-schedules";
 import appointmentServiceBookingRulesRouter from "./routes/appointments/service-booking-rules";
 import voiceRealtimeRouter from "./routes/webhook/voice-realtime";
+import twilioVoiceSetupRouter from "./routes/twilioVoiceSetup";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -205,6 +206,8 @@ app.use("/api/sendgrid/templates", sendgridTemplates);
 app.use("/api/email-status", emailStatusRoute);
 app.use("/api/preview-email", previewEmailRouter);
 app.use(twilioEmbeddedRouter);
+app.use(twilioVoiceSetupRouter);
+app.use("/webhook/voice-realtime", voiceRealtimeRouter);
 app.use("/api/webhook/whatsapp", whatsappWebhook);
 app.use('/api/stripe/cancel', stripeCancelRouter);
 app.use('/api/creditos', resetNotificaciones);
@@ -240,7 +243,6 @@ app.use("/api/integrations/square", squareIntegrationRouter);
 app.use("/api/appointment-booking-flow", appointmentBookingFlowRoutes);
 app.use("/api/appointment-service-schedules", appointmentServiceSchedulesRouter);
 app.use("/api/appointments/service-booking-rules", appointmentServiceBookingRulesRouter);
-app.use("/webhook/voice-realtime", voiceRealtimeRouter);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {

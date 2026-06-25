@@ -3,14 +3,9 @@ import { Router } from "express";
 import twilio from "twilio";
 import pool from "../lib/db";
 import { authenticateUser } from "../middleware/auth";
+import { ensureTwilioSubaccountForTenant } from "../lib/twilio/ensureTwilioSubaccountForTenant";
 
 const router = Router();
-
-// Cliente Twilio maestro (cuenta principal)
-const masterClient = twilio(
-  process.env.TWILIO_MASTER_ACCOUNT_SID!,
-  process.env.TWILIO_MASTER_AUTH_TOKEN!
-);
 
 const WHATSAPP_CALLBACK_URL = "https://api.aamy.ai/api/webhook/whatsapp";
 const WHATSAPP_CALLBACK_METHOD = "POST";
@@ -60,34 +55,10 @@ router.post(
       const { whatsapp_number_type } = req.body || {};
       const numberType = whatsapp_number_type === "non_twilio" ? "non_twilio" : "twilio";
 
-      let subaccountSid = tenant.twilio_subaccount_sid;
-      let subAuthToken = tenant.twilio_subaccount_auth_token;
+      const twilioAccount = await ensureTwilioSubaccountForTenant(tenant.id);
 
-      // 1) Crear subcuenta Twilio si no existe
-      if (!subaccountSid || !subAuthToken) {
-        const sub = await masterClient.api.accounts.create({
-          friendlyName: `Tenant ${tenant.id} - ${tenant.name || ""}`.trim(),
-        });
-
-        subaccountSid = sub.sid;
-        // Twilio devuelve auth token SOLO en la creación (según SDK)
-        subAuthToken = (sub as any).authToken || (sub as any).auth_token || null;
-
-        if (!subAuthToken) {
-          return res.status(500).json({
-            error:
-              "No se recibió authToken al crear la subcuenta. Debes guardarlo para operar por subcuenta.",
-          });
-        }
-
-        await pool.query(
-          `UPDATE tenants
-           SET twilio_subaccount_sid = $1,
-               twilio_subaccount_auth_token = $2
-           WHERE id = $3`,
-          [subaccountSid, subAuthToken, tenant.id]
-        );
-      }
+      const subaccountSid = twilioAccount.twilioSubaccountSid;
+      const subAuthToken = twilioAccount.twilioSubaccountAuthToken;
 
       // Cliente Twilio REAL de subcuenta
       const subClient = twilio(subaccountSid, subAuthToken);
