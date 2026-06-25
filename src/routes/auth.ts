@@ -101,6 +101,8 @@ router.post('/register', async (req: Request, res: Response) => {
     );
 
     // ✅ Crear usuario con tenant_id
+    const normalizedTelefono = String(telefono).trim();
+
     await pool.query(
       `INSERT INTO users (
         uid,
@@ -119,31 +121,32 @@ router.post('/register', async (req: Request, res: Response) => {
         sms_phone_number
       )
       VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        $5,
-        $6,
-        $7,
+        $1::uuid,
+        $2::uuid,
+        $3::text,
+        $4::text,
+        $5::text,
+        $6::text,
+        $7::text,
         NOW(),
         false,
-        $8,
-        $9,
-        CASE WHEN $9 = true THEN NOW() ELSE NULL END,
-        CASE WHEN $9 = true THEN 'registration' ELSE NULL END,
-        CASE WHEN $9 = true THEN $7 ELSE NULL END
+        $8::text,
+        $9::boolean,
+        CASE WHEN $9::boolean = true THEN NOW() ELSE NULL END,
+        CASE WHEN $9::boolean = true THEN 'registration'::text ELSE NULL END,
+        CASE WHEN $9::boolean = true THEN $10::text ELSE NULL END
       )`,
       [
         uid,
         uid,
         email,
         password_hash,
-        'admin',
+        "admin",
         owner_name,
-        telefono,
+        normalizedTelefono,
         token_verificacion,
         normalizedSmsOptIn,
+        normalizedTelefono,
       ]
     );
 
