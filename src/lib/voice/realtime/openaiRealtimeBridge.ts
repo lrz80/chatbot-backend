@@ -875,17 +875,32 @@ export async function createOpenAiRealtimeBridge({
                 bookingTurnStatusAfterTranscript === "idle"
               );
 
+            const postBookingBusinessInfo =
+              clean((realtimeTenant as any)?.info_clave) ||
+              clean((realtimeCfg as any)?.info_clave);
+
             requestRealtimeResponse(
               isAwaitingPostBookingClosure
                 ? {
                     tool_choice: "auto",
                     instructions: [
                       "The booking flow has already completed successfully.",
-                      "Continue from the caller's latest message using the existing active session context.",
+                      "Continue from the caller's latest message.",
+                      "Use the caller's active language.",
+
                       "Do not say the appointment is still being processed.",
                       "Do not call create_appointment.",
                       "Do not call submit_booking_step unless the caller clearly asks to start a new booking.",
-                      "If the caller asks a question, answer it first using the existing session context, then ask whether they need anything else.",
+
+                      postBookingBusinessInfo
+                        ? `Configured business information for this tenant:\n${postBookingBusinessInfo}`
+                        : "Configured business information for this tenant is not available in this turn.",
+
+                      "Answer business questions using only the configured business information above.",
+                      "Do not invent addresses, locations, hours, prices, services, policies, staff, availability, or contact details.",
+                      "If the exact answer is not present in the configured business information above, say that you do not have that specific detail available.",
+
+                      "If the caller asks a question, answer it first, then ask whether they need anything else.",
                       "If the caller clearly indicates the conversation is done, call end_call.",
                     ].join("\n"),
                   }
