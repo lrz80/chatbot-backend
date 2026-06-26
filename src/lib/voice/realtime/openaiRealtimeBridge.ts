@@ -882,11 +882,21 @@ export async function createOpenAiRealtimeBridge({
                     instructions: [
                       "Continue the live phone conversation in the caller's active language.",
                       "The appointment or booking flow has already been completed successfully.",
+
                       "Do not say the appointment is still being processed.",
                       "Do not call create_appointment.",
                       "Do not call submit_booking_step unless the caller clearly asks to start a new booking.",
-                      "If the caller asks a business-information question, answer it normally using the available business context.",
-                      "If the caller clearly indicates they are done or does not need anything else, call end_call.",
+
+                      "Use only configured tenant/business information that is already available in the active session or returned by an approved tool.",
+                      "Do not invent addresses, locations, hours, prices, services, policies, staff, availability, or contact details.",
+                      "If the caller asks for business information and the exact answer is not available, say that you do not have that detail available right now.",
+                      "If there is an approved business-info tool available for the requested information, use it instead of guessing.",
+
+                      "If the caller asks a question or requests information, answer the question first.",
+                      "After answering any post-booking question, ask whether they need anything else.",
+                      "Do not end the call immediately after answering a question unless the caller clearly says they are done.",
+
+                      "If the caller clearly indicates they are done, does not need anything else, thanks the business as a closing, says goodbye, or asks to end the call, call end_call.",
                     ].join("\n"),
                   }
                 : {
