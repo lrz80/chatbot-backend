@@ -11,6 +11,7 @@ import { prepareRealtimeStepSubmission } from "../bookingStep/prepareRealtimeSte
 import { executeRealtimeStepRoute } from "../bookingStep/executeRealtimeStepRoute";
 import { validateSubmitBookingStepFreshness } from "../toolGuards/validateSubmitBookingStepFreshness";
 import { resolveConfiguredServiceOptionCandidate } from "../bookingStep/resolveConfiguredServiceOptionCandidate";
+import { resolveGlobalConfirmationIntent } from "../bookingStep/resolveGlobalConfirmationIntent";
 
 type RealtimeBookingContext = {
   tenant: any;
@@ -85,15 +86,20 @@ function isAllowedConfirmationProtocolValue(value: unknown): boolean {
 function getStructuredConfirmationIntent(value: unknown): string {
   const normalized = normalizeKey(value);
 
+  if (normalized === "confirm" || normalized === "confirmed") {
+    return "confirm";
+  }
+
   if (
-    normalized === "confirm" ||
-    normalized === "confirmed" ||
     normalized === "cancel" ||
     normalized === "cancelled" ||
-    normalized === "canceled" ||
-    normalized === "unknown"
+    normalized === "canceled"
   ) {
-    return normalized;
+    return "cancel";
+  }
+
+  if (normalized === "unknown") {
+    return "unknown";
   }
 
   return "";
@@ -382,22 +388,24 @@ function getEffectiveConfirmationProtocolValue(params: {
   candidate: SubmitValueCandidate;
   prepared: any;
 }): string {
-  const candidateValue = normalizeKey(params.candidate.value);
+  const candidateIntent = getStructuredConfirmationIntent(params.candidate.value);
 
-  if (isAllowedConfirmationProtocolValue(candidateValue)) {
-    return candidateValue;
+  if (isAllowedConfirmationProtocolValue(candidateIntent)) {
+    return candidateIntent;
   }
 
-  const resolvedInputValue = normalizeKey(params.prepared?.resolvedInputValue);
+  const resolvedInputIntent = getStructuredConfirmationIntent(
+    params.prepared?.resolvedInputValue
+  );
 
-  if (isAllowedConfirmationProtocolValue(resolvedInputValue)) {
-    return resolvedInputValue;
+  if (isAllowedConfirmationProtocolValue(resolvedInputIntent)) {
+    return resolvedInputIntent;
   }
 
-  const modelValue = normalizeKey(params.prepared?.modelValue);
+  const modelIntent = getStructuredConfirmationIntent(params.prepared?.modelValue);
 
-  if (isAllowedConfirmationProtocolValue(modelValue)) {
-    return modelValue;
+  if (isAllowedConfirmationProtocolValue(modelIntent)) {
+    return modelIntent;
   }
 
   return "";
@@ -490,12 +498,25 @@ export async function handleRealtimeSubmitBookingStep(
 
     const isCurrentConfirmationStep = isConfirmationStep(prepared.currentStep);
 
-    const effectiveConfirmationProtocolValue = isCurrentConfirmationStep
+    let effectiveConfirmationProtocolValue = isCurrentConfirmationStep
       ? getEffectiveConfirmationProtocolValue({
           candidate,
           prepared,
         })
       : "";
+
+    if (isCurrentConfirmationStep && !effectiveConfirmationProtocolValue) {
+      effectiveConfirmationProtocolValue = await resolveGlobalConfirmationIntent({
+        locale: bookingContext.currentLocale,
+        values: [
+          candidate.value,
+          prepared.resolvedInputValue,
+          prepared.rawTranscriptValue,
+          prepared.modelValue,
+          bookingContext.userInput,
+        ],
+      });
+    }
 
     if (isCurrentConfirmationStep) {
       if (!effectiveConfirmationProtocolValue) {
