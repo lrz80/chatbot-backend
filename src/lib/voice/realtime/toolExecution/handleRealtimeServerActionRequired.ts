@@ -65,6 +65,30 @@ function clearConsumedPendingAction(state: CallState): CallState {
   return nextState as CallState;
 }
 
+function applyServerActionPostBookingClosureState(params: {
+  state: CallState;
+  actionRequired: string;
+  serverActionResult: RealtimeToolResult;
+  lastUserTranscript: string;
+}): CallState {
+  const { state, actionRequired, serverActionResult, lastUserTranscript } = params;
+
+  if (
+    (actionRequired === "create_appointment" ||
+      actionRequired === "send_booking_sms") &&
+    serverActionResult?.ok === true
+  ) {
+    return {
+      ...(state as any),
+      awaitingPostBookingClosure: true,
+      postBookingClosureTranscript: clean(lastUserTranscript),
+      postBookingClosureTranscriptSeq: (state as any)?.lastUserTranscriptSeq,
+    } as CallState;
+  }
+
+  return state;
+}
+
 function applyServerActionNextRequiredStep(
   state: CallState,
   serverActionResult: RealtimeToolResult
@@ -191,8 +215,15 @@ export async function handleRealtimeServerActionRequired(
       ? clearConsumedPendingAction(nextRealtimeState)
       : nextRealtimeState;
 
+  const postBookingFinalRealtimeState = applyServerActionPostBookingClosureState({
+    state: baseFinalRealtimeState,
+    actionRequired,
+    serverActionResult: (serverActionResult || {}) as RealtimeToolResult,
+    lastUserTranscript,
+  });
+
   const finalRealtimeState = applyServerActionNextRequiredStep(
-    baseFinalRealtimeState,
+    postBookingFinalRealtimeState,
     (serverActionResult || {}) as RealtimeToolResult
   );
 
