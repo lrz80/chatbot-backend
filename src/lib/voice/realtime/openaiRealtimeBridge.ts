@@ -867,10 +867,31 @@ export async function createOpenAiRealtimeBridge({
               pendingBookingStepKey: clean((realtimeState as any).pendingBookingStepKey),
             });
 
+            const isAwaitingPostBookingClosure =
+              (realtimeState as any).awaitingPostBookingClosure === true &&
+              !clean((realtimeState as any).pendingBookingStepKey) &&
+              (
+                !bookingTurnStatusAfterTranscript ||
+                bookingTurnStatusAfterTranscript === "idle"
+              );
+
             requestRealtimeResponse(
-              {
-                tool_choice: "auto",
-              },
+              isAwaitingPostBookingClosure
+                ? {
+                    tool_choice: "auto",
+                    instructions: [
+                      "Continue the live phone conversation in the caller's active language.",
+                      "The appointment or booking flow has already been completed successfully.",
+                      "Do not say the appointment is still being processed.",
+                      "Do not call create_appointment.",
+                      "Do not call submit_booking_step unless the caller clearly asks to start a new booking.",
+                      "If the caller asks a business-information question, answer it normally using the available business context.",
+                      "If the caller clearly indicates they are done or does not need anything else, call end_call.",
+                    ].join("\n"),
+                  }
+                : {
+                    tool_choice: "auto",
+                  },
               "bridge:user_transcript"
             );
           }
