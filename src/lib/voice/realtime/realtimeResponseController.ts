@@ -234,7 +234,7 @@ export function createRealtimeResponseController(
       startedAtUserTranscriptSeq,
       hasPendingResponseCreate: Boolean(pendingResponseCreate),
       hasInstructions: Boolean(responseInstructions),
-      instructionsPreview: responseInstructions.slice(0, 700),
+      instructionsLength: responseInstructions.length,
     });
 
     const sent = sendJson(params.openAiSocket, event);
@@ -289,7 +289,7 @@ export function createRealtimeResponseController(
       source,
       startedAtUserTranscriptSeq,
       hasInstructions: Boolean(responseInstructions),
-      instructionsPreview: responseInstructions.slice(0, 700),
+      instructionsLength: responseInstructions.length,
     });
 
     const sent = sendJson(params.openAiSocket, event);
