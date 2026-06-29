@@ -55,19 +55,6 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  fallback: T
-): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((resolve) => {
-      setTimeout(() => resolve(fallback), timeoutMs);
-    }),
-  ]);
-}
-
 function mapDetectedLanguageToLocale(
   detectedLanguage?: string | null
 ): VoiceLocale | null {
@@ -152,11 +139,7 @@ export async function handleRealtimeTranscriptEvent(
   }
 
   try {
-    const detection = await withTimeout(
-      detectarIdioma(transcript),
-      300,
-      null
-    );
+    const detection = await detectarIdioma(transcript);
     const detectedLocale = mapDetectedLanguageToLocale(detection?.lang || null);
 
     const normalizedTranscript = clean(transcript);
