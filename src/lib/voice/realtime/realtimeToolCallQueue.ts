@@ -141,6 +141,25 @@ function buildSyntheticCreateAppointmentEvent(params: {
   };
 }
 
+function buildSyntheticGetBookingFlowEvent(params: {
+  callId: string;
+  source: string;
+}): any {
+  return {
+    type: "response.function_call_arguments.done",
+    name: "get_booking_flow",
+    call_id: params.callId,
+    arguments: JSON.stringify({}),
+
+    toolName: "get_booking_flow",
+    callId: params.callId,
+    toolArgs: {},
+
+    synthetic: true,
+    syntheticSource: params.source,
+  };
+}
+
 function buildPendingStepModelResolutionResponse(params: {
   stepKey: string;
   transcript: string;
@@ -338,8 +357,31 @@ export function createRealtimeToolCallQueue(
     );
   }
 
+  function enqueueGetBookingFlowFromTranscript(paramsForFlow: {
+    source: string;
+  }): void {
+    const callId = `syn_${Date.now().toString(36)}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+
+    console.warn("[VOICE_REALTIME][SYNTHETIC_GET_BOOKING_FLOW_ENQUEUED]", {
+      callSid: params.getCallSid(),
+      lastUserTranscript: params.getLastUserTranscript(),
+      lastUserTranscriptSeq: params.getLastUserTranscriptSeq(),
+      source: paramsForFlow.source,
+    });
+
+    enqueueRealtimeToolCall(
+      buildSyntheticGetBookingFlowEvent({
+        callId,
+        source: paramsForFlow.source,
+      })
+    );
+  }
+
   return {
     enqueueRealtimeToolCall,
     enqueueSubmitBookingStepFromTranscript,
+    enqueueGetBookingFlowFromTranscript,
   };
 }
