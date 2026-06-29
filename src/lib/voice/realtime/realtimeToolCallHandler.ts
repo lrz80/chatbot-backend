@@ -810,7 +810,9 @@ export async function handleRealtimeToolCall(
     });
 
     const shouldSendFunctionCallOutput =
-      !isSyntheticToolCall && sendToolOutputToOpenAi !== false;
+      !isSyntheticToolCall &&
+      sendToolOutputToOpenAi !== false &&
+      toolName !== "get_booking_flow";
 
     if (shouldSendFunctionCallOutput) {
       sendRealtimeJson(openAiSocket, {
