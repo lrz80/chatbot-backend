@@ -21,7 +21,9 @@ import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBooki
 import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateSubmitBookingStepEarly";
 import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppointment";
 import { handleRealtimeServerActionRequired } from "./toolExecution/handleRealtimeServerActionRequired";
-import { buildExactRealtimeSpeechResponse } from "./buildExactRealtimeSpeechResponse";
+import {
+  buildBookingSpeechResponse,
+} from "./bookingSpeechRenderer";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -56,23 +58,6 @@ type HandleRealtimeToolCallResult = {
   callEnding: boolean;
   resetLastUserDigits: boolean;
 };
-
-function shouldUseExactBookingPrompt(stepKey: string): boolean {
-  return (
-    stepKey === "phone" ||
-    stepKey === "confirm" ||
-    stepKey === "offer_booking_sms"
-  );
-}
-
-function buildToollessResponse(
-  instructions: string
-): Record<string, unknown> {
-  return {
-    instructions,
-    tool_choice: "none",
-  };
-}
 
 function buildDeterministicToolFollowupInstructions(params: {
   toolName: string;
@@ -940,18 +925,11 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        shouldUseExactBookingPrompt(retryStepKey)
-          ? buildExactRealtimeSpeechResponse({
-              prompt: retryPrompt,
-              currentLocale,
-            })
-          : buildToollessResponse([
-              "Ask naturally.",
-              "Use the caller active language.",
-              "Keep the same meaning.",
-              "Ask only one question.",
-              `Required booking step: ${retryPrompt}`,
-            ].join("\n")),
+        buildBookingSpeechResponse({
+          stepKey: retryStepKey,
+          prompt: retryPrompt,
+          currentLocale,
+        }),
         "tool_followup:submit_booking_step:retry"
       );
 
@@ -990,18 +968,11 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        shouldUseExactBookingPrompt(nextRequiredStepKey)
-          ? buildExactRealtimeSpeechResponse({
-              prompt: nextRequiredPrompt,
-              currentLocale,
-            })
-          : buildToollessResponse([
-              "Ask naturally.",
-              "Use the caller active language.",
-              "Keep the same meaning.",
-              "Ask only one question.",
-              `Required booking step: ${nextRequiredPrompt}`,
-            ].join("\n")),
+        buildBookingSpeechResponse({
+          stepKey: nextRequiredStepKey,
+          prompt: nextRequiredPrompt,
+          currentLocale,
+        }),
         "tool_followup:submit_booking_step"
       );
 
@@ -1027,12 +998,10 @@ export async function handleRealtimeToolCall(
         Boolean(nextRequiredPrompt) ||
         (toolName === "submit_booking_step" && Boolean(retryPrompt));
 
-      if (
-        shouldSpeakExactBookingPrompt &&
-        shouldUseExactBookingPrompt(nextRequiredStepKey || retryStepKey)
-      ) {
+      if (shouldSpeakExactBookingPrompt) {
         requestRealtimeResponse(
-          buildExactRealtimeSpeechResponse({
+          buildBookingSpeechResponse({
+            stepKey: nextRequiredStepKey || retryStepKey,
             prompt: deterministicFollowupInstructions,
             currentLocale,
           }),
