@@ -57,6 +57,14 @@ type HandleRealtimeToolCallResult = {
   resetLastUserDigits: boolean;
 };
 
+function shouldUseExactBookingPrompt(stepKey: string): boolean {
+  return (
+    stepKey === "phone" ||
+    stepKey === "confirm" ||
+    stepKey === "offer_booking_sms"
+  );
+}
+
 function buildToollessResponse(
   instructions: string
 ): Record<string, unknown> {
@@ -932,10 +940,18 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        buildExactRealtimeSpeechResponse({
-          prompt: retryPrompt,
-          currentLocale,
-        }),
+        shouldUseExactBookingPrompt(retryStepKey)
+          ? buildExactRealtimeSpeechResponse({
+              prompt: retryPrompt,
+              currentLocale,
+            })
+          : buildToollessResponse([
+              "Ask naturally.",
+              "Use the caller active language.",
+              "Keep the same meaning.",
+              "Ask only one question.",
+              `Required booking step: ${retryPrompt}`,
+            ].join("\n")),
         "tool_followup:submit_booking_step:retry"
       );
 
@@ -974,10 +990,18 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        buildExactRealtimeSpeechResponse({
-          prompt: nextRequiredPrompt,
-          currentLocale,
-        }),
+        shouldUseExactBookingPrompt(nextRequiredStepKey)
+          ? buildExactRealtimeSpeechResponse({
+              prompt: nextRequiredPrompt,
+              currentLocale,
+            })
+          : buildToollessResponse([
+              "Ask naturally.",
+              "Use the caller active language.",
+              "Keep the same meaning.",
+              "Ask only one question.",
+              `Required booking step: ${nextRequiredPrompt}`,
+            ].join("\n")),
         "tool_followup:submit_booking_step"
       );
 
@@ -1003,7 +1027,10 @@ export async function handleRealtimeToolCall(
         Boolean(nextRequiredPrompt) ||
         (toolName === "submit_booking_step" && Boolean(retryPrompt));
 
-      if (shouldSpeakExactBookingPrompt) {
+      if (
+        shouldSpeakExactBookingPrompt &&
+        shouldUseExactBookingPrompt(nextRequiredStepKey || retryStepKey)
+      ) {
         requestRealtimeResponse(
           buildExactRealtimeSpeechResponse({
             prompt: deterministicFollowupInstructions,
