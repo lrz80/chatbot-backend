@@ -21,7 +21,7 @@ import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBooki
 import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateSubmitBookingStepEarly";
 import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppointment";
 import { handleRealtimeServerActionRequired } from "./toolExecution/handleRealtimeServerActionRequired";
-import { buildBookingSpeechResponse } from "./bookingSpeechRenderer";
+import { buildExactRealtimeSpeechResponse } from "./buildExactRealtimeSpeechResponse";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -56,6 +56,15 @@ type HandleRealtimeToolCallResult = {
   callEnding: boolean;
   resetLastUserDigits: boolean;
 };
+
+function buildToollessResponse(
+  instructions: string
+): Record<string, unknown> {
+  return {
+    instructions,
+    tool_choice: "none",
+  };
+}
 
 function buildDeterministicToolFollowupInstructions(params: {
   toolName: string;
@@ -923,9 +932,10 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        {
-          instructions: retryPrompt,
-        },
+        buildExactRealtimeSpeechResponse({
+          prompt: retryPrompt,
+          currentLocale,
+        }),
         "tool_followup:submit_booking_step:retry"
       );
 
@@ -964,9 +974,10 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        {
-          instructions: nextRequiredPrompt,
-        },
+        buildExactRealtimeSpeechResponse({
+          prompt: nextRequiredPrompt,
+          currentLocale,
+        }),
         "tool_followup:submit_booking_step"
       );
 
@@ -988,17 +999,26 @@ export async function handleRealtimeToolCall(
       });
 
     if (deterministicFollowupInstructions) {
-      requestRealtimeResponse(
-        buildBookingSpeechResponse({
-          stepKey:
-            nextRequiredStepKey ||
-            retryStepKey ||
-            toolName,
-          prompt: deterministicFollowupInstructions,
-          currentLocale,
-        }),
-        `tool_followup:${toolName}`
-      );
+      const shouldSpeakExactBookingPrompt =
+        Boolean(nextRequiredPrompt) ||
+        (toolName === "submit_booking_step" && Boolean(retryPrompt));
+
+      if (shouldSpeakExactBookingPrompt) {
+        requestRealtimeResponse(
+          buildExactRealtimeSpeechResponse({
+            prompt: deterministicFollowupInstructions,
+            currentLocale,
+          }),
+          `tool_followup:${toolName}`
+        );
+      } else {
+        requestRealtimeResponse(
+          {
+            instructions: deterministicFollowupInstructions,
+          },
+          `tool_followup:${toolName}`
+        );
+      }
     }
 
     return {

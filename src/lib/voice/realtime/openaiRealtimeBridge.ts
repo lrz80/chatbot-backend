@@ -40,7 +40,6 @@ import {
 } from "./openAiRealtimeEvents";
 import { createRealtimeToolCallQueue } from "./realtimeToolCallQueue";
 import { createRealtimeBargeInController } from "./realtimeBargeInController";
-import { detectarIntencion } from "../../detectarIntencion";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -810,7 +809,7 @@ export async function createOpenAiRealtimeBridge({
         lastAssistantTranscript,
         minMsAfterAssistantAudio: isBargeInTranscript ? 0 : 800,
       })
-        .then(async (transcriptResult) => {
+        .then((transcriptResult) => {
           if (!transcriptResult.consumed) {
             return;
           }
@@ -879,40 +878,6 @@ export async function createOpenAiRealtimeBridge({
             const postBookingBusinessInfo =
               clean((realtimeTenant as any)?.info_clave) ||
               clean((realtimeCfg as any)?.info_clave);
-
-            if (tenantId && lastUserTranscript) {
-              try {
-                const detectedIntent = await detectarIntencion(
-                  lastUserTranscript,
-                  tenantId,
-                  "voice"
-                );
-
-                const shouldStartBooking =
-                  detectedIntent?.commercial?.wantsBooking === true;
-
-                if (shouldStartBooking) {
-                  console.warn("[VOICE_REALTIME][DIRECT_BOOKING_FLOW_FROM_INTENT_ENGINE]", {
-                    callSid,
-                    tenantId,
-                    lastUserTranscript,
-                    detectedIntent: detectedIntent.intent,
-                    wantsBooking: detectedIntent.commercial?.wantsBooking,
-                  });
-
-                  toolCallQueue.enqueueGetBookingFlowFromTranscript({
-                    source: "intent_engine_booking_start",
-                  });
-
-                  return;
-                }
-              } catch (error) {
-                console.error("[VOICE_REALTIME][INTENT_ENGINE_ERROR]", {
-                  callSid,
-                  error: error instanceof Error ? error.message : String(error),
-                });
-              }
-            }
 
             requestRealtimeResponse(
               isAwaitingPostBookingClosure
