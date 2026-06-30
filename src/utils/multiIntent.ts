@@ -14,12 +14,6 @@ export type MultiAnswer = {
   missingIntents: string[];  // intents sin FAQ oficial (ej. ['precio'])
 };
 
-const CANDIDATES = [
-  'interes_clases','info_general','servicios',
-  'precio','horario','ubicacion','reservar','comprar','clases_online',
-  'soporte','faq','politicas','giftcards'
-];
-
 // Heurística sencilla por keywords (si no usas embeddings aquí)
 function keywordVote(txt: string) {
   const s = (txt || '').toLowerCase();
