@@ -141,6 +141,43 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "",
 });
 
+const INTENT_CACHE_TTL_MS = 60_000;
+
+type CacheItem<T> = {
+  value: T;
+  expiresAt: number;
+};
+
+const tenantContextCache = new Map<string, CacheItem<string>>();
+const tenantIntentsCache = new Map<string, CacheItem<TenantIntentRow[]>>();
+const systemIntentsCache = new Map<string, CacheItem<IntentDefinition[]>>();
+
+function getCache<T>(cache: Map<string, CacheItem<T>>, key: string): T | null {
+  const item = cache.get(key);
+
+  if (!item) return null;
+
+  if (Date.now() > item.expiresAt) {
+    cache.delete(key);
+    return null;
+  }
+
+  return item.value;
+}
+
+function setCache<T>(
+  cache: Map<string, CacheItem<T>>,
+  key: string,
+  value: T
+): T {
+  cache.set(key, {
+    value,
+    expiresAt: Date.now() + INTENT_CACHE_TTL_MS,
+  });
+
+  return value;
+}
+
 function makeDefaultCommercialSignal(): CommercialSignal {
   return {
     purchaseIntent: "unknown",
@@ -735,12 +772,42 @@ export async function detectarIntencion(
     });
   }
 
-  const [tenantInfo, tenantIntents] = await Promise.all([
-    loadTenantContext(tenantId, resolvedCanal),
-    loadTenantIntents(tenantId, resolvedCanal),
-  ]);
+  const tenantCacheKey = `${tenantId}:${resolvedCanal}`;
 
-  const systemIntents = await getSystemIntentDefinitions();
+  const [tenantInfo, tenantIntents, systemIntents] = await Promise.all([
+    (async () => {
+      const cached = getCache(tenantContextCache, tenantCacheKey);
+      if (cached) return cached;
+
+      return setCache(
+        tenantContextCache,
+        tenantCacheKey,
+        await loadTenantContext(tenantId, resolvedCanal)
+      );
+    })(),
+
+    (async () => {
+      const cached = getCache(tenantIntentsCache, tenantCacheKey);
+      if (cached) return cached;
+
+      return setCache(
+        tenantIntentsCache,
+        tenantCacheKey,
+        await loadTenantIntents(tenantId, resolvedCanal)
+      );
+    })(),
+
+    (async () => {
+      const cached = getCache(systemIntentsCache, "system");
+      if (cached) return cached;
+
+      return setCache(
+        systemIntentsCache,
+        "system",
+        await getSystemIntentDefinitions()
+      );
+    })(),
+  ]);
 
   const allowedIntentCatalog = buildAllowedIntentCatalog({
     systemIntents,
