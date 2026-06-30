@@ -21,6 +21,7 @@ import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBooki
 import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateSubmitBookingStepEarly";
 import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppointment";
 import { handleRealtimeServerActionRequired } from "./toolExecution/handleRealtimeServerActionRequired";
+import { buildBookingSpeechResponse } from "./bookingSpeechRenderer";
 
 type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
@@ -987,25 +988,17 @@ export async function handleRealtimeToolCall(
       });
 
     if (deterministicFollowupInstructions) {
-      const shouldSpeakExactBookingPrompt =
-        Boolean(nextRequiredPrompt) ||
-        (toolName === "submit_booking_step" && Boolean(retryPrompt));
-
-      if (shouldSpeakExactBookingPrompt) {
-        requestRealtimeResponse(
-          {
-            instructions: deterministicFollowupInstructions,
-          },
-          `tool_followup:${toolName}`
-        );
-      } else {
-        requestRealtimeResponse(
-          {
-            instructions: deterministicFollowupInstructions,
-          },
-          `tool_followup:${toolName}`
-        );
-      }
+      requestRealtimeResponse(
+        buildBookingSpeechResponse({
+          stepKey:
+            nextRequiredStepKey ||
+            retryStepKey ||
+            toolName,
+          prompt: deterministicFollowupInstructions,
+          currentLocale,
+        }),
+        `tool_followup:${toolName}`
+      );
     }
 
     return {
