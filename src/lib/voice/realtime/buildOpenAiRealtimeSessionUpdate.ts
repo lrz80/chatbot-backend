@@ -211,6 +211,10 @@ export function buildOpenAiRealtimeSessionUpdate(
 ): Record<string, unknown> {
   const canSendUsefulLinkSms = params.canSendUsefulLinkSms === true;
 
+  console.log("[VOICE_REALTIME][SESSION_CAPABILITIES]", {
+    canSendUsefulLinkSms,
+  });
+
   return {
     type: "session.update",
     session: {
