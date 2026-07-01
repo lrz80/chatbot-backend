@@ -1,5 +1,5 @@
 //src/lib/voice/types.ts
-export type VoiceLocale = "es-ES" | "en-US" | "pt-BR";
+export type VoiceLocale = string;
 
 export type LinkType = "reservar" | "comprar" | "soporte" | "web";
 

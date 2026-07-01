@@ -1,6 +1,6 @@
 // src/lib/voice/realtime/bookingSpeechRenderer.ts
 
-export type VoiceLocale = string;
+import type { VoiceLocale } from "../types";
 
 export type BookingSpeechMode = "exact" | "natural";
 

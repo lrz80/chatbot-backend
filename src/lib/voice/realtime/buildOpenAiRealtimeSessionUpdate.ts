@@ -4,6 +4,15 @@ type BuildOpenAiRealtimeSessionUpdateParams = {
   instructions: string;
   voice: string;
   model: string;
+
+  /**
+   * True only when the tenant has at least one configured useful link
+   * that can be sent by SMS.
+   *
+   * This must come from tenant configuration / backend state.
+   * Do not hardcode it per business.
+   */
+  canSendUsefulLinkSms?: boolean;
 };
 
 function numberFromEnv(params: {
@@ -85,9 +94,123 @@ function buildRealtimeTurnDetection(): Record<string, unknown> {
   };
 }
 
+function buildUsefulLinkSmsInstructions(params: {
+  canSendUsefulLinkSms: boolean;
+}): string[] {
+  if (!params.canSendUsefulLinkSms) {
+    return [
+      "- Do not offer to send links by SMS because this tenant has no useful links configured.",
+      "- Do not call send_useful_link_sms. That capability is not available for this tenant.",
+      "- If the caller asks for a link by SMS, explain briefly that you can provide the available business information verbally.",
+      "- If automatic booking cannot be completed and the tool result says fallback_action is SEND_BOOKING_LINK, do not mention the booking provider, API, subscription, integration, or technical reason to the caller.",
+      "- In that fallback case, explain naturally that the reservation cannot be completed automatically right now and offer to help with any other available business information.",
+    ];
+  }
+
+  return [
+    "- You may offer to send a useful configured link by SMS when the caller asks for it or clearly agrees to receive it.",
+    "- Useful links can include location, booking, payment, website, social media, menu, quote, or any other tenant-configured link.",
+    "- Call send_useful_link_sms only after the caller agrees to receive the link by SMS.",
+    "- When calling send_useful_link_sms, set link_types based on the caller's request.",
+    "- For location or address requests, use link_types like ['location', 'ubicacion', 'maps', 'google_maps'].",
+    "- For booking or appointment requests, use link_types like ['booking', 'square_booking', 'appointments'].",
+    "- For payment requests, use link_types like ['payment', 'pay', 'pagar'].",
+    "- Never invent useful links. The server must send useful links from tenant-configured links only.",
+    "- If send_useful_link_sms succeeds, briefly confirm that the link was sent and ask if they need anything else.",
+    "- If automatic booking cannot be completed and the tool result says fallback_action is SEND_BOOKING_LINK, do not mention the booking provider, API, subscription, integration, or technical reason to the caller.",
+    "- In that fallback case, explain naturally that the reservation cannot be completed automatically right now and ask whether the caller wants the official booking link by SMS.",
+    "- Do not call end_call in the same turn after send_useful_link_sms.",
+    "- Never call end_call immediately after create_appointment, send_booking_sms, or send_useful_link_sms unless the caller explicitly ends the conversation in a later caller turn.",
+  ];
+}
+
+function buildRealtimeTools(params: {
+  canSendUsefulLinkSms: boolean;
+}): Record<string, unknown>[] {
+  const tools: Record<string, unknown>[] = [
+    {
+      type: "function",
+      name: "get_booking_flow",
+      description:
+        "Get the tenant-configured booking flow and current canonical booking state before or during appointment booking. Follow the configured step order and do not skip required steps.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      type: "function",
+      name: "create_appointment",
+      description:
+        "Create a real appointment only after the tenant-configured booking flow is complete and the server-side booking state confirms the caller has accepted the final confirmation. Do not pass tenant-specific fields. The server must create the appointment from the validated canonical booking state, not from model-inferred arguments.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      type: "function",
+      name: "send_booking_sms",
+      description:
+        "Send the confirmed booking details by SMS using the server-side canonical booking state. Use this only after the caller accepts the SMS offer. Do not pass phone number, message, tenant fields, or booking fields. The server builds and sends the SMS from validated booking state.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+    },
+  ];
+
+  if (params.canSendUsefulLinkSms) {
+    tools.push({
+      type: "function",
+      name: "send_useful_link_sms",
+      description:
+        "Send a tenant-configured useful link by SMS to the caller, such as location, booking, payment, website, menu, social media, or another configured link. Use this only after the caller agrees to receive the link.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          link_types: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+            description:
+              "Useful link type priority based on the caller request. Examples: location/address/maps -> ['location', 'ubicacion', 'maps', 'google_maps']; booking/appointment -> ['booking', 'square_booking', 'appointments']; payment/pay -> ['payment', 'pay', 'pagar'].",
+          },
+        },
+        required: [],
+      },
+    });
+  }
+
+  tools.push({
+    type: "function",
+    name: "end_call",
+    description:
+      "Request to end the call only after the caller clearly confirms they do not need anything else, says goodbye, or asks to end the call. Do not use immediately after sending an SMS, useful link, booking link, or appointment fallback message.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+  });
+
+  return tools;
+}
+
 export function buildOpenAiRealtimeSessionUpdate(
   params: BuildOpenAiRealtimeSessionUpdateParams
 ): Record<string, unknown> {
+  const canSendUsefulLinkSms = params.canSendUsefulLinkSms === true;
+
   return {
     type: "session.update",
     session: {
@@ -112,15 +235,10 @@ export function buildOpenAiRealtimeSessionUpdate(
         "- Never call a tool named send_sms. That tool does not exist.",
         "- Call send_booking_sms only after the server has accepted the configured SMS consent step and no booking step is pending.",
         "- Never invent SMS text or phone numbers. The server sends booking SMS from canonical booking state.",
-        "- If automatic booking cannot be completed and the tool result says fallback_action is SEND_BOOKING_LINK, do not mention the booking provider, API, subscription, integration, or technical reason to the caller.",
-        "- In that fallback case, explain naturally that the reservation cannot be completed automatically right now and ask whether the caller wants the official booking link by SMS.",
-        "- If the caller agrees to receive the official booking link, call send_useful_link_sms with link_types ['booking', 'square_booking', 'appointments'].",
-        "- Never invent useful links. The server must send useful links from tenant-configured links only.",
-        "- Do not call end_call while a booking-link SMS fallback question is waiting for the caller answer.",
-        "- After send_useful_link_sms succeeds, tell the caller the official link was sent and ask if they need anything else.",
-        "- Do not call end_call in the same turn after send_useful_link_sms.",
+        ...buildUsefulLinkSmsInstructions({
+          canSendUsefulLinkSms,
+        }),
         "- Only call end_call after the caller clearly says they do not need anything else, says goodbye, or asks to end the call.",
-        "- Never call end_call immediately after create_appointment, send_booking_sms, or send_useful_link_sms unless the caller explicitly ends the conversation in a later caller turn.",
       ].join("\n"),
       audio: {
         input: {
@@ -139,77 +257,9 @@ export function buildOpenAiRealtimeSessionUpdate(
           voice: params.voice,
         },
       },
-      tools: [
-        {
-          type: "function",
-          name: "get_booking_flow",
-          description:
-            "Get the tenant-configured booking flow and current canonical booking state before or during appointment booking. Follow the configured step order and do not skip required steps.",
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: {},
-            required: [],
-          },
-        },
-        {
-          type: "function",
-          name: "create_appointment",
-          description:
-            "Create a real appointment only after the tenant-configured booking flow is complete and the server-side booking state confirms the caller has accepted the final confirmation. Do not pass tenant-specific fields. The server must create the appointment from the validated canonical booking state, not from model-inferred arguments.",
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: {},
-            required: [],
-          },
-        },
-        {
-          type: "function",
-          name: "send_booking_sms",
-          description:
-            "Send the confirmed booking details by SMS using the server-side canonical booking state. Use this only after the caller accepts the SMS offer. Do not pass phone number, message, tenant fields, or booking fields. The server builds and sends the SMS from validated booking state.",
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: {},
-            required: [],
-          },
-        },
-        {
-          type: "function",
-          name: "send_useful_link_sms",
-          description:
-            "Send an official useful link by SMS to the caller, such as a booking link, when automatic booking cannot be completed. Use this only after the caller agrees to receive the link.",
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              link_types: {
-                type: "array",
-                items: {
-                  type: "string",
-                },
-                description:
-                  "Useful link type priority. For booking fallback use ['booking', 'square_booking', 'appointments'].",
-              },
-            },
-            required: [],
-          },
-        },
-        {
-          type: "function",
-          name: "end_call",
-          description:
-            "Request to end the call only after the caller clearly confirms they do not need anything else, says goodbye, or asks to end the call. Do not use immediately after sending an SMS, useful link, booking link, or appointment fallback message.",
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: {},
-            required: [],
-          },
-        },
-      ],
+      tools: buildRealtimeTools({
+        canSendUsefulLinkSms,
+      }),
       tool_choice: "auto",
     },
   };

@@ -35,31 +35,185 @@ export type SendUsefulLinkSmsResult = {
   link?: UsefulLink;
 };
 
-const DEFAULT_BOOKING_LINK_TYPES = [
+const DEFAULT_USEFUL_LINK_TYPES = [
   "booking",
-  "square_booking",
+  "appointment",
   "appointments",
+  "square_booking",
   "appointment_booking",
   "booking_link",
+  "location",
+  "address",
+  "maps",
+  "google_maps",
+  "ubicacion",
+  "dirección",
+  "direccion",
+  "payment",
+  "pay",
+  "pagar",
+  "website",
+  "site",
+  "menu",
+  "quote",
+  "estimate",
 ];
+
+const USEFUL_LINK_TYPE_ALIASES: Record<string, string[]> = {
+  booking: [
+    "booking",
+    "book",
+    "appointment",
+    "appointments",
+    "appointment_booking",
+    "booking_link",
+    "square_booking",
+    "reservar",
+    "reserva",
+    "cita",
+    "agenda",
+    "agendar",
+  ],
+  location: [
+    "location",
+    "address",
+    "maps",
+    "map",
+    "google_maps",
+    "google maps",
+    "ubicacion",
+    "ubicación",
+    "direccion",
+    "dirección",
+    "address link",
+    "location link",
+  ],
+  payment: [
+    "payment",
+    "pay",
+    "payment_link",
+    "pay_link",
+    "pagar",
+    "pago",
+    "pago_link",
+  ],
+  website: [
+    "website",
+    "site",
+    "web",
+    "pagina",
+    "página",
+    "pagina web",
+    "página web",
+  ],
+  menu: ["menu", "menú"],
+  quote: ["quote", "estimate", "cotizacion", "cotización", "presupuesto"],
+};
 
 function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function normalizeLinkTypes(values?: string[]): string[] {
-  const normalized = (values || DEFAULT_BOOKING_LINK_TYPES)
-    .map((value) => clean(value).toLowerCase())
-    .filter(Boolean);
+function normalizeSearchValue(value: unknown): string {
+  return clean(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  return normalized.length > 0 ? normalized : DEFAULT_BOOKING_LINK_TYPES;
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values.map(normalizeSearchValue).filter(Boolean)));
+}
+
+function expandLinkTypes(values?: string[]): string[] {
+  const baseValues = values && values.length > 0 ? values : DEFAULT_USEFUL_LINK_TYPES;
+  const normalizedBaseValues = unique(baseValues);
+
+  const expanded: string[] = [...normalizedBaseValues];
+
+  for (const value of normalizedBaseValues) {
+    for (const aliases of Object.values(USEFUL_LINK_TYPE_ALIASES)) {
+      const normalizedAliases = unique(aliases);
+
+      if (normalizedAliases.includes(value)) {
+        expanded.push(...normalizedAliases);
+      }
+    }
+  }
+
+  return unique(expanded);
+}
+
+function scoreUsefulLink(params: {
+  link: UsefulLink;
+  requestedTypes: string[];
+}): number {
+  const tipo = normalizeSearchValue(params.link.tipo);
+  const nombre = normalizeSearchValue(params.link.nombre);
+  const requestedTypes = params.requestedTypes;
+
+  const exactTipoIndex = requestedTypes.indexOf(tipo);
+
+  if (exactTipoIndex >= 0) {
+    return 1000 - exactTipoIndex;
+  }
+
+  const exactNombreIndex = requestedTypes.indexOf(nombre);
+
+  if (exactNombreIndex >= 0) {
+    return 900 - exactNombreIndex;
+  }
+
+  const tipoContainsIndex = requestedTypes.findIndex(
+    (requestedType) =>
+      tipo.includes(requestedType) || requestedType.includes(tipo)
+  );
+
+  if (tipoContainsIndex >= 0) {
+    return 800 - tipoContainsIndex;
+  }
+
+  const nombreContainsIndex = requestedTypes.findIndex(
+    (requestedType) =>
+      nombre.includes(requestedType) || requestedType.includes(nombre)
+  );
+
+  if (nombreContainsIndex >= 0) {
+    return 700 - nombreContainsIndex;
+  }
+
+  return 0;
+}
+
+export async function tenantHasUsefulLinks(tenantId: string): Promise<boolean> {
+  const cleanTenantId = clean(tenantId);
+
+  if (!cleanTenantId) {
+    return false;
+  }
+
+  const { rows } = await pool.query(
+    `
+    SELECT 1
+    FROM links_utiles
+    WHERE tenant_id = $1
+      AND NULLIF(TRIM(url), '') IS NOT NULL
+    LIMIT 1
+    `,
+    [cleanTenantId]
+  );
+
+  return rows.length > 0;
 }
 
 async function findUsefulLinkForTenant(params: {
   tenantId: string;
   linkTypes?: string[];
 }): Promise<UsefulLink | null> {
-  const linkTypes = normalizeLinkTypes(params.linkTypes);
+  const requestedTypes = expandLinkTypes(params.linkTypes);
 
   const { rows } = await pool.query(
     `
@@ -70,33 +224,43 @@ async function findUsefulLinkForTenant(params: {
       url
     FROM links_utiles
     WHERE tenant_id = $1
-      AND LOWER(TRIM(tipo)) = ANY($2::text[])
       AND NULLIF(TRIM(url), '') IS NOT NULL
-    ORDER BY
-      CASE LOWER(TRIM(tipo))
-        WHEN 'booking' THEN 1
-        WHEN 'square_booking' THEN 2
-        WHEN 'appointments' THEN 3
-        WHEN 'appointment_booking' THEN 4
-        WHEN 'booking_link' THEN 5
-        ELSE 99
-      END ASC,
-      nombre ASC
-    LIMIT 1
+    ORDER BY nombre ASC
     `,
-    [params.tenantId, linkTypes]
+    [params.tenantId]
   );
 
-  const row = rows[0];
-
-  if (!row) return null;
-
-  return {
+  const links: UsefulLink[] = rows.map((row) => ({
     id: clean(row.id),
     tipo: clean(row.tipo),
     nombre: clean(row.nombre),
     url: clean(row.url),
-  };
+  }));
+
+  if (links.length === 0) {
+    return null;
+  }
+
+  const rankedLinks = links
+    .map((link) => ({
+      link,
+      score: scoreUsefulLink({
+        link,
+        requestedTypes,
+      }),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (rankedLinks.length > 0) {
+    return rankedLinks[0].link;
+  }
+
+  if (!params.linkTypes || params.linkTypes.length === 0) {
+    return links[0];
+  }
+
+  return null;
 }
 
 function buildUsefulLinkSmsBody(params: {
@@ -108,29 +272,9 @@ function buildUsefulLinkSmsBody(params: {
   const linkName = clean(params.link.nombre) || clean(params.link.tipo);
   const url = clean(params.link.url);
 
-  if (params.locale.startsWith("es")) {
-    return [
-      businessName || null,
-      linkName ? `Enlace: ${linkName}` : "Enlace de reserva",
-      url,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  if (params.locale.startsWith("pt")) {
-    return [
-      businessName || null,
-      linkName ? `Link: ${linkName}` : "Link de agendamento",
-      url,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
   return [
     businessName || null,
-    linkName ? `Link: ${linkName}` : "Booking link",
+    linkName || null,
     url,
   ]
     .filter(Boolean)
@@ -243,6 +387,7 @@ export async function sendUsefulLinkSms(
     tenantId,
     smsFrom,
     toDest,
+    requestedLinkTypes: params.linkTypes || [],
     linkType: link.tipo,
     linkName: link.nombre,
   });

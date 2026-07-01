@@ -1,6 +1,5 @@
 // src/lib/voice/speechFormatting.ts
-
-export type VoiceLocale = "es-ES" | "en-US" | "pt-BR";
+import type { VoiceLocale } from "./types";
 
 function normalizeWhitespace(value: string): string {
   return (value || "").replace(/\s+/g, " ").trim();
