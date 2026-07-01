@@ -1,14 +1,12 @@
 //src/lib/voice/handlers/handleVoiceTransferTurn.ts
 import { twiml } from "twilio";
-import type { LinkType, CallState } from "../types";
+import type { LinkType, CallState, VoiceLocale } from "../types";
 import { normalizarNumero } from "../../senders/sms";
 import { deleteVoiceCallState } from "../deleteVoiceCallState";
 import { upsertVoiceCallState } from "../upsertVoiceCallState";
 import { renderVoiceReply } from "../renderVoiceReply";
 import { renderVoiceLifecycle } from "../renderVoiceLifecycle";
 import { buildVoiceGatherConfig } from "../buildVoiceGatherConfig";
-
-type VoiceLocale = "es-ES" | "en-US" | "pt-BR";
 
 type OfferSmsParams = {
   vr: twiml.VoiceResponse;
