@@ -1,6 +1,6 @@
 //src/lib/voice/realtime/realtimeToolCallHandler.ts
 import WebSocket from "ws";
-import type { CallState } from "../types";
+import type { CallState, VoiceLocale } from "../types";
 import { executeRealtimeTool } from "./realtimeToolExecutor";
 import type { RealtimeToolResult } from "./toolTypes";
 import { validateSubmitBookingStepFreshness } from "./toolGuards/validateSubmitBookingStepFreshness";
@@ -22,8 +22,6 @@ import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateS
 import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppointment";
 import { handleRealtimeServerActionRequired } from "./toolExecution/handleRealtimeServerActionRequired";
 import { buildExactRealtimeSpeechResponse } from "./buildExactRealtimeSpeechResponse";
-
-type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
 type HandleRealtimeToolCallParams = {
   event: any;
@@ -64,6 +62,14 @@ function buildToollessResponse(
     instructions,
     tool_choice: "none",
   };
+}
+
+function buildLocaleInstruction(locale: string): string {
+  const cleanLocale = clean(locale);
+
+  return cleanLocale
+    ? `Respond in the caller's active locale: ${cleanLocale}.`
+    : "Respond in the caller's active language.";
 }
 
 function buildDeterministicToolFollowupInstructions(params: {
@@ -809,6 +815,37 @@ export async function handleRealtimeToolCall(
       next_required_step: toolResult?.next_required_step,
     });
 
+    if (toolName === "send_useful_link_sms" && toolResult?.ok === false) {
+      console.warn("[VOICE_REALTIME][USEFUL_LINK_SMS_ERROR_FOLLOWUP_REQUESTED]", {
+        callSid,
+        error: toolResult?.error,
+        currentLocale,
+      });
+
+      requestRealtimeResponse(
+        buildToollessResponse(
+          [
+            buildLocaleInstruction(currentLocale),
+            "Briefly explain that the link could not be sent by text right now.",
+            "Do not mention technical errors, configuration, tools, APIs, or backend details.",
+            "If the business information is already known from the conversation, repeat the useful information verbally.",
+            "Ask only one short question to check whether the caller needs anything else.",
+          ].join("\n")
+        ),
+        "tool_followup:send_useful_link_sms:error"
+      );
+
+      return {
+        consumed: true,
+        result: toolResult as RealtimeToolResult,
+        realtimeState: nextRealtimeState,
+        bookingFlowLoaded: nextBookingFlowLoaded,
+        hangupRequestedByTool,
+        callEnding: nextCallEnding,
+        resetLastUserDigits: true,
+      };
+    }
+
     const shouldSendFunctionCallOutput =
       !isSyntheticToolCall &&
       sendToolOutputToOpenAi !== false &&
@@ -845,15 +882,17 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        {
-          instructions: [
-            "Say a short, natural goodbye in the caller's active language.",
+        buildToollessResponse(
+          [
+            buildLocaleInstruction(currentLocale),
+            "Say only one short, natural goodbye.",
             "Do not ask another question.",
             "Do not offer more help.",
             "Do not mention tools.",
             "Do not continue the conversation.",
-          ].join("\n"),
-        },
+            "Do not confirm anything else.",
+          ].join("\n")
+        ),
         "tool_followup:end_call"
       );
     }

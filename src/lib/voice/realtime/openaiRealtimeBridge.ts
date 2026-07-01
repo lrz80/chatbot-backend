@@ -1,7 +1,7 @@
 // src/lib/voice/realtime/openaiRealtimeBridge.ts
 
 import WebSocket from "ws";
-import type { CallState } from "../types";
+import type { CallState, VoiceLocale } from "../types";
 
 import {
   attachLatestUserTranscriptSeq,
@@ -25,7 +25,6 @@ import {
   refreshRealtimeVoiceContext,
   resolveConfiguredWelcomeMessage,
   resolveInitialRealtimeSessionContext,
-  type VoiceLocale,
 } from "./realtimeSessionManager";
 import { createBookingRealtimeCoordinator } from "./bookingRealtimeCoordinator";
 import {

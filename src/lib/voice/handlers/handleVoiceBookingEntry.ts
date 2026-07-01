@@ -1,9 +1,7 @@
 //src/lib/voice/handlers/handleVoiceBookingEntry.ts
 import { twiml } from "twilio";
 import { handleVoiceBookingTurn } from "../handleVoiceBookingTurn";
-import type { CallState } from "../types";
-
-type VoiceLocale = "es-ES" | "en-US" | "pt-BR";
+import type { CallState, VoiceLocale } from "../types";
 
 type ResolvedVoiceIntent =
   | "booking"

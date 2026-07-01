@@ -1,9 +1,7 @@
 // src/lib/voice/realtime/realtimeTranscriptHandler.ts
-import type { CallState } from "../types";
+import type { CallState, VoiceLocale } from "../types";
 import { detectarIdioma } from "../../detectarIdioma";
 import { guardRealtimeUserTranscript } from "./transcriptGuards/guardRealtimeUserTranscript";
-
-type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
 type RefreshRealtimeVoiceContextResult = {
   tenantId: string | null;

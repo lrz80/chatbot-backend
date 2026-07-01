@@ -8,10 +8,8 @@ import {
 } from "../voiceBookingHelpers";
 import { deleteVoiceCallState } from "../deleteVoiceCallState";
 import { upsertVoiceCallState } from "../upsertVoiceCallState";
-import type { CallState } from "../types";
+import type { CallState, VoiceLocale } from "../types";
 import { sanitizeForSay, twoSentencesMax } from "../speechFormatting";
-
-type VoiceLocale = "es-ES" | "en-US" | "pt-BR";
 
 type LogBotSayFn = (params: {
   callSid: string;

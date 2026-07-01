@@ -1,12 +1,10 @@
 // src/lib/voice/realtime/toolGuards/bootstrapSubmitBookingStepAfterFlowLoad.ts
 import type WebSocket from "ws";
-import type { CallState } from "../../types";
+import type { CallState, VoiceLocale } from "../../types";
 import { executeRealtimeTool } from "../realtimeToolExecutor";
 import type { RealtimeToolResult } from "../toolTypes";
 import { buildNextRealtimeStateFromToolResult } from "../toolState/buildNextRealtimeStateFromToolResult";
 import { applyBookingRuntimeStateAfterToolResult } from "../bookingRuntimeState";
-
-type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,

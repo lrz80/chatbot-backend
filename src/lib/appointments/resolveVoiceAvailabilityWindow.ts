@@ -4,8 +4,7 @@ import pool from "../db";
 import { parseVoiceRequestedDate } from "./parseVoiceRequestedDate";
 import { validateServiceScheduleForDate } from "./validateServiceScheduleForDate";
 import { BookingProviderOrchestrator } from "./booking/providers/orchestrator";
-
-type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
+import type { VoiceLocale } from "../voice/types";
 
 type TimeWindowConfig = {
   labels?: Record<string, string[]>;

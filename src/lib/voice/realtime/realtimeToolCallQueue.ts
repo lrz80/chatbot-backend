@@ -1,10 +1,8 @@
 // src/lib/voice/realtime/realtimeToolCallQueue.ts
 import WebSocket from "ws";
-import type { CallState } from "../types";
+import type { CallState, VoiceLocale } from "../types";
 import { handleRealtimeToolCall } from "./realtimeToolCallHandler";
 import { attachLatestUserTranscriptSeq } from "./bookingRuntimeState";
-
-type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,

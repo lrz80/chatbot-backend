@@ -1,9 +1,7 @@
 // src/lib/voice/realtime/handleRealtimeUserTranscript.ts
 import WebSocket from "ws";
-import type { CallState } from "../types";
+import type { CallState, VoiceLocale } from "../types";
 import { handleUserTranscriptCompleted } from "./realtimeTranscriptRuntime";
-
-type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
 export type HandleRealtimeUserTranscriptResult = {
   consumed: boolean;

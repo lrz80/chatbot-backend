@@ -1,11 +1,9 @@
 //src/lib/voice/realtime/toolExecution/handleRealtimeServerActionRequired.ts
-import type { CallState } from "../../types";
+import type { CallState, VoiceLocale } from "../../types";
 import { executeRealtimeTool } from "../realtimeToolExecutor";
 import type { RealtimeToolResult } from "../toolTypes";
 import { clean } from "../utils/clean";
 import { buildExactRealtimeSpeechResponse } from "../buildExactRealtimeSpeechResponse";
-
-type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,

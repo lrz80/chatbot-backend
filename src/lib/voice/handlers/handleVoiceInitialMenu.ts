@@ -1,6 +1,6 @@
 //src/lib/voice/handlers/handleVoiceInitialMenu.ts
 import { twiml } from "twilio";
-import type { CallState } from "../types";
+import type { CallState, VoiceLocale } from "../types";
 import {
   normalizeSpeechOutput,
   sanitizeForSay,
@@ -8,8 +8,6 @@ import {
 } from "../speechFormatting";
 import { getVoiceMenuCopy } from "../voiceMenuCopy";
 import { buildIntroByLanguage } from "../renderVoiceMenus";
-
-type VoiceLocale = "es-ES" | "en-US" | "pt-BR";
 
 type ResolveVoiceFn = (locale: string, configuredVoiceName?: string | null) => string;
 

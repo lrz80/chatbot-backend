@@ -1,9 +1,7 @@
 // src/lib/voice/realtime/toolGuards/guardSendBookingSms.ts
 import type WebSocket from "ws";
-import type { CallState } from "../../types";
+import type { CallState, VoiceLocale } from "../../types";
 import type { RealtimeToolResult } from "../toolTypes";
-
-type VoiceLocale = "en-US" | "es-ES" | "pt-BR";
 
 function clean(value: unknown): string {
   return String(value ?? "").trim();
