@@ -881,13 +881,20 @@ export async function createOpenAiRealtimeBridge({
             requestRealtimeResponse(
               isAwaitingPostBookingClosure
                 ? {
+                    conversation: "none",
                     tool_choice: "auto",
                     instructions: [
-                      "The booking flow has already completed successfully.",
-                      "Continue from the caller's latest message.",
+                      "You are handling a post-booking live phone turn.",
                       "Use the caller's active language.",
 
-                      "Do not say the appointment is still being processed.",
+                      "The booking flow has already completed successfully.",
+                      "The appointment has already been confirmed.",
+                      "There is no pending booking step.",
+                      "There is no reservation still being processed.",
+
+                      "Never say the booking, reservation, appointment, confirmation, or calendar event is still being processed, finished, reviewed, checked, created, or completed.",
+                      "Never ask the caller to wait while the booking, reservation, appointment, confirmation, or calendar event is being processed.",
+
                       "Do not call create_appointment.",
                       "Do not call submit_booking_step unless the caller clearly asks to start a new booking.",
 
@@ -902,6 +909,27 @@ export async function createOpenAiRealtimeBridge({
                       "If the caller asks a question, answer it first, then ask whether they need anything else.",
                       "If the caller clearly indicates the conversation is done, call end_call.",
                     ].join("\n"),
+                    input: [
+                      {
+                        type: "message",
+                        role: "user",
+                        content: [
+                          {
+                            type: "input_text",
+                            text: [
+                              "Latest caller message:",
+                              lastUserTranscript,
+                              "",
+                              "Current runtime state:",
+                              "booking_completed=true",
+                              "appointment_confirmed=true",
+                              "booking_turn_status=idle",
+                              "pending_booking_step_key=",
+                            ].join("\n"),
+                          },
+                        ],
+                      },
+                    ],
                   }
                 : {
                     tool_choice: "auto",
