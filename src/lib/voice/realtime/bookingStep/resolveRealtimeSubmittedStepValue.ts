@@ -340,26 +340,45 @@ export function resolveRealtimeSubmittedStepValue(params: {
 
   if (expectedType === "number") {
     const candidateValue = clean(modelValue || value);
-    const transcriptValue = clean(rawTranscriptValue);
 
-    if (candidateValue.toLowerCase() === "unknown") {
-      return {
-        ok: false,
-        error: "INCOMPATIBLE_NUMBER_VALUE",
-        value: "",
-        rawTranscriptValue,
-        modelValue,
-        source: "none",
-      };
+    let protocol: any = null;
+
+    try {
+      protocol = JSON.parse(candidateValue);
+    } catch {
+      protocol = null;
     }
 
-    const transcriptResolvedNumber = resolveRealtimeNumberValue({
-      value: transcriptValue,
-      rawTranscriptValue,
-      modelValue: "",
-    });
+    if (protocol && typeof protocol === "object") {
+      const status = clean(protocol.status).toLowerCase();
+      const protocolValue = clean(protocol.value);
+      const confidence = clean(protocol.confidence).toLowerCase();
 
-    if (!transcriptResolvedNumber.ok) {
+      if (
+        status !== "resolved" ||
+        !protocolValue ||
+        confidence !== "high"
+      ) {
+        return {
+          ok: false,
+          error: "INCOMPATIBLE_NUMBER_VALUE",
+          value: "",
+          rawTranscriptValue,
+          modelValue,
+          source: "none",
+        };
+      }
+
+      return resolveRealtimeNumberValue({
+        value: protocolValue,
+        rawTranscriptValue,
+        modelValue: protocolValue,
+      });
+    }
+
+    const candidate = clean(modelValue || value);
+
+    if (!candidate || candidate.toLowerCase() === "unknown") {
       return {
         ok: false,
         error: "INCOMPATIBLE_NUMBER_VALUE",
