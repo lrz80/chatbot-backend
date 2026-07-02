@@ -483,13 +483,46 @@ export async function createOpenAiRealtimeBridge({
       tenant: context.tenant || {},
     });
 
+    const initialGreetingText = buildInitialGreetingFromConfiguredWelcome({
+      configuredWelcome: configuredWelcomeMessage,
+      brand: context.brand,
+      locale: currentLocale,
+    });
+
     requestRealtimeResponse(
       {
-        instructions: buildInitialGreetingFromConfiguredWelcome({
-          configuredWelcome: configuredWelcomeMessage,
-          brand: context.brand,
-          locale: currentLocale,
-        }),
+        conversation: "none",
+        tool_choice: "none",
+        metadata: {
+          purpose: "initial_greeting",
+          expected_prompt: initialGreetingText,
+        },
+        instructions: [
+          "You are a speech renderer for a live phone call.",
+          "Speak exactly the greeting provided in the input.",
+          "Do not use conversation history.",
+          "Do not reason.",
+          "Do not translate.",
+          "Do not summarize.",
+          "Do not add words.",
+          "Do not remove words.",
+        ].join("\n"),
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "Speak exactly this greeting and nothing else:",
+                  "",
+                  initialGreetingText,
+                ].join("\n"),
+              },
+            ],
+          },
+        ],
       },
       "bridge:initial_greeting"
     );
