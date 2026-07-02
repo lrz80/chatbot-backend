@@ -348,6 +348,7 @@ export async function createOpenAiRealtimeBridge({
     source = "unknown",
     options: {
       sendToolOutputToOpenAi?: boolean;
+      endCallGoodbye?: boolean;
     } = {}
   ): void {
     const normalizedSource = clean(source);
@@ -394,9 +395,7 @@ export async function createOpenAiRealtimeBridge({
     const isEndCallFollowup = normalizedSource === "tool_followup:end_call";
 
     const shouldCreateEndCallGoodbye =
-      isEndCallFollowup &&
-      responseInstructions.includes("Say a short, natural goodbye") &&
-      !responseInstructions.includes("Do not end the call yet");
+      isEndCallFollowup && options.endCallGoodbye === true;
 
     const shouldInterruptActiveResponse =
       normalizedSource === "tool_followup:get_booking_flow" ||

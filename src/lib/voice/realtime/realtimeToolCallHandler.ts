@@ -29,7 +29,11 @@ type HandleRealtimeToolCallParams = {
   openAiSocket: WebSocket;
   requestRealtimeResponse: (
     response?: Record<string, unknown>,
-    source?: string
+    source?: string,
+    options?: {
+      sendToolOutputToOpenAi?: boolean;
+      endCallGoodbye?: boolean;
+    }
   ) => void;
   callSid: string | null;
   tenantId: string | null;
@@ -893,7 +897,11 @@ export async function handleRealtimeToolCall(
             "Do not confirm anything else.",
           ].join("\n")
         ),
-        "tool_followup:end_call"
+        "tool_followup:end_call",
+        {
+          sendToolOutputToOpenAi: false,
+          endCallGoodbye: true,
+        }
       );
     }
 
