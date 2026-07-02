@@ -339,6 +339,19 @@ export function resolveRealtimeSubmittedStepValue(params: {
   }
 
   if (expectedType === "number") {
+    const candidateValue = clean(modelValue || value);
+
+    if (candidateValue.toLowerCase() === "unknown") {
+      return {
+        ok: false,
+        error: "INCOMPATIBLE_NUMBER_VALUE",
+        value: "",
+        rawTranscriptValue,
+        modelValue,
+        source: "none",
+      };
+    }
+
     return resolveRealtimeNumberValue({
       value,
       rawTranscriptValue,
