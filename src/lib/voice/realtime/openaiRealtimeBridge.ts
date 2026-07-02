@@ -602,9 +602,14 @@ export async function createOpenAiRealtimeBridge({
         activeResponseSource.startsWith("booking_step_") &&
         activeResponseSource.endsWith("_model_resolution");
 
+      const isIsolatedPostBookingResponse =
+        activeResponseSource === "bridge:user_transcript:post_booking";
+
       toolCallQueue.enqueueRealtimeToolCall({
         ...event,
-        sendToolOutputToOpenAi: !isInternalBookingModelResolution,
+        sendToolOutputToOpenAi:
+          !isInternalBookingModelResolution &&
+          !isIsolatedPostBookingResponse,
       });
 
       return;
@@ -934,7 +939,9 @@ export async function createOpenAiRealtimeBridge({
                 : {
                     tool_choice: "auto",
                   },
-              "bridge:user_transcript"
+              isAwaitingPostBookingClosure
+                ? "bridge:user_transcript:post_booking"
+                : "bridge:user_transcript"
             );
           }
         })
