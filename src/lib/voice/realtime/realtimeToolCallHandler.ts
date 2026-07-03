@@ -23,6 +23,12 @@ import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppo
 import { handleRealtimeServerActionRequired } from "./toolExecution/handleRealtimeServerActionRequired";
 import { buildExactRealtimeSpeechResponse } from "./buildExactRealtimeSpeechResponse";
 import { buildI18nBookingPromptResponse } from "./i18n/buildI18nBookingPromptResponse";
+import {
+  getBookingLockedLanguageSample,
+  getBookingLockedLocale,
+  lockBookingLanguage,
+  unlockBookingLanguage,
+} from "./bookingTurnState";
 
 type HandleRealtimeToolCallParams = {
   event: any;
@@ -117,6 +123,29 @@ function buildDeterministicToolFollowupInstructions(params: {
   }
 
   return "";
+}
+
+function shouldUnlockBookingLanguageAfterTool(params: {
+  toolName: string;
+  toolResult: RealtimeToolResult;
+}): boolean {
+  const toolName = clean(params.toolName);
+  const result = params.toolResult as any;
+
+  if (!result || result.ok === false) return false;
+
+  const isBookingCompletionTool =
+    toolName === "create_appointment" ||
+    toolName === "end_call";
+
+  if (isBookingCompletionTool) return true;
+
+  if (toolName !== "submit_booking_step") return false;
+
+  const hasNoNextStep = result.next_required_step === null;
+  const hasNoActionRequired = !clean(result.action_required || "");
+
+  return hasNoNextStep && hasNoActionRequired;
 }
 
 function getPendingBookingStepValidationConfig(
@@ -800,6 +829,20 @@ export async function handleRealtimeToolCall(
       lastUserTranscript,
     });
 
+    const realtimeStateWithBookingLanguage =
+      toolName === "get_booking_flow" && toolResult?.ok === true
+        ? lockBookingLanguage({
+            realtimeState: nextRealtimeState,
+            currentLocale,
+            lastUserTranscript,
+          })
+        : shouldUnlockBookingLanguageAfterTool({
+            toolName,
+            toolResult: (toolResult || {}) as RealtimeToolResult,
+          })
+          ? unlockBookingLanguage(nextRealtimeState)
+          : nextRealtimeState;
+
     const hangupRequestedByTool =
       toolName === "end_call" && toolResult?.ok === true;
 
@@ -933,7 +976,7 @@ export async function handleRealtimeToolCall(
       callSid,
       currentLocale,
       realtimeState,
-      nextRealtimeState,
+      nextRealtimeState: realtimeStateWithBookingLanguage,
       bookingFlowLoaded,
       nextBookingFlowLoaded,
       callEnding,
@@ -986,10 +1029,14 @@ export async function handleRealtimeToolCall(
           lastAssistantTranscript:
             clean((realtimeState as any).lastAssistantTranscript || ""),
           bookingLanguage: clean(
+            (realtimeStateWithBookingLanguage as any).conversationLanguage ||
             (nextRealtimeState as any).conversationLanguage ||
             (realtimeState as any).conversationLanguage ||
             ""
           ),
+          bookingLockedLocale: getBookingLockedLocale(realtimeStateWithBookingLanguage),
+          bookingLockedLanguageSample:
+            getBookingLockedLanguageSample(realtimeStateWithBookingLanguage),
         }),
         "tool_followup:submit_booking_step:retry"
       );
@@ -997,7 +1044,7 @@ export async function handleRealtimeToolCall(
       return {
         consumed: true,
         result: toolResult as RealtimeToolResult,
-        realtimeState: nextRealtimeState,
+        realtimeState: realtimeStateWithBookingLanguage,
         bookingFlowLoaded: nextBookingFlowLoaded,
         hangupRequestedByTool,
         callEnding: nextCallEnding,
@@ -1035,10 +1082,14 @@ export async function handleRealtimeToolCall(
           lastAssistantTranscript:
             clean((realtimeState as any).lastAssistantTranscript || ""),
           bookingLanguage: clean(
+            (realtimeStateWithBookingLanguage as any).conversationLanguage ||
             (nextRealtimeState as any).conversationLanguage ||
             (realtimeState as any).conversationLanguage ||
             ""
           ),
+          bookingLockedLocale: getBookingLockedLocale(realtimeStateWithBookingLanguage),
+          bookingLockedLanguageSample:
+            getBookingLockedLanguageSample(realtimeStateWithBookingLanguage),
         }),
         "tool_followup:submit_booking_step"
       );
@@ -1046,7 +1097,7 @@ export async function handleRealtimeToolCall(
       return {
         consumed: true,
         result: toolResult as RealtimeToolResult,
-        realtimeState: nextRealtimeState,
+        realtimeState: realtimeStateWithBookingLanguage,
         bookingFlowLoaded: nextBookingFlowLoaded,
         hangupRequestedByTool,
         callEnding: nextCallEnding,
@@ -1073,10 +1124,14 @@ export async function handleRealtimeToolCall(
             lastAssistantTranscript:
               clean((realtimeState as any).lastAssistantTranscript || ""),
             bookingLanguage: clean(
+              (realtimeStateWithBookingLanguage as any).conversationLanguage ||
               (nextRealtimeState as any).conversationLanguage ||
               (realtimeState as any).conversationLanguage ||
               ""
             ),
+            bookingLockedLocale: getBookingLockedLocale(realtimeStateWithBookingLanguage),
+            bookingLockedLanguageSample:
+              getBookingLockedLanguageSample(realtimeStateWithBookingLanguage),
           }),
           `tool_followup:${toolName}`
         );

@@ -32,6 +32,50 @@ export function getBookingTurnStatus(
   return "idle";
 }
 
+export function isBookingLanguageLocked(realtimeState: CallState): boolean {
+  return Boolean((realtimeState as any).bookingLanguageLocked);
+}
+
+export function getBookingLockedLocale(realtimeState: CallState): string {
+  return clean((realtimeState as any).bookingLockedLocale);
+}
+
+export function getBookingLockedLanguageSample(
+  realtimeState: CallState
+): string {
+  return clean((realtimeState as any).bookingLockedLanguageSample);
+}
+
+export function lockBookingLanguage(params: {
+  realtimeState: CallState;
+  currentLocale: string;
+  lastUserTranscript: string;
+}): CallState {
+  const existingLocale = getBookingLockedLocale(params.realtimeState);
+  const existingSample = getBookingLockedLanguageSample(params.realtimeState);
+
+  if (isBookingLanguageLocked(params.realtimeState) && existingLocale) {
+    return params.realtimeState;
+  }
+
+  return {
+    ...params.realtimeState,
+    bookingLanguageLocked: true,
+    bookingLockedLocale: clean(params.currentLocale) || null,
+    bookingLockedLanguageSample:
+      clean(params.lastUserTranscript) || existingSample || null,
+  } as CallState;
+}
+
+export function unlockBookingLanguage(realtimeState: CallState): CallState {
+  return {
+    ...realtimeState,
+    bookingLanguageLocked: false,
+    bookingLockedLocale: null,
+    bookingLockedLanguageSample: null,
+  } as CallState;
+}
+
 export function markBookingWaitingForAssistantPrompt(params: {
   realtimeState: CallState;
   stepKey: string;
@@ -72,7 +116,7 @@ export function markBookingWaitingForUserAnswer(params: {
 
 export function clearBookingTurnState(realtimeState: CallState): CallState {
   return {
-    ...realtimeState,
+    ...unlockBookingLanguage(realtimeState),
     bookingTurnStatus: "idle",
     pendingBookingStepKey: "",
     pendingBookingStepRequired: undefined,
