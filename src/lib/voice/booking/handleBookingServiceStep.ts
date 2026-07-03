@@ -9,6 +9,7 @@ import { twoSentencesMax } from "../speechFormatting";
 import { assertNonEmptyBookingSpeech } from "./bookingSpeech";
 import type { BookingStep, CreateBookingGatherFn } from "./types";
 import type { CallState, VoiceLocale } from "../types";
+import { resolveUniversalBookingOption } from "../realtime/i18n/resolveUniversalBookingOption";
 
 type HandleBookingServiceStepParams = {
   vr: twiml.VoiceResponse;
@@ -252,6 +253,37 @@ export async function executeCanonicalBookingServiceStep(
     userInput: effectiveUserInput,
     rawConfig: mergedServiceConfig,
   });
+
+  const universalBookingI18nEnabled =
+    process.env.VOICE_BOOKING_I18N_ENABLED === "true";
+
+  if (
+    universalBookingI18nEnabled &&
+    (serviceResolution.kind === "none" || serviceResolution.kind === "ambiguous")
+  ) {
+    const universalResolution = await resolveUniversalBookingOption({
+      userInput: effectiveUserInput,
+      rawConfig: mergedServiceConfig,
+    });
+
+    if (universalResolution.matched) {
+      const resolvedValue = universalResolution.value;
+
+      const nextState: CallState = {
+        ...state,
+        bookingData: {
+          ...(state.bookingData || {}),
+          service_display: resolvedValue,
+        },
+      };
+
+      return {
+        kind: "resolved",
+        state: nextState,
+        resolvedValue,
+      };
+    }
+  }
 
   if (serviceResolution.kind === "none") {
     const serviceRetryText = resolveBookingRetryText({
