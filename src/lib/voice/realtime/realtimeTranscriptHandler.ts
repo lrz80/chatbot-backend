@@ -183,6 +183,12 @@ export async function handleRealtimeTranscriptEvent(
 
     const tokenCount = transcript.split(/\s+/).filter(Boolean).length;
 
+    const bookingFlowActive =
+      Boolean((realtimeState as any).pendingBookingStepKey) ||
+      ["waiting_assistant_prompt", "waiting_user_answer"].includes(
+        clean((realtimeState as any).bookingTurnStatus)
+      );
+
     const rejectSwitch = shouldRejectWeakLanguageSwitch({
       currentLanguage,
       detectedLanguage,
@@ -191,7 +197,10 @@ export async function handleRealtimeTranscriptEvent(
       localeLocked,
     });
 
-    const shouldSwitch = !!detectedLanguage && !rejectSwitch;
+    const shouldSwitch =
+      !!detectedLanguage &&
+      !rejectSwitch &&
+      !bookingFlowActive;
 
     let nextLocale = currentLocale;
     let nextRealtimeState: CallState = realtimeState;
@@ -209,6 +218,7 @@ export async function handleRealtimeTranscriptEvent(
         confidence,
         tokenCount,
         localeLocked,
+        bookingFlowActive,
       });
     }
 
