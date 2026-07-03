@@ -229,7 +229,7 @@ export async function executeCanonicalBookingSlotBusyRecovery(
 
   const suggestedTimesText = formattedSuggestedTimes.join(", ");
 
-  const busyPromptResolved = resolveBookingFlowSpeech({
+  const busyPromptResolved = await resolveBookingFlowSpeech({
     baseText: unavailablePromptText.trim() || datetimeRetryText.trim(),
     locale: currentLocale,
     bookingData: {

@@ -262,7 +262,7 @@ export async function executeCanonicalBookingServiceStep(
       fallbackPromptTranslations: currentStep.prompt_translations || null,
     });
 
-    const retryPromptResolved = resolveBookingFlowSpeech({
+    const retryPromptResolved = await resolveBookingFlowSpeech({
       baseText: serviceRetryText,
       locale: currentLocale,
       bookingData: state.bookingData || {},
@@ -296,18 +296,18 @@ export async function executeCanonicalBookingServiceStep(
       fallbackPromptTranslations: currentStep.prompt_translations || null,
     });
 
-    const ambiguousPrompt = twoSentencesMax(
-      resolveBookingFlowSpeech({
-        baseText: ambiguousBaseText,
-        locale: currentLocale,
-        bookingData: {
-          ...(state.bookingData || {}),
-          optionsText,
-          available_options: optionsText,
-        },
-        callerE164,
-      })
-    );
+    const ambiguousPromptResolved = await resolveBookingFlowSpeech({
+      baseText: ambiguousBaseText,
+      locale: currentLocale,
+      bookingData: {
+        ...(state.bookingData || {}),
+        optionsText,
+        available_options: optionsText,
+      },
+      callerE164,
+    });
+
+    const ambiguousPrompt = twoSentencesMax(ambiguousPromptResolved);
 
     return {
       kind: "ambiguous",
@@ -320,7 +320,7 @@ export async function executeCanonicalBookingServiceStep(
 
   const resolvedValue = serviceResolution.value;
 
-  const localizedServiceDisplay = resolveBookingFlowSpeech({
+  const localizedServiceDisplay = await resolveBookingFlowSpeech({
     baseText: serviceResolution.value,
     locale: currentLocale,
     bookingData: state.bookingData || {},

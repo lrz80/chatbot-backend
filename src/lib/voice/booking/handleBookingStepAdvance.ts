@@ -301,12 +301,12 @@ function validateResolvedStepValue(params: {
   };
 }
 
-function buildCurrentStepRetryPrompt(params: {
+async function buildCurrentStepRetryPrompt(params: {
   currentStep: BookingStep;
   currentLocale: VoiceLocale;
   bookingData: CallState["bookingData"];
   callerE164: string | null;
-}): string {
+}): Promise<string> {
   const { currentStep, currentLocale, bookingData, callerE164 } = params;
 
   const retryPromptText = resolveBookingRetryText({
@@ -317,7 +317,7 @@ function buildCurrentStepRetryPrompt(params: {
     fallbackPromptTranslations: currentStep.prompt_translations || null,
   });
 
-  const retryPromptResolved = resolveBookingFlowSpeech({
+  const retryPromptResolved = await resolveBookingFlowSpeech({
     baseText: retryPromptText,
     locale: currentLocale,
     bookingData: bookingData || {},
@@ -418,7 +418,7 @@ export async function handleBookingStepAdvance(
       currentIndex,
     });
 
-    const retryPrompt = buildCurrentStepRetryPrompt({
+    const retryPrompt = await buildCurrentStepRetryPrompt({
       currentStep,
       currentLocale,
       bookingData: state.bookingData,
@@ -484,7 +484,7 @@ export async function handleBookingStepAdvance(
     promptTranslations: nextStep.prompt_translations || null,
   });
 
-  const promptResolved = resolveBookingFlowSpeech({
+  const promptResolved = await resolveBookingFlowSpeech({
     baseText: nextStepPromptText,
     locale: currentLocale,
     bookingData: nextData,
