@@ -985,6 +985,11 @@ export async function handleRealtimeToolCall(
           currentLocale,
           lastAssistantTranscript:
             clean((realtimeState as any).lastAssistantTranscript || ""),
+          bookingLanguage: clean(
+            (nextRealtimeState as any).conversationLanguage ||
+            (realtimeState as any).conversationLanguage ||
+            ""
+          ),
         }),
         "tool_followup:submit_booking_step:retry"
       );
@@ -1029,6 +1034,11 @@ export async function handleRealtimeToolCall(
           currentLocale,
           lastAssistantTranscript:
             clean((realtimeState as any).lastAssistantTranscript || ""),
+          bookingLanguage: clean(
+            (nextRealtimeState as any).conversationLanguage ||
+            (realtimeState as any).conversationLanguage ||
+            ""
+          ),
         }),
         "tool_followup:submit_booking_step"
       );
@@ -1062,6 +1072,11 @@ export async function handleRealtimeToolCall(
             currentLocale,
             lastAssistantTranscript:
               clean((realtimeState as any).lastAssistantTranscript || ""),
+            bookingLanguage: clean(
+              (nextRealtimeState as any).conversationLanguage ||
+              (realtimeState as any).conversationLanguage ||
+              ""
+            ),
           }),
           `tool_followup:${toolName}`
         );
