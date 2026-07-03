@@ -17,18 +17,35 @@ export function buildI18nBookingPromptResponse(params: {
   }
 
   return {
-    instructions: [
-      `Caller active locale: ${params.currentLocale}.`,
-      "Ask the booking question now.",
-      "Use the configured prompt as the meaning of the question.",
-      "Translate or adapt that question naturally into the caller's active language.",
-      "Say only the adapted question.",
-      "Do not say you are checking, verifying, loading, confirming, or reviewing anything.",
-      "Do not say 'one moment' or similar.",
-      "Do not add explanations, summaries, confirmations, or extra details.",
-      "",
-      `Configured booking question: ${prompt}`,
-    ].join("\n"),
+    conversation: "none",
     tool_choice: "none",
+    instructions: [
+      "You are a speech renderer for a live booking flow.",
+      `Target language/locale: ${params.currentLocale}.`,
+      "Translate the configured booking question into the target language.",
+      "Speak ONLY the translated question.",
+      "Do not answer the question.",
+      "Do not say one moment.",
+      "Do not say you are checking, verifying, confirming, loading, reviewing, or processing anything.",
+      "Do not add greetings.",
+      "Do not add explanations.",
+      "Do not add extra words.",
+    ].join("\n"),
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "Translate and speak only this booking question:",
+              "",
+              prompt,
+            ].join("\n"),
+          },
+        ],
+      },
+    ],
   };
 }
