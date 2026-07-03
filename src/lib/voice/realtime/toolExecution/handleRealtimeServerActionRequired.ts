@@ -3,7 +3,7 @@ import type { CallState, VoiceLocale } from "../../types";
 import { executeRealtimeTool } from "../realtimeToolExecutor";
 import type { RealtimeToolResult } from "../toolTypes";
 import { clean } from "../utils/clean";
-import { buildI18nBookingPromptResponse } from "../i18n/buildI18nBookingPromptResponse";
+import { buildI18nBookingFinalResponse } from "../i18n/buildI18nBookingFinalResponse";
 import {
   getBookingLockedLanguageSample,
   getBookingLockedLocale,
@@ -270,8 +270,8 @@ export async function handleRealtimeServerActionRequired(
       );
     } else {
       requestRealtimeResponse(
-        buildI18nBookingPromptResponse({
-          prompt: finalFollowupInstructions,
+        buildI18nBookingFinalResponse({
+          message: finalFollowupInstructions,
           currentLocale: finalLocale,
           lastAssistantTranscript: clean(
             (finalRealtimeState as any).lastAssistantTranscript ||
