@@ -53,7 +53,6 @@ export function lockBookingLanguage(params: {
   lastAssistantTranscript?: string;
   conversationLanguage?: string;
 }): CallState {
-  const existingLocale = getBookingLockedLocale(params.realtimeState);
   const existingSample = getBookingLockedLanguageSample(params.realtimeState);
 
   if (isBookingLanguageLocked(params.realtimeState) && existingSample) {
@@ -66,8 +65,10 @@ export function lockBookingLanguage(params: {
   const currentLocale = clean(params.currentLocale);
 
   const languageSample = [
-    userSample ? `Caller latest message: ${userSample}` : "",
     assistantSample ? `Previous assistant message: ${assistantSample}` : "",
+    userSample ? `Caller latest message: ${userSample}` : "",
+    conversationLanguage ? `Detected language hint: ${conversationLanguage}` : "",
+    currentLocale ? `Runtime locale hint: ${currentLocale}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -76,15 +77,13 @@ export function lockBookingLanguage(params: {
     ...params.realtimeState,
     bookingLanguageLocked: true,
 
-    // Important:
-    // Do not rely only on currentLocale because it can lag behind the
-    // actual spoken language. conversationLanguage is preferred when present.
-    bookingLockedLocale: conversationLanguage || currentLocale || null,
+    // Do not treat this as authoritative. It can be wrong when ASR/detection
+    // misclassifies short or noisy utterances.
+    bookingLockedLocale: null,
 
-    // This is the strongest signal. The renderer can infer any language
-    // from natural text, without hardcoding ES/EN/PT/etc.
-    bookingLockedLanguageSample:
-      languageSample || existingSample || userSample || assistantSample || null,
+    // This is authoritative. The renderer must infer the booking language
+    // from the natural language sample, especially the previous assistant message.
+    bookingLockedLanguageSample: languageSample || existingSample || null,
   } as CallState;
 }
 

@@ -21,7 +21,7 @@ export function buildI18nBookingPromptResponse(params: {
   );
 
   const effectiveLockedLanguage =
-    bookingLanguage || bookingLockedLocale || currentLocale;
+    bookingLockedLocale || bookingLanguage || currentLocale;
 
   /**
    * Legacy fallback:
@@ -51,14 +51,16 @@ export function buildI18nBookingPromptResponse(params: {
       "- Do not use English just because the stored booking prompt is in English.",
       "- Do not use the tenant default language unless it matches the locked booking language.",
       "",
-      `Locked booking language label, if available: ${
-        effectiveLockedLanguage || "unknown"
-      }.`,
       `Natural language sample captured when booking started: "${
         bookingLockedLanguageSample || "unknown"
       }".`,
-      "Use the natural language sample as the strongest signal for the booking language.",
-      "If the language label and the natural language sample disagree, follow the natural language sample.",
+      `Weak language hint, not authoritative: ${
+        effectiveLockedLanguage || "unknown"
+      }.`,
+      "Use the natural language sample as the authority for the booking language.",
+      "The previous assistant message inside the natural language sample is the strongest signal.",
+      "If the weak language hint and the natural language sample disagree, ignore the hint and follow the sample.",
+      "Do not switch to Spanish only because the runtime detector classified the latest short utterance as Spanish.",
       `Runtime locale: ${currentLocale || "unknown"}.`,
       `Previous assistant language sample: "${
         lastAssistantTranscript || "unknown"
