@@ -30,12 +30,10 @@ type AwaitingResponseCreateState = {
   event: Record<string, unknown>;
   source: string;
   startedAtUserTranscriptSeq: number;
-  retryCount: number;
   sendToolOutputToOpenAi: boolean;
 };
 
-const RESPONSE_CREATE_ACK_TIMEOUT_MS = 1200;
-const MAX_RESPONSE_CREATE_RETRIES = 1;
+const RESPONSE_CREATE_ACK_TIMEOUT_MS = 5000;
 
 function clean(value: unknown): string {
   return String(value ?? "").trim();
@@ -86,58 +84,42 @@ export function createRealtimeResponseController(
 
   let awaitingResponseSource: string | null = null;
   let awaitingResponseCreate: AwaitingResponseCreateState | null = null;
-  let awaitingResponseCreateRetryTimer: ReturnType<typeof setTimeout> | null =
+  let awaitingResponseCreateWatchdogTimer: ReturnType<typeof setTimeout> | null =
     null;
 
-  function clearAwaitingResponseCreateRetryTimer(): void {
-    if (!awaitingResponseCreateRetryTimer) return;
-    clearTimeout(awaitingResponseCreateRetryTimer);
-    awaitingResponseCreateRetryTimer = null;
+  function clearAwaitingResponseCreateWatchdogTimer(): void {
+    if (!awaitingResponseCreateWatchdogTimer) return;
+    clearTimeout(awaitingResponseCreateWatchdogTimer);
+    awaitingResponseCreateWatchdogTimer = null;
   }
 
-  function scheduleAwaitingResponseCreateRetry(): void {
-    clearAwaitingResponseCreateRetryTimer();
+  function scheduleAwaitingResponseCreateWatchdog(): void {
+    clearAwaitingResponseCreateWatchdogTimer();
 
     if (!awaitingResponseCreate) return;
 
-    awaitingResponseCreateRetryTimer = setTimeout(() => {
+    awaitingResponseCreateWatchdogTimer = setTimeout(() => {
       const callSid = params.getCallSid();
 
       if (!awaitingResponseCreate) return;
-      if (activeResponseId) return;
 
-      if (pendingResponseCreate) {
-        return;
-      }
-
-      if (params.openAiSocket.readyState !== WebSocket.OPEN) {
-        console.warn("[VOICE_REALTIME][RESPONSE_CREATE_RETRY_SOCKET_NOT_OPEN]", {
-          callSid,
-          source: awaitingResponseCreate.source,
-          socketReadyState: params.openAiSocket.readyState,
-        });
-        return;
-      }
-
-      if (awaitingResponseCreate.retryCount >= MAX_RESPONSE_CREATE_RETRIES) {
-        console.warn("[VOICE_REALTIME][RESPONSE_CREATE_ACK_TIMEOUT]", {
-          callSid,
-          source: awaitingResponseCreate.source,
-          retryCount: awaitingResponseCreate.retryCount,
-        });
-        return;
-      }
-
-      awaitingResponseCreate.retryCount += 1;
-
-      console.warn("[VOICE_REALTIME][RESPONSE_CREATE_RETRY_NO_RESPONSE_CREATED]", {
+      /**
+       * Do not retry response.create here.
+       *
+       * response.create is not idempotent. Retrying it can create two assistant
+       * responses for the same booking question when the first response.created
+       * arrives late. That causes duplicated speech and can also lose the source
+       * association for the late response.
+       */
+      console.warn("[VOICE_REALTIME][RESPONSE_CREATE_ACK_TIMEOUT_NO_RETRY]", {
         callSid,
         source: awaitingResponseCreate.source,
-        retryCount: awaitingResponseCreate.retryCount,
+        startedAtUserTranscriptSeq:
+          awaitingResponseCreate.startedAtUserTranscriptSeq,
+        hasActiveResponse: Boolean(activeResponseId),
+        hasPendingResponseCreate: Boolean(pendingResponseCreate),
+        socketReadyState: params.openAiSocket.readyState,
       });
-
-      sendJson(params.openAiSocket, awaitingResponseCreate.event);
-      scheduleAwaitingResponseCreateRetry();
     }, RESPONSE_CREATE_ACK_TIMEOUT_MS);
   }
 
@@ -163,23 +145,27 @@ export function createRealtimeResponseController(
     const callSid = params.getCallSid();
     const streamSid = params.getStreamSid();
 
+    const cleanSource = clean(source);
+
     const shouldSupersede = shouldSupersedeActiveResponse({
-      source,
+      source: cleanSource,
       activeResponseSource,
       shouldInterruptActiveResponse,
     });
 
-    const hasResponseInFlight = Boolean(activeResponseId || awaitingResponseSource);
+    const hasResponseInFlight = Boolean(
+      activeResponseId || awaitingResponseSource
+    );
 
     if (hasResponseInFlight) {
       pendingResponseCreate = event;
-      pendingResponseSource = source;
+      pendingResponseSource = cleanSource;
       pendingResponseStartedAtUserTranscriptSeq = startedAtUserTranscriptSeq;
       pendingResponseSendToolOutputToOpenAi = sendToolOutputToOpenAi;
 
       console.warn("[VOICE_REALTIME][RESPONSE_CREATE_QUEUED]", {
         callSid,
-        source,
+        source: cleanSource,
         activeResponseId,
         activeResponseSource,
         awaitingResponseSource,
@@ -197,7 +183,7 @@ export function createRealtimeResponseController(
           callSid,
           activeResponseId,
           activeResponseSource,
-          pendingResponseSource: source,
+          pendingResponseSource: cleanSource,
         });
 
         sendJson(params.openAiSocket, {
@@ -216,12 +202,11 @@ export function createRealtimeResponseController(
     }
 
     activeResponseStartedAtUserTranscriptSeq = startedAtUserTranscriptSeq;
-    awaitingResponseSource = source;
+    awaitingResponseSource = cleanSource;
     awaitingResponseCreate = {
       event,
-      source,
+      source: cleanSource,
       startedAtUserTranscriptSeq,
-      retryCount: 0,
       sendToolOutputToOpenAi,
     };
 
@@ -230,7 +215,7 @@ export function createRealtimeResponseController(
 
     console.warn("[VOICE_REALTIME][RESPONSE_CREATE_REQUESTED]", {
       callSid,
-      source,
+      source: cleanSource,
       startedAtUserTranscriptSeq,
       hasPendingResponseCreate: Boolean(pendingResponseCreate),
       hasInstructions: Boolean(responseInstructions),
@@ -242,13 +227,16 @@ export function createRealtimeResponseController(
     if (!sent) {
       console.warn("[VOICE_REALTIME][RESPONSE_CREATE_NOT_SENT_SOCKET_NOT_OPEN]", {
         callSid,
-        source,
+        source: cleanSource,
         socketReadyState: params.openAiSocket.readyState,
       });
+
+      awaitingResponseSource = null;
+      awaitingResponseCreate = null;
       return;
     }
 
-    scheduleAwaitingResponseCreateRetry();
+    scheduleAwaitingResponseCreateWatchdog();
   }
 
   function flushPendingRealtimeResponse(): boolean {
@@ -262,7 +250,8 @@ export function createRealtimeResponseController(
     const event = pendingResponseCreate;
     const source = clean(pendingResponseSource || "");
     const startedAtUserTranscriptSeq =
-      pendingResponseStartedAtUserTranscriptSeq ?? activeResponseStartedAtUserTranscriptSeq;
+      pendingResponseStartedAtUserTranscriptSeq ??
+      activeResponseStartedAtUserTranscriptSeq;
     const sendToolOutputToOpenAi = pendingResponseSendToolOutputToOpenAi;
 
     pendingResponseCreate = null;
@@ -277,7 +266,6 @@ export function createRealtimeResponseController(
       event,
       source,
       startedAtUserTranscriptSeq,
-      retryCount: 0,
       sendToolOutputToOpenAi,
     };
 
@@ -300,10 +288,13 @@ export function createRealtimeResponseController(
         source,
         socketReadyState: params.openAiSocket.readyState,
       });
+
+      awaitingResponseSource = null;
+      awaitingResponseCreate = null;
       return false;
     }
 
-    scheduleAwaitingResponseCreateRetry();
+    scheduleAwaitingResponseCreateWatchdog();
     return true;
   }
 
@@ -311,9 +302,25 @@ export function createRealtimeResponseController(
     responseId: string | null;
     startedAtUserTranscriptSeq: number;
   }): ResponseControllerState {
-    clearAwaitingResponseCreateRetryTimer();
+    const callSid = params.getCallSid();
 
-    activeResponseId = paramsForResponse.responseId;
+    clearAwaitingResponseCreateWatchdogTimer();
+
+    const responseId = clean(paramsForResponse.responseId || "");
+
+    if (!awaitingResponseSource) {
+      console.warn("[VOICE_REALTIME][RESPONSE_CREATED_WITHOUT_AWAITING_IGNORED]", {
+        callSid,
+        responseId: responseId || null,
+        activeResponseId,
+        activeResponseSource,
+        pendingResponseSource,
+      });
+
+      return getState();
+    }
+
+    activeResponseId = responseId || null;
     activeResponseSource = awaitingResponseSource;
     activeResponseStartedAtUserTranscriptSeq =
       paramsForResponse.startedAtUserTranscriptSeq;
@@ -329,7 +336,7 @@ export function createRealtimeResponseController(
   function markResponseDone(paramsForResponse: {
     lastUserTranscriptSeq: number;
   }): ResponseControllerState {
-    clearAwaitingResponseCreateRetryTimer();
+    clearAwaitingResponseCreateWatchdogTimer();
 
     activeResponseId = null;
     activeResponseSource = null;
