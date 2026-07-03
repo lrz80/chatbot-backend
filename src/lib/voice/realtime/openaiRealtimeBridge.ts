@@ -194,6 +194,9 @@ export async function createOpenAiRealtimeBridge({
   let localeLocked = false;
   let twilioAccountSid: string | null = null;
 
+  const i18nBookingPromptsEnabled =
+    process.env.VOICE_BOOKING_I18N_PROMPTS_ENABLED === "true";
+
   const model = process.env.OPENAI_REALTIME_MODEL?.trim() || "gpt-realtime";
 
   const openAiSocket = new WebSocket(getOpenAiRealtimeUrl(model), {
@@ -690,7 +693,11 @@ export async function createOpenAiRealtimeBridge({
         expectedPrompt,
       });
 
-      if (shouldEnforceExactPrompt && !compatible) {
+      if (
+        !i18nBookingPromptsEnabled &&
+        shouldEnforceExactPrompt &&
+        !compatible
+      ) {
         if (exactPromptViolationHandledForActiveResponse) {
           return;
         }
@@ -1049,7 +1056,7 @@ export async function createOpenAiRealtimeBridge({
         lastUserTranscriptSeq,
       });
 
-      if (isCancelledExactPromptResponse) {
+      if (!i18nBookingPromptsEnabled && isCancelledExactPromptResponse) {
         responseController.markResponseDone({
           lastUserTranscriptSeq,
         });
