@@ -22,6 +22,7 @@ import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateS
 import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppointment";
 import { handleRealtimeServerActionRequired } from "./toolExecution/handleRealtimeServerActionRequired";
 import { buildExactRealtimeSpeechResponse } from "./buildExactRealtimeSpeechResponse";
+import { buildI18nBookingPromptResponse } from "./i18n/buildI18nBookingPromptResponse";
 
 type HandleRealtimeToolCallParams = {
   event: any;
@@ -979,7 +980,7 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        buildExactRealtimeSpeechResponse({
+        buildI18nBookingPromptResponse({
           prompt: retryPrompt,
           currentLocale,
         }),
@@ -1021,7 +1022,7 @@ export async function handleRealtimeToolCall(
       });
 
       requestRealtimeResponse(
-        buildExactRealtimeSpeechResponse({
+        buildI18nBookingPromptResponse({
           prompt: nextRequiredPrompt,
           currentLocale,
         }),
@@ -1052,7 +1053,7 @@ export async function handleRealtimeToolCall(
 
       if (shouldSpeakExactBookingPrompt) {
         requestRealtimeResponse(
-          buildExactRealtimeSpeechResponse({
+          buildI18nBookingPromptResponse({
             prompt: deterministicFollowupInstructions,
             currentLocale,
           }),
