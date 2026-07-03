@@ -489,6 +489,17 @@ export async function createOpenAiRealtimeBridge({
       locale: currentLocale,
     });
 
+    console.log("[VOICE_REALTIME][INITIAL_GREETING_SELECTED]", {
+      callSid,
+      tenantId: context.tenantId,
+      brand: context.brand,
+      configuredWelcomeLength: configuredWelcomeMessage.length,
+      initialGreetingLength: initialGreetingText.length,
+      hasSpanishLine:
+        initialGreetingText.toLowerCase().includes("español") ||
+        initialGreetingText.toLowerCase().includes("espanol"),
+    });
+
     requestRealtimeResponse(
       {
         conversation: "none",
