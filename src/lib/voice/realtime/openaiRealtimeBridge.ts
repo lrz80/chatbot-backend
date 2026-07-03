@@ -483,11 +483,14 @@ export async function createOpenAiRealtimeBridge({
       tenant: context.tenant || {},
     });
 
-    const initialGreetingText = buildInitialGreetingFromConfiguredWelcome({
-      configuredWelcome: configuredWelcomeMessage,
+    const fallbackGreetingText = buildInitialGreetingFromConfiguredWelcome({
+      configuredWelcome: "",
       brand: context.brand,
       locale: currentLocale,
     });
+
+    const initialGreetingText =
+      clean(configuredWelcomeMessage) || clean(fallbackGreetingText);
 
     console.log("[VOICE_REALTIME][INITIAL_GREETING_SELECTED]", {
       callSid,
