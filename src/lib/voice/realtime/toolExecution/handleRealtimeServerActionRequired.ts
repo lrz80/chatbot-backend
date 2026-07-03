@@ -1,9 +1,13 @@
-//src/lib/voice/realtime/toolExecution/handleRealtimeServerActionRequired.ts
+// src/lib/voice/realtime/toolExecution/handleRealtimeServerActionRequired.ts
 import type { CallState, VoiceLocale } from "../../types";
 import { executeRealtimeTool } from "../realtimeToolExecutor";
 import type { RealtimeToolResult } from "../toolTypes";
 import { clean } from "../utils/clean";
-import { buildExactRealtimeSpeechResponse } from "../buildExactRealtimeSpeechResponse";
+import { buildI18nBookingPromptResponse } from "../i18n/buildI18nBookingPromptResponse";
+import {
+  getBookingLockedLanguageSample,
+  getBookingLockedLocale,
+} from "../bookingTurnState";
 
 type RequestRealtimeResponse = (
   response?: Record<string, unknown>,
@@ -69,7 +73,8 @@ function applyServerActionPostBookingClosureState(params: {
   serverActionResult: RealtimeToolResult;
   lastUserTranscript: string;
 }): CallState {
-  const { state, actionRequired, serverActionResult, lastUserTranscript } = params;
+  const { state, actionRequired, serverActionResult, lastUserTranscript } =
+    params;
 
   if (
     (actionRequired === "create_appointment" ||
@@ -162,6 +167,7 @@ export async function handleRealtimeServerActionRequired(
     realtimeCfg,
     callSid,
     currentLocale,
+    realtimeState,
     nextRealtimeState,
     nextBookingFlowLoaded,
     nextCallEnding,
@@ -213,12 +219,13 @@ export async function handleRealtimeServerActionRequired(
       ? clearConsumedPendingAction(nextRealtimeState)
       : nextRealtimeState;
 
-  const postBookingFinalRealtimeState = applyServerActionPostBookingClosureState({
-    state: baseFinalRealtimeState,
-    actionRequired,
-    serverActionResult: (serverActionResult || {}) as RealtimeToolResult,
-    lastUserTranscript,
-  });
+  const postBookingFinalRealtimeState =
+    applyServerActionPostBookingClosureState({
+      state: baseFinalRealtimeState,
+      actionRequired,
+      serverActionResult: (serverActionResult || {}) as RealtimeToolResult,
+      lastUserTranscript,
+    });
 
   const finalRealtimeState = applyServerActionNextRequiredStep(
     postBookingFinalRealtimeState,
@@ -235,6 +242,13 @@ export async function handleRealtimeServerActionRequired(
       clean((nextRealtimeState as any)?.lang) ||
       currentLocale;
 
+    const bookingLanguage = clean(
+      (finalRealtimeState as any).conversationLanguage ||
+        (nextRealtimeState as any).conversationLanguage ||
+        (realtimeState as any).conversationLanguage ||
+        ""
+    );
+
     if (actionRequired === "send_booking_sms") {
       requestRealtimeResponse(
         {
@@ -245,7 +259,9 @@ export async function handleRealtimeServerActionRequired(
             "Then ask whether they need anything else.",
             "Use the caller's active language.",
             `The active language is ${finalLocale}.`,
-            `Backend SMS result message: ${JSON.stringify(finalFollowupInstructions)}`,
+            `Backend SMS result message: ${JSON.stringify(
+              finalFollowupInstructions
+            )}`,
             "Do not mention tools.",
             "Do not call any tool.",
           ].join("\n"),
@@ -254,9 +270,19 @@ export async function handleRealtimeServerActionRequired(
       );
     } else {
       requestRealtimeResponse(
-        buildExactRealtimeSpeechResponse({
+        buildI18nBookingPromptResponse({
           prompt: finalFollowupInstructions,
           currentLocale: finalLocale,
+          lastAssistantTranscript: clean(
+            (finalRealtimeState as any).lastAssistantTranscript ||
+              (nextRealtimeState as any).lastAssistantTranscript ||
+              (realtimeState as any).lastAssistantTranscript ||
+              ""
+          ),
+          bookingLanguage,
+          bookingLockedLocale: getBookingLockedLocale(finalRealtimeState),
+          bookingLockedLanguageSample:
+            getBookingLockedLanguageSample(finalRealtimeState),
         }),
         `tool_followup:${actionRequired}`
       );

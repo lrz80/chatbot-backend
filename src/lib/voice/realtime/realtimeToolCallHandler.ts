@@ -21,7 +21,6 @@ import { applySubmitBookingStepEffectiveArgs } from "./toolArgs/applySubmitBooki
 import { dropDuplicateSubmitBookingStepEarly } from "./toolGuards/dropDuplicateSubmitBookingStepEarly";
 import { guardDirectCreateAppointment } from "./toolGuards/guardDirectCreateAppointment";
 import { handleRealtimeServerActionRequired } from "./toolExecution/handleRealtimeServerActionRequired";
-import { buildExactRealtimeSpeechResponse } from "./buildExactRealtimeSpeechResponse";
 import { buildI18nBookingPromptResponse } from "./i18n/buildI18nBookingPromptResponse";
 import {
   getBookingLockedLanguageSample,
@@ -894,7 +893,7 @@ export async function handleRealtimeToolCall(
       return {
         consumed: true,
         result: toolResult as RealtimeToolResult,
-        realtimeState: nextRealtimeState,
+        realtimeState: realtimeStateWithBookingLanguage,
         bookingFlowLoaded: nextBookingFlowLoaded,
         hangupRequestedByTool,
         callEnding: nextCallEnding,
@@ -941,7 +940,11 @@ export async function handleRealtimeToolCall(
         buildToollessResponse(
           [
             buildLocaleInstruction(currentLocale),
-            "Say only one short, natural goodbye.",
+            "Say only one short, natural goodbye in the caller's current language.",
+            "Maximum 8 words.",
+            "Do not mention the appointment.",
+            "Do not repeat appointment details.",
+            "Do not summarize the call.",
             "Do not ask another question.",
             "Do not offer more help.",
             "Do not mention tools.",
@@ -963,12 +966,6 @@ export async function handleRealtimeToolCall(
       response,
       source
     ) => {
-      const isCreateAppointmentFollowup =
-        actionRequired === "create_appointment" ||
-        source === "tool_followup:create_appointment";
-
-      const instructions = clean(response?.instructions || "");
-
       requestRealtimeResponse(response, source);
     };
 
@@ -1156,7 +1153,7 @@ export async function handleRealtimeToolCall(
     return {
       consumed: true,
       result: toolResult as RealtimeToolResult,
-      realtimeState: nextRealtimeState,
+      realtimeState: realtimeStateWithBookingLanguage,
       bookingFlowLoaded: nextBookingFlowLoaded,
       hangupRequestedByTool,
       callEnding: nextCallEnding,
