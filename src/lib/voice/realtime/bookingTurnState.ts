@@ -50,20 +50,41 @@ export function lockBookingLanguage(params: {
   realtimeState: CallState;
   currentLocale: string;
   lastUserTranscript: string;
+  lastAssistantTranscript?: string;
+  conversationLanguage?: string;
 }): CallState {
   const existingLocale = getBookingLockedLocale(params.realtimeState);
   const existingSample = getBookingLockedLanguageSample(params.realtimeState);
 
-  if (isBookingLanguageLocked(params.realtimeState) && existingLocale) {
+  if (isBookingLanguageLocked(params.realtimeState) && existingSample) {
     return params.realtimeState;
   }
+
+  const userSample = clean(params.lastUserTranscript);
+  const assistantSample = clean(params.lastAssistantTranscript || "");
+  const conversationLanguage = clean(params.conversationLanguage || "");
+  const currentLocale = clean(params.currentLocale);
+
+  const languageSample = [
+    userSample ? `Caller latest message: ${userSample}` : "",
+    assistantSample ? `Previous assistant message: ${assistantSample}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return {
     ...params.realtimeState,
     bookingLanguageLocked: true,
-    bookingLockedLocale: clean(params.currentLocale) || null,
+
+    // Important:
+    // Do not rely only on currentLocale because it can lag behind the
+    // actual spoken language. conversationLanguage is preferred when present.
+    bookingLockedLocale: conversationLanguage || currentLocale || null,
+
+    // This is the strongest signal. The renderer can infer any language
+    // from natural text, without hardcoding ES/EN/PT/etc.
     bookingLockedLanguageSample:
-      clean(params.lastUserTranscript) || existingSample || null,
+      languageSample || existingSample || userSample || assistantSample || null,
   } as CallState;
 }
 

@@ -835,6 +835,14 @@ export async function handleRealtimeToolCall(
             realtimeState: nextRealtimeState,
             currentLocale,
             lastUserTranscript,
+            lastAssistantTranscript: clean(
+              (realtimeState as any).lastAssistantTranscript || ""
+            ),
+            conversationLanguage: clean(
+              (nextRealtimeState as any).conversationLanguage ||
+                (realtimeState as any).conversationLanguage ||
+                ""
+            ),
           })
         : shouldUnlockBookingLanguageAfterTool({
             toolName,
