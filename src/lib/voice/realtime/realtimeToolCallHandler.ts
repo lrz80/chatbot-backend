@@ -983,6 +983,8 @@ export async function handleRealtimeToolCall(
         buildI18nBookingPromptResponse({
           prompt: retryPrompt,
           currentLocale,
+          lastAssistantTranscript:
+            clean((realtimeState as any).lastAssistantTranscript || ""),
         }),
         "tool_followup:submit_booking_step:retry"
       );
@@ -1025,6 +1027,8 @@ export async function handleRealtimeToolCall(
         buildI18nBookingPromptResponse({
           prompt: nextRequiredPrompt,
           currentLocale,
+          lastAssistantTranscript:
+            clean((realtimeState as any).lastAssistantTranscript || ""),
         }),
         "tool_followup:submit_booking_step"
       );
@@ -1056,6 +1060,8 @@ export async function handleRealtimeToolCall(
           buildI18nBookingPromptResponse({
             prompt: deterministicFollowupInstructions,
             currentLocale,
+            lastAssistantTranscript:
+              clean((realtimeState as any).lastAssistantTranscript || ""),
           }),
           `tool_followup:${toolName}`
         );

@@ -6,8 +6,12 @@ import { buildExactRealtimeSpeechResponse } from "../buildExactRealtimeSpeechRes
 export function buildI18nBookingPromptResponse(params: {
   prompt: string;
   currentLocale: string;
+  lastAssistantTranscript?: string;
 }) {
   const prompt = clean(params.prompt);
+  const lastAssistantTranscript = clean(
+    params.lastAssistantTranscript || ""
+  );
 
   if (process.env.VOICE_BOOKING_I18N_PROMPTS_ENABLED !== "true") {
     return buildExactRealtimeSpeechResponse({
@@ -21,9 +25,12 @@ export function buildI18nBookingPromptResponse(params: {
     tool_choice: "none",
     instructions: [
       "You are a speech renderer for a live booking flow.",
-      `Target language/locale: ${params.currentLocale}.`,
-      "Translate the configured booking question into the target language.",
-      "Speak ONLY the translated question.",
+      `Runtime locale: ${params.currentLocale}.`,
+      `Previous assistant language sample: ${lastAssistantTranscript}.`,
+      "Use the same language as the previous assistant language sample when it clearly shows the caller preferred language.",
+      "If there is no clear previous language sample, use the runtime locale.",
+      "Translate the configured booking question into the chosen language.",
+      "Speak ONLY the translated booking question.",
       "Do not answer the question.",
       "Do not say one moment.",
       "Do not say you are checking, verifying, confirming, loading, reviewing, or processing anything.",
