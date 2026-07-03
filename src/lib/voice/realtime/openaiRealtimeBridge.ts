@@ -815,7 +815,12 @@ export async function createOpenAiRealtimeBridge({
       const doneTranscript = resolveOpenAiRealtimeAssistantTranscriptDone(event);
 
       lastAssistantTranscript = clean(doneTranscript || currentAssistantTranscript);
-      currentAssistantTranscript = "";
+        currentAssistantTranscript = "";
+
+        realtimeState = {
+          ...realtimeState,
+          lastAssistantTranscript,
+        } as CallState;
 
       console.log("[VOICE_REALTIME][ASSISTANT_TRANSCRIPT_DONE]", {
         callSid,

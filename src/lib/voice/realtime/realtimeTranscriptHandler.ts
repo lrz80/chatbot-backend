@@ -53,17 +53,51 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function mapDetectedLanguageToLocale(
-  detectedLanguage?: string | null
-): VoiceLocale | null {
+function mapDetectedLanguage(detectedLanguage?: string | null): string | null {
   const value = String(detectedLanguage || "").trim().toLowerCase();
+  return value || null;
+}
 
-  if (!value) return null;
+function mapLanguageToVoiceLocale(language: string): VoiceLocale {
+  const value = language.trim().toLowerCase();
+
   if (value === "es") return "es-ES";
-  if (value === "en") return "en-US";
   if (value === "pt") return "pt-BR";
 
-  return null;
+  return "en-US";
+}
+
+function shouldRejectWeakLanguageSwitch(params: {
+  currentLanguage: string;
+  detectedLanguage: string | null;
+  confidence: number;
+  tokenCount: number;
+  localeLocked: boolean;
+}): boolean {
+  const {
+    currentLanguage,
+    detectedLanguage,
+    confidence,
+    tokenCount,
+    localeLocked,
+  } = params;
+
+  if (!detectedLanguage) return true;
+  if (detectedLanguage === currentLanguage) return true;
+  if (localeLocked) return true;
+  if (tokenCount < 3) return true;
+
+  if (confidence >= 0.95) return false;
+
+  if (
+    currentLanguage &&
+    currentLanguage !== "en" &&
+    confidence < 0.95
+  ) {
+    return true;
+  }
+
+  return confidence < 0.85;
 }
 
 export async function handleRealtimeTranscriptEvent(
@@ -138,18 +172,26 @@ export async function handleRealtimeTranscriptEvent(
 
   try {
     const detection = await detectarIdioma(transcript);
-    const detectedLocale = mapDetectedLanguageToLocale(detection?.lang || null);
 
-    const normalizedTranscript = clean(transcript);
-    const tokenCount = normalizedTranscript.split(/\s+/).filter(Boolean).length;
+    const detectedLanguage = mapDetectedLanguage(detection?.lang || null);
+    const confidence =
+      typeof detection?.confidence === "number" ? detection.confidence : 0;
 
-    const shouldSwitch =
-      detectedLocale !== null &&
-      detectedLocale !== currentLocale &&
-      typeof detection?.confidence === "number" &&
-      detection.confidence >= 0.85 &&
-      !localeLocked &&
-      tokenCount >= 3;
+    const currentLanguage =
+      clean((realtimeState as any).conversationLanguage) ||
+      currentLocale.split("-")[0].toLowerCase();
+
+    const tokenCount = transcript.split(/\s+/).filter(Boolean).length;
+
+    const rejectSwitch = shouldRejectWeakLanguageSwitch({
+      currentLanguage,
+      detectedLanguage,
+      confidence,
+      tokenCount,
+      localeLocked,
+    });
+
+    const shouldSwitch = !!detectedLanguage && !rejectSwitch;
 
     let nextLocale = currentLocale;
     let nextRealtimeState: CallState = realtimeState;
@@ -158,14 +200,29 @@ export async function handleRealtimeTranscriptEvent(
     let nextTenantId: string | null | undefined = undefined;
     let nextLocaleLocked = localeLocked;
 
+    if (detectedLanguage && detectedLanguage !== currentLanguage && rejectSwitch) {
+      console.log("[VOICE_REALTIME][LANGUAGE_SWITCH_REJECTED]", {
+        callSid,
+        transcript,
+        detectedLanguage,
+        currentLanguage,
+        confidence,
+        tokenCount,
+        localeLocked,
+      });
+    }
+
     if (shouldSwitch) {
+      const voiceLocale = mapLanguageToVoiceLocale(detectedLanguage);
+
       nextLocaleLocked = true;
-      nextLocale = detectedLocale;
+      nextLocale = voiceLocale;
 
       nextRealtimeState = {
         ...realtimeState,
         lang: nextLocale,
-      };
+        conversationLanguage: detectedLanguage,
+      } as CallState;
 
       try {
         const contextRefresh = await refreshRealtimeVoiceContext({
@@ -184,9 +241,12 @@ export async function handleRealtimeTranscriptEvent(
         console.log("[VOICE_REALTIME][LANGUAGE_SWITCH]", {
           callSid,
           transcript,
-          lang: detection?.lang || null,
-          confidence: detection?.confidence ?? 0,
-          locale: nextLocale,
+          detectedLanguage,
+          confidence,
+          voiceLocale: nextLocale,
+          conversationLanguage: detectedLanguage,
+          previousLanguage: currentLanguage,
+          tokenCount,
           sessionRefresh: "skipped_runtime_stability",
         });
       } catch (error) {
