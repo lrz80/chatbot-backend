@@ -102,7 +102,7 @@ export async function handleVoiceSilenceTurn(
       fallbackPromptTranslations: currentStep.prompt_translations || null,
     });
 
-    const promptResolved = await resolveBookingFlowSpeech({
+    const promptResolved = resolveBookingFlowSpeech({
       baseText: retryBaseText,
       locale: currentLocale,
       bookingData: state.bookingData || {},

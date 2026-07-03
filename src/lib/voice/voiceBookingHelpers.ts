@@ -304,7 +304,7 @@ export function buildBookingPromptVariables(params: {
   };
 }
 
-export async function resolveBookingFlowSpeech(params: {
+export function resolveBookingFlowSpeech(params: {
   baseText: string;
   locale: string;
   bookingData: Record<string, string>;
@@ -334,14 +334,12 @@ export async function resolveBookingFlowSpeech(params: {
     return cached.value;
   }
 
-  const translated = await traducirTexto(rendered, params.locale);
-
   bookingSpeechCache.set(cacheKey, {
     expiresAt: now + BOOKING_SPEECH_TTL_MS,
-    value: translated,
+    value: rendered,
   });
 
-  return translated;
+  return rendered;
 }
 
 export function buildAnswersBySlot(params: {

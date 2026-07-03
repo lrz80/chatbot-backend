@@ -1,5 +1,4 @@
 // src/lib/voice/voiceBookingBusyRecovery.ts
-
 import { twiml } from "twilio";
 import { upsertVoiceCallState } from "./upsertVoiceCallState";
 import {
@@ -230,7 +229,7 @@ export async function executeCanonicalBookingSlotBusyRecovery(
 
   const suggestedTimesText = formattedSuggestedTimes.join(", ");
 
-  const busyPromptResolved = await resolveBookingFlowSpeech({
+  const busyPromptResolved = resolveBookingFlowSpeech({
     baseText: unavailablePromptText.trim() || datetimeRetryText.trim(),
     locale: currentLocale,
     bookingData: {
