@@ -19,13 +19,15 @@ export function buildI18nBookingPromptResponse(params: {
   return {
     instructions: [
       `Caller active locale: ${params.currentLocale}.`,
-      "Ask the next booking question using the caller's current language.",
-      "Use the configured prompt only as semantic meaning, not as exact text to read.",
-      "If the configured prompt is in a different language, adapt it naturally.",
-      "Ask only one short question.",
+      "Ask the booking question now.",
+      "Use the configured prompt as the meaning of the question.",
+      "Translate or adapt that question naturally into the caller's active language.",
+      "Say only the adapted question.",
+      "Do not say you are checking, verifying, loading, confirming, or reviewing anything.",
+      "Do not say 'one moment' or similar.",
       "Do not add explanations, summaries, confirmations, or extra details.",
       "",
-      `Configured prompt meaning: ${prompt}`,
+      `Configured booking question: ${prompt}`,
     ].join("\n"),
     tool_choice: "none",
   };
