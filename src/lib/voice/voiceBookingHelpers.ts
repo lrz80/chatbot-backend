@@ -207,6 +207,7 @@ function pickLocalizedBookingText(params: {
   const localeKey = normalizeLocaleKey(params.locale);
   const translations = params.translations || {};
 
+  // 1. Match exacto (pt-BR, es-ES, en-US, etc.)
   const exact =
     typeof translations[localeKey] === "string"
       ? String(translations[localeKey]).trim()
@@ -214,12 +215,15 @@ function pickLocalizedBookingText(params: {
 
   if (exact) return exact;
 
+  // 2. Match por familia (pt-PT -> pt-BR)
   const languagePrefix = localeKey.split("-")[0];
 
   const prefixedEntry = Object.entries(translations).find(([key, value]) => {
     return (
       typeof value === "string" &&
-      String(key || "").toLowerCase().startsWith(languagePrefix.toLowerCase())
+      String(key || "")
+        .toLowerCase()
+        .startsWith(languagePrefix.toLowerCase())
     );
   });
 
@@ -228,8 +232,27 @@ function pickLocalizedBookingText(params: {
     if (value) return value;
   }
 
-  const fallback = String(params.fallbackText || "").trim();
-  return fallback;
+  // 3. Fallback prioritario a inglés
+  const englishFallback =
+    typeof translations["en-US"] === "string"
+      ? String(translations["en-US"]).trim()
+      : typeof translations["en"] === "string"
+        ? String(translations["en"]).trim()
+        : "";
+
+  if (englishFallback) return englishFallback;
+
+  // 4. Último fallback: cualquier traducción disponible
+  const firstAvailableTranslation = Object.values(translations).find(
+    (value) => typeof value === "string" && String(value).trim()
+  );
+
+  if (firstAvailableTranslation) {
+    return String(firstAvailableTranslation).trim();
+  }
+
+  // 5. Fallback final raw
+  return String(params.fallbackText || "").trim();
 }
 
 export function resolveBookingPromptText(params: {
@@ -281,7 +304,7 @@ export function buildBookingPromptVariables(params: {
   };
 }
 
-export function resolveBookingFlowSpeech(params: {
+export async function resolveBookingFlowSpeech(params: {
   baseText: string;
   locale: string;
   bookingData: Record<string, string>;
@@ -311,12 +334,14 @@ export function resolveBookingFlowSpeech(params: {
     return cached.value;
   }
 
+  const translated = await traducirTexto(rendered, params.locale);
+
   bookingSpeechCache.set(cacheKey, {
     expiresAt: now + BOOKING_SPEECH_TTL_MS,
-    value: rendered,
+    value: translated,
   });
 
-  return rendered;
+  return translated;
 }
 
 export function buildAnswersBySlot(params: {

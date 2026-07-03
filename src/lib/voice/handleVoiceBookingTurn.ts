@@ -147,19 +147,21 @@ export async function handleVoiceBookingTurn(
       promptTranslations: firstStep.prompt_translations || null,
     });
 
+    const fastSpeech = resolveBookingSpeechFast({
+      baseText: firstStepPromptText,
+      locale: currentLocale,
+      bookingData: state.bookingData || {},
+      callerE164,
+    });
+
     const askResolved =
-      resolveBookingSpeechFast({
+      fastSpeech ||
+      await resolveBookingFlowSpeech({
         baseText: firstStepPromptText,
         locale: currentLocale,
         bookingData: state.bookingData || {},
         callerE164,
-      }) ||
-      (resolveBookingFlowSpeech({
-        baseText: firstStepPromptText,
-        locale: currentLocale,
-        bookingData: state.bookingData || {},
-        callerE164,
-      }));
+      });
 
     const ask = twoSentencesMax(
       assertNonEmptyBookingSpeech({
@@ -209,7 +211,7 @@ export async function handleVoiceBookingTurn(
       fallbackPromptTranslations: currentStep.prompt_translations || null,
     });
 
-    const retryPromptResolved = resolveBookingFlowSpeech({
+    const retryPromptResolved = await resolveBookingFlowSpeech({
       baseText: retryText,
       locale: currentLocale,
       bookingData: state.bookingData || {},
