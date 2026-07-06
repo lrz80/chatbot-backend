@@ -67,6 +67,7 @@ function isConfirmationStep(step: BookingFlowStepLike | null): boolean {
   return (
     stepKey === "confirm" ||
     stepKey === "confirmation" ||
+    stepKey === "offer_booking_sms" ||
     slot === "confirmation" ||
     expectedType === "confirmation" ||
     validationMode === "confirmation"
@@ -506,6 +507,8 @@ export async function handleRealtimeSubmitBookingStep(
       : "";
 
     if (isCurrentConfirmationStep && !effectiveConfirmationProtocolValue) {
+      const currentStepKey = normalizeKey((prepared.currentStep as any)?.step_key);
+
       effectiveConfirmationProtocolValue = await resolveGlobalConfirmationIntent({
         locale: bookingContext.currentLocale,
         values: [
@@ -516,6 +519,14 @@ export async function handleRealtimeSubmitBookingStep(
           bookingContext.userInput,
         ],
       });
+
+      if (
+        currentStepKey === "offer_booking_sms" &&
+        effectiveConfirmationProtocolValue !== "confirm" &&
+        effectiveConfirmationProtocolValue !== "cancel"
+      ) {
+        effectiveConfirmationProtocolValue = "unknown";
+      }
     }
 
     if (isCurrentConfirmationStep) {
@@ -574,6 +585,41 @@ export async function handleRealtimeSubmitBookingStep(
           bookingState,
         });
       }
+    }
+
+    const currentStepKey = normalizeKey((prepared.currentStep as any)?.step_key);
+
+    if (
+      currentStepKey === "offer_booking_sms" &&
+      effectiveConfirmationProtocolValue !== "confirm" &&
+      effectiveConfirmationProtocolValue !== "cancel"
+    ) {
+      const bookingState = buildRealtimeBookingState({
+        steps,
+        state: bookingContext.state,
+        explicitCurrentIndex: prepared.currentIndex,
+      });
+
+      console.warn("[VOICE_REALTIME][OFFER_BOOKING_SMS_VALUE_REJECTED]", {
+        callSid: bookingContext.callSid,
+        stepKey: prepared.stepKey,
+        targetSlot: prepared.targetSlot,
+        candidateSource: candidate.source,
+        candidateValue: candidate.value,
+        rawTranscriptValue: prepared.rawTranscriptValue,
+        modelValue: prepared.modelValue,
+        effectiveConfirmationProtocolValue,
+        reason: "OFFER_BOOKING_SMS_REQUIRES_EXPLICIT_YES_OR_NO",
+      });
+
+      return buildRealtimeStepRetryResult({
+        error: "AMBIGUOUS_OFFER_BOOKING_SMS_VALUE",
+        currentStep: prepared.currentStep,
+        currentIndex: prepared.currentIndex,
+        currentLocale: bookingContext.currentLocale,
+        steps,
+        bookingState,
+      });
     }
 
     const routeResult = await executeRealtimeStepRoute({
