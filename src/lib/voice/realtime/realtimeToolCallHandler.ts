@@ -939,9 +939,23 @@ export async function handleRealtimeToolCall(
       requestRealtimeResponse(
         buildToollessResponse(
           [
-            buildLocaleInstruction(currentLocale),
-            "Say only a short goodbye in the caller's current language.",
+            "Say only a short goodbye.",
             "Maximum 6 words.",
+
+            "",
+            "Language rule:",
+            "Use the caller's latest phrase language only if it is clearly identifiable.",
+            "If the caller's latest phrase is short, noisy, misspelled, or ambiguous, use the same language as the previous assistant message.",
+            "Do not rely only on the runtime locale for short closing phrases.",
+
+            "",
+            `Caller latest phrase: ${JSON.stringify(lastUserTranscript)}`,
+            `Previous assistant message: ${JSON.stringify(
+              clean((realtimeStateWithBookingLanguage as any).lastAssistantTranscript || "")
+            )}`,
+            `Weak runtime locale hint: ${currentLocale || "unknown"}.`,
+
+            "",
             "The caller already said they are done.",
             "Do not mention the appointment.",
             "Do not mention a booking.",
@@ -951,9 +965,6 @@ export async function handleRealtimeToolCall(
             "Do not ask another question.",
             "Do not offer more help.",
             "Do not continue the conversation.",
-            "Allowed example in Spanish: Gracias, hasta luego.",
-            "Allowed example in Portuguese: Obrigado, até logo.",
-            "Allowed example in English: Thank you, goodbye.",
           ].join("\n")
         ),
         "tool_followup:end_call",
