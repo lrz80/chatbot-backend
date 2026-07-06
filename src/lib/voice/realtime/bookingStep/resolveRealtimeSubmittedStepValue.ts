@@ -165,26 +165,67 @@ function resolveStructuredDatetimeProtocolValue(params: {
         continue;
       }
 
+      const dateKind = clean((parsed as any).date_kind).toLowerCase();
+      const weekday = (parsed as any).weekday;
+      const dateIso = clean((parsed as any).date_iso);
+      const hour24 = (parsed as any).hour_24;
+      const minute = (parsed as any).minute;
+
+      const hasCanonicalTime =
+        typeof hour24 === "number" &&
+        Number.isInteger(hour24) &&
+        hour24 >= 0 &&
+        hour24 <= 23 &&
+        typeof minute === "number" &&
+        Number.isInteger(minute) &&
+        minute >= 0 &&
+        minute <= 59;
+
+      const hasCanonicalDate =
+        dateKind === "today" ||
+        dateKind === "tomorrow" ||
+        (dateKind === "weekday" &&
+          typeof weekday === "number" &&
+          Number.isInteger(weekday) &&
+          weekday >= 0 &&
+          weekday <= 6) ||
+        (dateKind === "calendar_date" &&
+          /^\d{4}-\d{2}-\d{2}$/.test(dateIso));
+
+      if (hasCanonicalDate && hasCanonicalTime) {
+        return {
+          ok: true,
+          value: candidate,
+          rawTranscriptValue: params.rawTranscriptValue,
+          modelValue: params.modelValue,
+          source: "model",
+        };
+      }
+
+      /**
+       * Legacy fallback:
+       * {"status":"resolved","raw":"...","date_text":"...","time_text":"..."}
+       */
       const dateText = clean((parsed as any).date_text);
       const timeText = clean((parsed as any).time_text);
 
-      if (!dateText || !timeText) {
+      if (dateText && timeText) {
         return {
-          ok: false,
-          error: "INCOMPATIBLE_DATETIME_VALUE",
-          value: "",
+          ok: true,
+          value: candidate,
           rawTranscriptValue: params.rawTranscriptValue,
           modelValue: params.modelValue,
-          source: "none",
+          source: "model",
         };
       }
 
       return {
-        ok: true,
-        value: candidate,
+        ok: false,
+        error: "INCOMPATIBLE_DATETIME_VALUE",
+        value: "",
         rawTranscriptValue: params.rawTranscriptValue,
         modelValue: params.modelValue,
-        source: "model",
+        source: "none",
       };
     } catch {
       continue;
