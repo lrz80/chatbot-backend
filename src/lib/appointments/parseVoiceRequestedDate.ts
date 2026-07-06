@@ -81,8 +81,23 @@ type DatetimeProtocolValue =
   | {
       status: "resolved";
       raw: string;
-      date_text: string;
-      time_text: string;
+
+      /**
+       * Canonical protocol preferred.
+       * The model can understand any caller language, but the backend should
+       * receive language-neutral values.
+       */
+      date_kind?: "today" | "tomorrow" | "weekday" | "calendar_date";
+      weekday?: number; // 0 Sunday, 1 Monday, ... 6 Saturday
+      date_iso?: string; // YYYY-MM-DD
+      hour_24?: number; // 0-23
+      minute?: number; // 0-59
+
+      /**
+       * Legacy fallback. Kept so old model responses still work.
+       */
+      date_text?: string;
+      time_text?: string;
     }
   | {
       status: "unknown";
@@ -173,6 +188,75 @@ function parseDatetimeProtocolValue(raw: string): DatetimeProtocolValue | null {
       return null;
     }
 
+    const dateKindRaw = String((parsed as any).date_kind || "")
+      .trim()
+      .toLowerCase();
+
+    const allowedDateKinds = new Set([
+      "today",
+      "tomorrow",
+      "weekday",
+      "calendar_date",
+    ]);
+
+    const dateKind = allowedDateKinds.has(dateKindRaw)
+      ? (dateKindRaw as "today" | "tomorrow" | "weekday" | "calendar_date")
+      : undefined;
+
+    const weekdayRaw = (parsed as any).weekday;
+    const weekday =
+      typeof weekdayRaw === "number" && Number.isInteger(weekdayRaw)
+        ? weekdayRaw
+        : undefined;
+
+    const dateIso = String((parsed as any).date_iso || "").trim();
+
+    const hourRaw = (parsed as any).hour_24;
+    const minuteRaw = (parsed as any).minute;
+
+    const hour24 =
+      typeof hourRaw === "number" && Number.isInteger(hourRaw)
+        ? hourRaw
+        : undefined;
+
+    const minute =
+      typeof minuteRaw === "number" && Number.isInteger(minuteRaw)
+        ? minuteRaw
+        : undefined;
+
+    const hasCanonicalTime =
+      typeof hour24 === "number" &&
+      hour24 >= 0 &&
+      hour24 <= 23 &&
+      typeof minute === "number" &&
+      minute >= 0 &&
+      minute <= 59;
+
+    const hasCanonicalDate =
+      dateKind === "today" ||
+      dateKind === "tomorrow" ||
+      (dateKind === "weekday" &&
+        typeof weekday === "number" &&
+        weekday >= 0 &&
+        weekday <= 6) ||
+      (dateKind === "calendar_date" && /^\d{4}-\d{2}-\d{2}$/.test(dateIso));
+
+    if (hasCanonicalDate && hasCanonicalTime) {
+      return {
+        status: "resolved",
+        raw: rawText,
+        date_kind: dateKind,
+        weekday,
+        date_iso: dateIso || undefined,
+        hour_24: hour24,
+        minute,
+      };
+    }
+
+    /**
+     * Legacy fallback for old model responses:
+     * {"status":"resolved","raw":"...","date_text":"...","time_text":"..."}
+     */
     const dateText = String((parsed as any).date_text || "").trim();
     const timeText = String((parsed as any).time_text || "").trim();
 
@@ -238,6 +322,96 @@ function addDaysToParts(
   utcBase.setUTCDate(utcBase.getUTCDate() + days);
 
   return getDatePartsInTimeZone(utcBase, timeZone);
+}
+
+function resolveCanonicalDateParts(
+  protocolValue: DatetimeProtocolValue,
+  baseDate: Date,
+  timeZone: string
+): TimeZoneDateParts | null {
+  if (protocolValue.status !== "resolved") {
+    return null;
+  }
+
+  const baseParts = getDatePartsInTimeZone(baseDate, timeZone);
+
+  if (protocolValue.date_kind === "today") {
+    return baseParts;
+  }
+
+  if (protocolValue.date_kind === "tomorrow") {
+    return addDaysToParts(baseParts, 1, timeZone);
+  }
+
+  if (
+    protocolValue.date_kind === "weekday" &&
+    typeof protocolValue.weekday === "number" &&
+    protocolValue.weekday >= 0 &&
+    protocolValue.weekday <= 6
+  ) {
+    let diff = protocolValue.weekday - baseParts.weekday;
+
+    if (diff <= 0) {
+      diff += 7;
+    }
+
+    return addDaysToParts(baseParts, diff, timeZone);
+  }
+
+  if (
+    protocolValue.date_kind === "calendar_date" &&
+    protocolValue.date_iso &&
+    /^\d{4}-\d{2}-\d{2}$/.test(protocolValue.date_iso)
+  ) {
+    const [year, month, day] = protocolValue.date_iso
+      .split("-")
+      .map((part) => Number(part));
+
+    if (
+      Number.isInteger(year) &&
+      Number.isInteger(month) &&
+      Number.isInteger(day) &&
+      year >= 2000 &&
+      month >= 1 &&
+      month <= 12 &&
+      day >= 1 &&
+      day <= 31
+    ) {
+      const utcDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+      return getDatePartsInTimeZone(utcDate, timeZone);
+    }
+  }
+
+  return null;
+}
+
+function resolveCanonicalTime(
+  protocolValue: DatetimeProtocolValue
+): { hour: number; minute: number } | null {
+  if (protocolValue.status !== "resolved") {
+    return null;
+  }
+
+  const hour = protocolValue.hour_24;
+  const minute = protocolValue.minute;
+
+  if (
+    typeof hour !== "number" ||
+    !Number.isInteger(hour) ||
+    hour < 0 ||
+    hour > 23 ||
+    typeof minute !== "number" ||
+    !Number.isInteger(minute) ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+
+  return {
+    hour,
+    minute,
+  };
 }
 
 function resolveTargetDateParts(
@@ -440,7 +614,11 @@ export function hasExplicitVoiceDateAnchor(params: {
   const protocolValue = parseDatetimeProtocolValue(raw);
 
   if (protocolValue?.status === "resolved") {
-    return true;
+    const baseDate = params.baseDate ? new Date(params.baseDate) : new Date();
+    const timeZone = params.timeZone || "America/New_York";
+
+    return Boolean(resolveCanonicalDateParts(protocolValue, baseDate, timeZone)) ||
+      Boolean(protocolValue.date_text);
   }
 
   const baseDate = params.baseDate ? new Date(params.baseDate) : new Date();
@@ -476,8 +654,49 @@ export function parseVoiceRequestedDate(
     };
   }
 
-  const effectiveRaw =
+  const canonicalDateParts =
     protocolValue?.status === "resolved"
+      ? resolveCanonicalDateParts(protocolValue, baseDate, timeZone)
+      : null;
+
+  const canonicalTime =
+    protocolValue?.status === "resolved"
+      ? resolveCanonicalTime(protocolValue)
+      : null;
+
+  if (canonicalDateParts && canonicalTime) {
+    const requestedAt = buildDateInTimeZone({
+      year: canonicalDateParts.year,
+      month: canonicalDateParts.month,
+      day: canonicalDateParts.day,
+      hour: canonicalTime.hour,
+      minute: canonicalTime.minute,
+      timeZone,
+    });
+
+    console.log("[VOICE][TARGET_DATE_PARTS]", {
+      raw,
+      effectiveRaw:
+        protocolValue?.status === "resolved" ? protocolValue.raw : raw,
+      baseDate: baseDate.toISOString(),
+      timeZone,
+      targetDateParts: canonicalDateParts,
+      protocol: "canonical",
+    });
+
+    return {
+      ok: true,
+      requestedAt,
+      hasExplicitDate: true,
+      hasExplicitTime: true,
+      confidence: "high",
+    };
+  }
+
+  const effectiveRaw =
+    protocolValue?.status === "resolved" &&
+    protocolValue.date_text &&
+    protocolValue.time_text
       ? `${protocolValue.date_text} ${protocolValue.time_text}`
       : raw;
 
