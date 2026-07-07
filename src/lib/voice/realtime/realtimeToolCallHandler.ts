@@ -28,6 +28,8 @@ import {
   lockBookingLanguage,
   unlockBookingLanguage,
 } from "./bookingTurnState";
+import { updateAndEmitMessageByMessageId } from "../../messages/saveAndEmitMessage";
+import { resolveDashboardVoiceToolContent } from "./dashboardVoiceResolvedContent";
 
 type HandleRealtimeToolCallParams = {
   event: any;
@@ -869,6 +871,27 @@ export async function handleRealtimeToolCall(
       missing_required_slots: toolResult?.missing_required_slots,
       next_required_step: toolResult?.next_required_step,
     });
+
+    const resolvedDashboardContent = resolveDashboardVoiceToolContent({
+      toolName,
+      effectiveToolArgs,
+      toolResult,
+    });
+
+    const sourceTranscriptSeq =
+      typeof effectiveToolArgs.source_transcript_seq === "number"
+        ? effectiveToolArgs.source_transcript_seq
+        : typeof (realtimeState as any).lastUserTranscriptSeq === "number"
+          ? (realtimeState as any).lastUserTranscriptSeq
+          : null;
+
+    if (resolvedDashboardContent && sourceTranscriptSeq) {
+      void updateAndEmitMessageByMessageId({
+        tenantId: resolvedTenantId,
+        messageId: `voice:${callSid || "unknown"}:user:${sourceTranscriptSeq}`,
+        content: resolvedDashboardContent,
+      });
+    }
 
     if (toolName === "send_useful_link_sms" && toolResult?.ok === false) {
       console.warn("[VOICE_REALTIME][USEFUL_LINK_SMS_ERROR_FOLLOWUP_REQUESTED]", {

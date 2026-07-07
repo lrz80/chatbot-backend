@@ -70,3 +70,55 @@ export async function saveAndEmitMessage(params: SaveAndEmitMessageParams) {
 
   return savedMessage;
 }
+
+export async function updateAndEmitMessageByMessageId(params: {
+  tenantId: string | null;
+  messageId: string;
+  content: string;
+}) {
+  const tenantId = clean(params.tenantId);
+  const messageId = clean(params.messageId);
+  const content = clean(params.content);
+
+  if (!tenantId || !messageId || !content) {
+    return null;
+  }
+
+  const { rows } = await pool.query(
+    `
+    UPDATE messages
+    SET content = $3
+    WHERE tenant_id = $1
+      AND message_id = $2
+    RETURNING
+      id,
+      message_id,
+      tenant_id,
+      content,
+      role,
+      canal,
+      timestamp,
+      from_number
+    `,
+    [tenantId, messageId, content]
+  );
+
+  const updatedMessage = rows[0];
+
+  if (!updatedMessage) {
+    return null;
+  }
+
+  try {
+    const io = getIO();
+    io.emit("message:update", updatedMessage);
+  } catch (error) {
+    console.error("[MESSAGES][SOCKET_UPDATE_EMIT_ERROR]", {
+      tenantId,
+      messageId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  return updatedMessage;
+}

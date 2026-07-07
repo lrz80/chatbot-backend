@@ -1019,8 +1019,15 @@ export async function createOpenAiRealtimeBridge({
                     ],
                   }
                 : {
-                    tool_choice: "auto",
-                  },
+                  tool_choice: "auto",
+                  instructions: [
+                    "You are handling a live phone call.",
+                    "If the caller wants to book, schedule, reserve, make an appointment, or start any appointment flow in any language, call get_booking_flow.",
+                    "Do not ask for service, date, time, name, phone, address, staff, or confirmation directly unless the booking flow has already created a pending booking step.",
+                    "For booking intent, use the booking tools instead of continuing as free conversation.",
+                    "For non-booking questions, answer normally using the configured business information and available tools.",
+                  ].join("\n"),
+                },
               isAwaitingPostBookingClosure
                 ? "bridge:user_transcript:post_booking"
                 : "bridge:user_transcript"
