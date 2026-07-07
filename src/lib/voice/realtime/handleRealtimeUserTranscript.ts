@@ -22,6 +22,7 @@ export type HandleRealtimeUserTranscriptResult = {
   realtimeCfg: any;
   localeLocked: boolean;
   tenantId: string | null;
+  dashboardUserContent?: string;
 };
 
 function clean(value: unknown): string {
@@ -569,5 +570,6 @@ export async function handleRealtimeUserTranscript(params: {
     realtimeCfg: runtimeResult.realtimeCfg,
     localeLocked: runtimeResult.localeLocked,
     tenantId: runtimeResult.tenantId,
+    dashboardUserContent: runtimeResult.dashboardUserContent,
   };
 }

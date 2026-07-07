@@ -5,6 +5,7 @@ import { handleRealtimeTranscriptEvent } from "./realtimeTranscriptHandler";
 import {
   mergeTranscriptStatePreservingBookingRuntime,
 } from "./bookingRuntimeState";
+import { resolveDashboardVoiceUserContent } from "./dashboardVoiceTranscriptContent";
 
 export type RealtimeTranscriptRuntimeResult = {
   consumed: boolean;
@@ -16,6 +17,7 @@ export type RealtimeTranscriptRuntimeResult = {
   realtimeCfg: any;
   localeLocked: boolean;
   tenantId: string | null;
+  dashboardUserContent?: string;
 };
 
 export async function handleUserTranscriptCompleted(params: {
@@ -87,5 +89,10 @@ export async function handleUserTranscriptCompleted(params: {
       typeof transcriptResult.tenantId !== "undefined"
         ? transcriptResult.tenantId ?? params.tenantId
         : params.tenantId,
+    dashboardUserContent: resolveDashboardVoiceUserContent({
+      rawTranscript: transcriptResult.transcript,
+      previousState: params.realtimeState,
+      nextState: nextRealtimeState,
+    }),
   };
 }

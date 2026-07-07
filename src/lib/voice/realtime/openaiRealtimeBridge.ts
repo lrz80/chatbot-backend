@@ -896,7 +896,9 @@ export async function createOpenAiRealtimeBridge({
           void saveAndEmitMessage({
             tenantId: transcriptResult.tenantId,
             messageId: `voice:${callSid || "unknown"}:user:${transcriptResult.lastUserTranscriptSeq}`,
-            content: transcriptResult.lastUserTranscript,
+            content:
+              transcriptResult.dashboardUserContent ||
+              transcriptResult.lastUserTranscript,
             role: "user",
             canal: "voice",
             fromNumber: callerPhone,
