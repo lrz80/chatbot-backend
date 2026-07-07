@@ -39,7 +39,7 @@ import {
 } from "./openAiRealtimeEvents";
 import { createRealtimeToolCallQueue } from "./realtimeToolCallQueue";
 import { createRealtimeBargeInController } from "./realtimeBargeInController";
-import pool from "../../db";
+import { saveAndEmitMessage } from "../../messages/saveAndEmitMessage";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -52,89 +52,6 @@ function sendJson(socket: WebSocket, payload: Record<string, unknown>): void {
 
 function clean(value: unknown): string {
   return String(value ?? "").trim();
-}
-
-type VoiceHistoryRole = "user" | "assistant";
-
-const persistedVoiceMessageIds = new Set<string>();
-
-function buildVoiceMessageId(params: {
-  callSid: string | null;
-  role: VoiceHistoryRole;
-  key: string | number | null;
-}): string {
-  const callKey = clean(params.callSid) || `call_${Date.now()}`;
-  const safeKey = clean(params.key) || `${Date.now()}`;
-
-  return `voice:${callKey}:${params.role}:${safeKey}`;
-}
-
-async function saveVoiceHistoryMessage(params: {
-  tenantId: string | null;
-  callSid: string | null;
-  callerPhone: string | null;
-  role: VoiceHistoryRole;
-  content: string;
-  messageKey: string | number | null;
-}): Promise<void> {
-  const tenantId = clean(params.tenantId);
-  const content = clean(params.content);
-
-  if (!tenantId || !content) {
-    return;
-  }
-
-  const messageId = buildVoiceMessageId({
-    callSid: params.callSid,
-    role: params.role,
-    key: params.messageKey,
-  });
-
-  if (persistedVoiceMessageIds.has(messageId)) {
-    return;
-  }
-
-  persistedVoiceMessageIds.add(messageId);
-
-  try {
-    await pool.query(
-      `
-      INSERT INTO messages (
-        message_id,
-        tenant_id,
-        content,
-        role,
-        canal,
-        timestamp,
-        from_number
-      )
-      VALUES ($1, $2, $3, $4, $5, NOW(), $6)
-      `,
-      [
-        messageId,
-        tenantId,
-        content,
-        params.role,
-        "voice",
-        clean(params.callerPhone) || null,
-      ]
-    );
-
-    console.log("[VOICE_REALTIME][HISTORY_MESSAGE_SAVED]", {
-      callSid: params.callSid,
-      tenantId,
-      role: params.role,
-      messageId,
-    });
-  } catch (error) {
-    console.error("[VOICE_REALTIME][HISTORY_MESSAGE_SAVE_ERROR]", {
-      callSid: params.callSid,
-      tenantId,
-      role: params.role,
-      messageId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 function isInternalModelResolutionSource(source: unknown): boolean {
@@ -906,15 +823,16 @@ export async function createOpenAiRealtimeBridge({
         lastAssistantTranscript,
       } as CallState;
 
-      const activeResponseId = responseController.getState().activeResponseId;
+      const activeResponseId =
+        responseController.getState().activeResponseId || Date.now();
 
-      void saveVoiceHistoryMessage({
-        tenantId,
-        callSid,
-        callerPhone,
-        role: "assistant",
+      void saveAndEmitMessage({
+        tenantId: tenantId || "",
+        messageId: `voice:${callSid || "unknown"}:assistant:${activeResponseId}`,
         content: lastAssistantTranscript,
-        messageKey: activeResponseId || Date.now(),
+        role: "assistant",
+        canal: "voice",
+        fromNumber: callerPhone,
       });
 
       console.log("[VOICE_REALTIME][ASSISTANT_TRANSCRIPT_DONE]", {
@@ -975,13 +893,13 @@ export async function createOpenAiRealtimeBridge({
           lastUserTranscriptSeq = transcriptResult.lastUserTranscriptSeq;
           currentLocale = transcriptResult.currentLocale;
 
-          void saveVoiceHistoryMessage({
+          void saveAndEmitMessage({
             tenantId: transcriptResult.tenantId,
-            callSid,
-            callerPhone,
-            role: "user",
+            messageId: `voice:${callSid || "unknown"}:user:${transcriptResult.lastUserTranscriptSeq}`,
             content: transcriptResult.lastUserTranscript,
-            messageKey: transcriptResult.lastUserTranscriptSeq,
+            role: "user",
+            canal: "voice",
+            fromNumber: callerPhone,
           });
 
           /**
