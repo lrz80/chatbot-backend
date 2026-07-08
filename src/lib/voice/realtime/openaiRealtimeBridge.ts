@@ -40,6 +40,10 @@ import {
 import { createRealtimeToolCallQueue } from "./realtimeToolCallQueue";
 import { createRealtimeBargeInController } from "./realtimeBargeInController";
 import { saveAndEmitMessage } from "../../messages/saveAndEmitMessage";
+import {
+  recordVoiceCallStarted,
+  recordVoiceCallEnded,
+} from "./voiceCallRecorder";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -292,6 +296,12 @@ export async function createOpenAiRealtimeBridge({
     }
 
     console.log("[VOICE_REALTIME][TWILIO_HANGUP_EXECUTING]", {
+      callSid,
+      source,
+    });
+
+    void recordVoiceCallEnded({
+      tenantId,
       callSid,
       source,
     });
@@ -552,6 +562,14 @@ export async function createOpenAiRealtimeBridge({
       ...realtimeState,
       lang: currentLocale,
     };
+
+    void recordVoiceCallStarted({
+      tenantId,
+      callSid,
+      fromNumber: callerPhone,
+      toNumber: didNumber,
+    });
+
     sessionConfigured = true;
   }
 
@@ -1483,6 +1501,12 @@ export async function createOpenAiRealtimeBridge({
         streamSid,
       });
 
+      void recordVoiceCallEnded({
+        tenantId,
+        callSid,
+        source: "twilio_stop",
+      });
+
       if (openAiSocket.readyState === WebSocket.OPEN) {
         openAiSocket.close();
       }
@@ -1501,6 +1525,12 @@ export async function createOpenAiRealtimeBridge({
       sessionConfigured,
       callEnding,
       hangupRequestedByTool,
+    });
+
+    void recordVoiceCallEnded({
+      tenantId,
+      callSid,
+      source: "twilio_socket_close",
     });
 
     if (openAiSocket.readyState === WebSocket.OPEN) {
