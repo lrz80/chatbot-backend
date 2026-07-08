@@ -246,15 +246,23 @@ router.get(
 
       const voiceMinutes = Math.round((voiceSeconds / 60) * 10) / 10;
 
-      const bookingsStarted = toNumber(
+      const rawBookingsStarted = toNumber(
         bookingsStartedSummary.rows[0]?.bookings_started
       );
+
       const appointmentsCreated = toNumber(
         appointmentsSummary.rows[0]?.total_appointments
       );
+
       const bookingsConfirmed = toNumber(
         appointmentsSummary.rows[0]?.successful_appointments
       );
+
+      const bookingsStarted =
+        rawBookingsStarted > 0 ? rawBookingsStarted : appointmentsCreated;
+
+      const bookingsStartedEstimated =
+        rawBookingsStarted === 0 && appointmentsCreated > 0;
 
       const bookingConversionRate =
         bookingsStarted > 0
@@ -271,7 +279,6 @@ router.get(
       );
 
       return res.json({
-        tenantId,
         month: month.label,
         totalMessages,
         uniqueCustomers,
@@ -285,6 +292,7 @@ router.get(
         },
         bookings: {
           started: bookingsStarted,
+          startedEstimatedFromAppointments: bookingsStartedEstimated,
           appointmentsCreated,
           confirmed: bookingsConfirmed,
           conversionRate: bookingConversionRate,
