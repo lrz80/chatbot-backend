@@ -271,6 +271,7 @@ router.get(
       );
 
       return res.json({
+        tenantId,
         month: month.label,
         totalMessages,
         uniqueCustomers,
