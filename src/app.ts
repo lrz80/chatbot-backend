@@ -96,6 +96,7 @@ import appointmentServiceSchedulesRouter from "./routes/appointment-service-sche
 import appointmentServiceBookingRulesRouter from "./routes/appointments/service-booking-rules";
 import voiceRealtimeRouter from "./routes/webhook/voice-realtime";
 import twilioVoiceSetupRouter from "./routes/twilioVoiceSetup";
+import monthlySummaryReportRouter from "./routes/reports/monthly-summary";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -243,6 +244,7 @@ app.use("/api/integrations/square", squareIntegrationRouter);
 app.use("/api/appointment-booking-flow", appointmentBookingFlowRoutes);
 app.use("/api/appointment-service-schedules", appointmentServiceSchedulesRouter);
 app.use("/api/appointments/service-booking-rules", appointmentServiceBookingRulesRouter);
+app.use("/api/reports", monthlySummaryReportRouter);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
