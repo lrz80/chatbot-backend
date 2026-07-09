@@ -1,8 +1,8 @@
-//src/lib/voice/realtime/handlers/handleRealtimeCreateAppointment.ts
 import pool from "../../../db";
 import { createAppointmentFromVoice } from "../../../appointments/createAppointmentFromVoice";
 import { executeCanonicalBookingSlotBusyRecovery } from "../../voiceBookingBusyRecovery";
 import { upsertVoiceCallState } from "../../upsertVoiceCallState";
+import { upsertVoiceSalesIntelligence } from "../../../salesIntelligence/upsertVoiceSalesIntelligence";
 import type { CallState, VoiceLocale } from "../../types";
 import {
   clean,
@@ -170,89 +170,89 @@ export async function handleRealtimeCreateAppointment(
   const answersBySlot = normalizeAnswersToCanonicalSlots({
     steps,
     answersBySlot: buildAnswersBySlot({
-        args: {},
-        callerPhone,
-        state: bookingContext.state,
+      args: {},
+      callerPhone,
+      state: bookingContext.state,
     }),
-    });
+  });
 
-    const settingsResult = await pool.query(
+  const settingsResult = await pool.query(
     `
     SELECT
-        default_duration_min,
-        buffer_min,
-        min_lead_minutes,
-        timezone,
-        enabled
+      default_duration_min,
+      buffer_min,
+      min_lead_minutes,
+      timezone,
+      enabled
     FROM appointment_settings
     WHERE tenant_id = $1
     LIMIT 1
     `,
     [tenantId]
-    );
+  );
 
-    const settingsRow = settingsResult.rows[0];
+  const settingsRow = settingsResult.rows[0];
 
-    if (!settingsRow) {
-      const bookingState = buildRealtimeBookingState({
-        steps,
-        state: bookingContext.state,
-        explicitCurrentIndex: null,
-        finalConfirmationGranted: true,
-        readyToCreate: false,
-      });
+  if (!settingsRow) {
+    const bookingState = buildRealtimeBookingState({
+      steps,
+      state: bookingContext.state,
+      explicitCurrentIndex: null,
+      finalConfirmationGranted: true,
+      readyToCreate: false,
+    });
 
-      const createFailedPromptTranslations =
-        typeof bookingContext.cfg?.appointment_create_failed_prompt_translations ===
-          "object" &&
-        bookingContext.cfg?.appointment_create_failed_prompt_translations !== null
-          ? bookingContext.cfg.appointment_create_failed_prompt_translations
-          : {};
+    const createFailedPromptTranslations =
+      typeof bookingContext.cfg?.appointment_create_failed_prompt_translations ===
+        "object" &&
+      bookingContext.cfg?.appointment_create_failed_prompt_translations !== null
+        ? bookingContext.cfg.appointment_create_failed_prompt_translations
+        : {};
 
-      const configuredPrompt =
-        clean(createFailedPromptTranslations[bookingContext.currentLocale]) ||
-        clean(bookingContext.cfg?.appointment_create_failed_prompt);
+    const configuredPrompt =
+      clean(createFailedPromptTranslations[bookingContext.currentLocale]) ||
+      clean(bookingContext.cfg?.appointment_create_failed_prompt);
 
-      return {
-        ok: false,
-        error: "APPOINTMENT_SETTINGS_NOT_FOUND",
-        message: "Appointment settings are not configured for this tenant.",
-        assistant_prompt: configuredPrompt,
-        booking_outcome: "failed_configuration",
-        customer_action_required: true,
-        action_required: null,
-        booking_state: bookingState,
-        next_required_step: null,
-      };
-    }
+    return {
+      ok: false,
+      error: "APPOINTMENT_SETTINGS_NOT_FOUND",
+      message: "Appointment settings are not configured for this tenant.",
+      assistant_prompt: configuredPrompt,
+      booking_outcome: "failed_configuration",
+      customer_action_required: true,
+      action_required: null,
+      booking_state: bookingState,
+      next_required_step: null,
+    };
+  }
 
-    const stepKeyToSlot = Object.fromEntries(
-      steps
-        .map((step) => {
-          const stepKey = clean(step.step_key);
-          const slot = clean(
-            typeof step.validation_config?.slot === "string"
+  const stepKeyToSlot = Object.fromEntries(
+    steps
+      .map((step) => {
+        const stepKey = clean(step.step_key);
+        const slot = clean(
+          typeof step.validation_config?.slot === "string"
             ? step.validation_config.slot
             : ""
-          );
+        );
 
-          return stepKey && slot && slot !== "none" ? [stepKey, slot] : null;
-        })
-        .filter((entry): entry is [string, string] => Array.isArray(entry))
-    );
+        return stepKey && slot && slot !== "none" ? [stepKey, slot] : null;
+      })
+      .filter((entry): entry is [string, string] => Array.isArray(entry))
+  );
 
-    try {
+  try {
     const appointment = await createAppointmentFromVoice({
-        tenantId,
-        answersBySlot,
-        stepKeyToSlot,
-        settings: {
+      tenantId,
+      answersBySlot,
+      stepKeyToSlot,
+      settings: {
         default_duration_min: Number(settingsRow.default_duration_min || 0),
         buffer_min: Number(settingsRow.buffer_min || 0),
         min_lead_minutes: Number(settingsRow.min_lead_minutes || 0),
         timezone: clean(settingsRow.timezone) || "America/New_York",
         enabled: settingsRow.enabled !== false,
-        },
+      },
     });
 
     const bookingSmsPayload = buildRealtimeBookingSmsPayload({
@@ -268,7 +268,9 @@ export async function handleRealtimeCreateAppointment(
         ...(bookingContext.state.bookingData || {}),
         ...answersBySlot,
         appointment_id: clean(appointment.id),
-        external_calendar_event_id: clean(appointment.external_calendar_event_id),
+        external_calendar_event_id: clean(
+          appointment.external_calendar_event_id
+        ),
         google_event_id: clean(appointment.google_event_id),
         google_event_link: clean(appointment.google_event_link),
         booking_sms_payload: bookingSmsPayload,
@@ -320,8 +322,7 @@ export async function handleRealtimeCreateAppointment(
       awaitingNumber: false,
       altDest: createdState.altDest ?? null,
       smsSent: createdState.smsSent ?? false,
-      bookingStepIndex:
-        typeof nextIndex === "number" ? nextIndex : null,
+      bookingStepIndex: typeof nextIndex === "number" ? nextIndex : null,
       bookingData: createdState.bookingData || {},
     });
 
@@ -352,23 +353,34 @@ export async function handleRealtimeCreateAppointment(
             locale: bookingContext.currentLocale,
           });
 
-      return {
-        ok: true,
-        message: clean(informationalStep?.prompt || ""),
-        assistant_prompt: [
-          clean(informationalStep?.prompt || ""),
-          clean(nextRequiredStep?.prompt || ""),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        booking_outcome: nextRequiredStep ? "confirmed_next_action" : "confirmed",
-        booking_state: nextBookingState,
-        next_required_step: nextRequiredStep,
-      };
-    } catch (error) {
+    await upsertVoiceSalesIntelligence({
+      tenantId,
+      callSid: bookingContext.callSid,
+      phone: callerPhone,
+      bookingData: createdState.bookingData || {},
+      transcript: bookingContext.userInput,
+      outcome: nextRequiredStep
+        ? "booking_confirmed_next_action"
+        : "booking_confirmed",
+    });
+
+    return {
+      ok: true,
+      message: clean(informationalStep?.prompt || ""),
+      assistant_prompt: [
+        clean(informationalStep?.prompt || ""),
+        clean(nextRequiredStep?.prompt || ""),
+      ]
+        .filter(Boolean)
+        .join(" "),
+      booking_outcome: nextRequiredStep ? "confirmed_next_action" : "confirmed",
+      booking_state: nextBookingState,
+      next_required_step: nextRequiredStep,
+    };
+  } catch (error) {
     const err = error as Error & {
-        error?: string;
-        suggestedStarts?: string[];
+      error?: string;
+      suggestedStarts?: string[];
     };
 
     if (
@@ -420,6 +432,15 @@ export async function handleRealtimeCreateAppointment(
         bookingData: depositState.bookingData || {},
       });
 
+      await upsertVoiceSalesIntelligence({
+        tenantId,
+        callSid: bookingContext.callSid,
+        phone: callerPhone,
+        bookingData: depositState.bookingData || {},
+        transcript: bookingContext.userInput,
+        outcome: "booking_requires_deposit",
+      });
+
       const bookingState = buildRealtimeBookingState({
         steps,
         state: depositState,
@@ -442,12 +463,6 @@ export async function handleRealtimeCreateAppointment(
         deposit_payment_url: depositPaymentUrl || null,
         deposit_policy_text: depositPolicyText || null,
 
-        /**
-         * Important:
-         * No user-facing hardcoded copy here.
-         * The assistant should speak using configured deposit_policy_text
-         * from service mapping metadata or a tenant-level renderer/template.
-         */
         message: depositPolicyText,
         assistant_prompt: depositPolicyText,
 
@@ -478,6 +493,15 @@ export async function handleRealtimeCreateAppointment(
         explicitCurrentIndex: busyRecovered.datetimeStepIndex,
       });
 
+      await upsertVoiceSalesIntelligence({
+        tenantId,
+        callSid: bookingContext.callSid,
+        phone: callerPhone,
+        bookingData: busyRecovered.state.bookingData || {},
+        transcript: bookingContext.userInput,
+        outcome: "slot_unavailable",
+      });
+
       return {
         ok: false,
         error: "SLOT_UNAVAILABLE",
@@ -505,6 +529,15 @@ export async function handleRealtimeCreateAppointment(
         readyToCreate: false,
       });
 
+      await upsertVoiceSalesIntelligence({
+        tenantId,
+        callSid: bookingContext.callSid,
+        phone: callerPhone,
+        bookingData: bookingContext.state.bookingData || {},
+        transcript: bookingContext.userInput,
+        outcome: "requires_customer_action",
+      });
+
       return {
         ok: false,
         error: "SQUARE_WRITE_OPERATIONS_NOT_SUPPORTED",
@@ -516,6 +549,15 @@ export async function handleRealtimeCreateAppointment(
         next_required_step: null,
       };
     }
+
+    await upsertVoiceSalesIntelligence({
+      tenantId,
+      callSid: bookingContext.callSid,
+      phone: callerPhone,
+      bookingData: bookingContext.state.bookingData || {},
+      transcript: bookingContext.userInput,
+      outcome: "booking_failed",
+    });
 
     return {
       ok: false,
