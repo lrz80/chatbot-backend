@@ -98,7 +98,13 @@ export async function upsertVoiceSalesIntelligence(
       : "voice_call";
 
   const nivelInteres =
-    outcome.includes("confirmed") || outcome.includes("booked") ? 5 : 3;
+    outcome.includes("confirmed") || outcome.includes("booked")
+      ? 5
+      : outcome.includes("requires") ||
+          outcome.includes("failed") ||
+          outcome.includes("unavailable")
+        ? 4
+        : 1;
 
   const messageId = callSid || `voice:${tenantId}:${phone}`;
 
