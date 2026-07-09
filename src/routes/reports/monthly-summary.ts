@@ -370,12 +370,12 @@ async function buildMonthlySummary(params: {
     pool.query(
       `
       SELECT
-        COUNT(*)::int AS follow_up_needed
+        COUNT(DISTINCT NULLIF(TRIM(contacto), ''))::int AS follow_up_needed
       FROM sales_intelligence
       WHERE tenant_id = $1
         AND fecha >= $2::timestamp
         AND fecha < $3::timestamp
-        AND COALESCE(nivel_interes, 0) >= 4
+        AND NULLIF(TRIM(contacto), '') IS NOT NULL
       `,
       [tenantId, month.start, month.end]
     ),
@@ -786,14 +786,14 @@ function generateMonthlyReportPdf(params: {
     .roundedRect(rightX, y3, halfW, 188, 18)
     .fillAndStroke("#FFFFFF", "#E5E7EB");
 
-  drawSectionTitle(doc, "Follow-up needed", rightX + 20, y3 + 20);
+  drawSectionTitle(doc, "Captured leads", rightX + 20, y3 + 20);
 
   doc
     .fillColor("#6B7280")
     .font("Helvetica")
     .fontSize(10)
     .text(
-      "High-interest conversations that may need human attention.",
+      "New contacts identified by Aamy during this period.",
       rightX + 20,
       y3 + 44,
       {
@@ -814,7 +814,7 @@ function generateMonthlyReportPdf(params: {
     .fillColor("#6B7280")
     .font("Helvetica")
     .fontSize(10)
-    .text("pending follow-ups", rightX + 20, y3 + 138, {
+    .text("leads generated this month", rightX + 20, y3 + 138, {
       width: halfW - 40,
       align: "center",
     });
