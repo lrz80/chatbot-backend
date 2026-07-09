@@ -3,6 +3,9 @@ import { Router, Request, Response } from "express";
 import PDFDocument = require("pdfkit");
 import { authenticateUser } from "../../middleware/auth";
 import pool from "../../lib/db";
+import { DateTime } from "luxon";
+import { getBusinessHours } from "../../lib/appointments/booking/db";
+import { isWithinBusinessHours } from "../../lib/appointments/booking/time";
 
 const router = Router();
 
@@ -16,6 +19,8 @@ type MonthlySummary = {
   month: string;
   totalMessages: number;
   uniqueCustomers: number;
+  estimatedTimeSavedMinutes: number;
+  estimatedTimeSavedHours: number;
   conversationsByChannel: Record<string, number>;
   voice: {
     calls: number;
@@ -23,6 +28,8 @@ type MonthlySummary = {
     seconds: number;
     minutes: number;
     estimatedFromMessages: boolean;
+    afterHoursCalls: number;
+    afterHoursAvailable: boolean;
   };
   bookings: {
     started: number;
@@ -71,6 +78,130 @@ function toNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function roundOne(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function calculateEstimatedTimeSavedMinutes(params: {
+  totalMessages: number;
+  voiceCalls: number;
+  bookingsConfirmed: number;
+}): number {
+  /**
+   * Conservative estimate:
+   * - Each handled message saves ~45 seconds.
+   * - Each handled voice call saves ~3 minutes.
+   * - Each confirmed booking saves ~4 minutes of manual back-and-forth.
+   */
+  const messageMinutes = params.totalMessages * 0.75;
+  const voiceMinutes = params.voiceCalls * 3;
+  const bookingMinutes = params.bookingsConfirmed * 4;
+
+  return roundOne(messageMinutes + voiceMinutes + bookingMinutes);
+}
+
+async function getTenantReportContext(tenantId: string): Promise<{
+  tenantName: string;
+  timeZone: string;
+}> {
+  const { rows } = await pool.query(
+    `
+    SELECT
+      name,
+      settings
+    FROM tenants
+    WHERE id = $1
+    LIMIT 1
+    `,
+    [tenantId]
+  );
+
+  const row = rows[0] || {};
+  const tenantName = clean(row.name) || "Business";
+
+  const configuredTimeZone =
+    clean(row.settings?.timezone) ||
+    clean(row.settings?.timeZone) ||
+    clean(row.settings?.booking?.timezone) ||
+    clean(row.settings?.calendar?.timezone);
+
+  return {
+    tenantName,
+    timeZone: configuredTimeZone || "America/New_York",
+  };
+}
+
+async function countAfterHoursVoiceCalls(params: {
+  tenantId: string;
+  month: ParsedMonth;
+  timeZone: string;
+}): Promise<{
+  afterHoursCalls: number;
+  afterHoursAvailable: boolean;
+}> {
+  const { tenantId, month, timeZone } = params;
+
+  const hours = await getBusinessHours(tenantId);
+
+  if (!hours) {
+    return {
+      afterHoursCalls: 0,
+      afterHoursAvailable: false,
+    };
+  }
+
+  const { rows } = await pool.query(
+    `
+    SELECT
+      call_sid,
+      started_at,
+      ended_at,
+      duration_sec
+    FROM voice_calls
+    WHERE tenant_id = $1
+      AND started_at >= $2::timestamptz
+      AND started_at < $3::timestamptz
+      AND NULLIF(TRIM(call_sid), '') IS NOT NULL
+    `,
+    [tenantId, month.start, month.end]
+  );
+
+  let afterHoursCalls = 0;
+
+  for (const row of rows) {
+    const startedAt = row.started_at;
+
+    if (!startedAt) continue;
+
+    const start = DateTime.fromJSDate(new Date(startedAt), {
+      zone: timeZone,
+    });
+
+    if (!start.isValid) continue;
+
+    const durationSec = toNumber(row.duration_sec);
+    const end = start.plus({
+      seconds: durationSec > 0 ? durationSec : 60,
+    });
+
+    const check = isWithinBusinessHours({
+      hours,
+      startISO: start.toISO() || "",
+      endISO: end.toISO() || "",
+      timeZone,
+    });
+
+    if (!check.ok) {
+      afterHoursCalls += 1;
+    }
+  }
+
+  return {
+    afterHoursCalls,
+    afterHoursAvailable: true,
+  };
+}
+
 function formatMonthLabel(month: string): string {
   const [yearRaw, monthRaw] = month.split("-");
   const year = Number(yearRaw);
@@ -89,6 +220,8 @@ async function buildMonthlySummary(params: {
   month: ParsedMonth;
 }): Promise<MonthlySummary> {
   const { tenantId, month } = params;
+
+  const tenantContext = await getTenantReportContext(tenantId);
 
   const [
     messagesSummary,
@@ -284,6 +417,20 @@ async function buildMonthlySummary(params: {
     appointmentsSummary.rows[0]?.successful_appointments
   );
 
+  const estimatedTimeSavedMinutes = calculateEstimatedTimeSavedMinutes({
+    totalMessages,
+    voiceCalls,
+    bookingsConfirmed,
+  });
+
+  const estimatedTimeSavedHours = roundOne(estimatedTimeSavedMinutes / 60);
+
+  const afterHoursVoice = await countAfterHoursVoiceCalls({
+    tenantId,
+    month,
+    timeZone: tenantContext.timeZone,
+  });
+
   const bookingsStarted =
     rawBookingsStarted > 0 ? rawBookingsStarted : appointmentsCreated;
 
@@ -306,6 +453,8 @@ async function buildMonthlySummary(params: {
     month: month.label,
     totalMessages,
     uniqueCustomers,
+    estimatedTimeSavedMinutes,
+    estimatedTimeSavedHours,
     conversationsByChannel,
     voice: {
       calls: voiceCalls,
@@ -313,6 +462,8 @@ async function buildMonthlySummary(params: {
       seconds: voiceSeconds,
       minutes: voiceMinutes,
       estimatedFromMessages: voiceEstimatedFromMessages,
+      afterHoursCalls: afterHoursVoice.afterHoursCalls,
+      afterHoursAvailable: afterHoursVoice.afterHoursAvailable,
     },
     bookings: {
       started: bookingsStarted,
@@ -528,9 +679,12 @@ function generateMonthlyReportPdf(params: {
     y: y1,
     w: cardW,
     h: cardH,
-    title: "Voice minutes",
-    value: String(summary.voice.minutes),
-    subtitle: `${summary.voice.seconds} seconds used`,
+    title: "Estimated time saved",
+    value: `${summary.estimatedTimeSavedMinutes} min`,
+    subtitle:
+      summary.estimatedTimeSavedHours >= 1
+        ? `${summary.estimatedTimeSavedHours} hours estimated`
+        : "Based on messages, calls, and bookings",
   });
 
   // Bookings section
@@ -664,6 +818,26 @@ function generateMonthlyReportPdf(params: {
       width: halfW - 40,
       align: "center",
     });
+
+  doc
+    .roundedRect(rightX + 28, y3 + 158, halfW - 56, 22, 11)
+    .fill("#F3F4F6");
+
+  doc
+    .fillColor("#374151")
+    .font("Helvetica-Bold")
+    .fontSize(9)
+    .text(
+      summary.voice.afterHoursAvailable
+        ? `After-hours calls: ${summary.voice.afterHoursCalls}`
+        : "After-hours calls: not available",
+      rightX + 28,
+      y3 + 165,
+      {
+        width: halfW - 56,
+        align: "center",
+      }
+    );
 
   // Footer
   doc
