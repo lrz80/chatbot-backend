@@ -1060,12 +1060,54 @@ export async function createOpenAiRealtimeBridge({
                 : {
                   tool_choice: "auto",
                   instructions: [
-                    "You are handling a live phone call.",
+                    "You are handling a live phone call for the configured tenant business.",
+
+                    `Business name: ${
+                      clean((realtimeTenant as any)?.name) ||
+                      clean((realtimeTenant as any)?.brand) ||
+                      clean((realtimeCfg as any)?.business_name) ||
+                      clean((realtimeCfg as any)?.brand) ||
+                      "the business"
+                    }.`,
+
+                    clean((realtimeTenant as any)?.info_clave) ||
+                    clean((realtimeCfg as any)?.info_clave)
+                      ? `Configured business information for this tenant:\n${
+                          clean((realtimeTenant as any)?.info_clave) ||
+                          clean((realtimeCfg as any)?.info_clave)
+                        }`
+                      : "Configured business information for this tenant is not available in this turn.",
+
+                    "The caller is already speaking with this business.",
+                    "Always answer as the assistant for this business.",
+                    "Never answer as a generic assistant.",
+                    "Never ask what business, salon, barbershop, or company the caller is referring to.",
+
                     "If the caller wants to book, schedule, reserve, make an appointment, or start any appointment flow in any language, call get_booking_flow.",
                     "Do not ask for service, date, time, name, phone, address, staff, or confirmation directly unless the booking flow has already created a pending booking step.",
                     "For booking intent, use the booking tools instead of continuing as free conversation.",
-                    "For non-booking questions, answer normally using the configured business information and available tools.",
+
+                    "For non-booking questions, answer using only the configured business information above and available tools.",
+                    "Do not invent addresses, locations, hours, prices, services, policies, staff, availability, or contact details.",
+                    "If the exact answer is not available, say you do not have that specific detail available right now.",
+
+                    "Respond briefly and naturally in the caller's language.",
                   ].join("\n"),
+                  input: [
+                    {
+                      type: "message",
+                      role: "user",
+                      content: [
+                        {
+                          type: "input_text",
+                          text: [
+                            "Latest caller message:",
+                            lastUserTranscript,
+                          ].join("\n"),
+                        },
+                      ],
+                    },
+                  ],
                 },
               isAwaitingPostBookingClosure
                 ? "bridge:user_transcript:post_booking"
