@@ -13,6 +13,7 @@ import { handleGenericRealtimeStep } from "./handlers/handleGenericRealtimeStep"
 import { handlePostBookingSmsConsentStep } from "../handlers/handlePostBookingSmsConsentStep";
 import { handlePostBookingGenericStep } from "../handlers/handlePostBookingGenericStep";
 import { handleFinalBookingConfirmationStep } from "../handlers/handleFinalBookingConfirmationStep";
+import { syncVoiceBookingSlotToContact } from "../contacts/voiceContactCrm";
 
 type ExecuteRealtimeStepRouteParams = {
   tenantId: string;
@@ -246,6 +247,14 @@ export async function executeRealtimeStepRoute(
 
     workingState = genericStepResult.workingState;
   }
+
+  void syncVoiceBookingSlotToContact({
+    tenantId,
+    callerPhone,
+    targetSlot,
+    value: resolvedInputValue,
+    locale: bookingContext.currentLocale,
+  });
 
   return {
     kind: "continue",
