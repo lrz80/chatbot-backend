@@ -749,10 +749,17 @@ router.get(
         month,
       });
 
-      const tenantName =
-        clean((req as any).user?.business_name) ||
-        clean((req as any).user?.name) ||
-        "Business";
+      const tenantResult = await pool.query(
+        `
+        SELECT name
+        FROM tenants
+        WHERE id = $1
+        LIMIT 1
+        `,
+        [tenantId]
+      );
+
+      const tenantName = clean(tenantResult.rows[0]?.name) || "Business";
 
       generateMonthlyReportPdf({
         res,
