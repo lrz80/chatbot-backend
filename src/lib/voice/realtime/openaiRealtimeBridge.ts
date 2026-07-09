@@ -40,6 +40,7 @@ import {
 import { createRealtimeToolCallQueue } from "./realtimeToolCallQueue";
 import { createRealtimeBargeInController } from "./realtimeBargeInController";
 import { saveAndEmitMessage } from "../../messages/saveAndEmitMessage";
+import { upsertVoiceSalesIntelligence } from "../../salesIntelligence/upsertVoiceSalesIntelligence";
 import {
   recordVoiceCallStarted,
   recordVoiceCallEnded,
@@ -568,6 +569,26 @@ export async function createOpenAiRealtimeBridge({
       callSid,
       fromNumber: callerPhone,
       toNumber: didNumber,
+    });
+
+    void upsertVoiceSalesIntelligence({
+      tenantId,
+      callSid,
+      phone: callerPhone,
+      bookingData: {
+        call_started: true,
+        from_number: callerPhone,
+        to_number: didNumber,
+        tenant_name: clean(context.tenant?.name),
+      },
+      outcome: "voice_call_started",
+    }).catch((error) => {
+      console.error("[SALES_INTELLIGENCE][VOICE_CALL_STARTED_ERROR]", {
+        tenantId,
+        callSid,
+        phone: callerPhone,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
 
     sessionConfigured = true;
