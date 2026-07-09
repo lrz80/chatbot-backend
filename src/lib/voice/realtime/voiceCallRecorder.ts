@@ -5,6 +5,73 @@ function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+async function upsertVoiceContactFromCallStart(params: {
+  tenantId: string;
+  fromNumber: string | null;
+  countCall: boolean;
+}): Promise<void> {
+  const tenantId = clean(params.tenantId);
+  const phone = clean(params.fromNumber);
+
+  if (!tenantId || !phone) {
+    return;
+  }
+
+  try {
+    await pool.query(
+      `
+      WITH updated AS (
+        UPDATE contactos
+        SET
+          ultima_llamada = NOW(),
+          primera_llamada = COALESCE(primera_llamada, NOW()),
+          llamadas = llamadas + CASE WHEN $3::boolean THEN 1 ELSE 0 END,
+          ultimo_canal = 'voice',
+          origen = COALESCE(origen, 'voice')
+        WHERE tenant_id = $1
+          AND telefono = $2
+        RETURNING id
+      )
+      INSERT INTO contactos (
+        tenant_id,
+        telefono,
+        segmento,
+        fecha_creacion,
+        origen,
+        ultimo_canal,
+        primera_llamada,
+        ultima_llamada,
+        llamadas
+      )
+      SELECT
+        $1,
+        $2,
+        'lead',
+        NOW(),
+        'voice',
+        'voice',
+        NOW(),
+        NOW(),
+        CASE WHEN $3::boolean THEN 1 ELSE 0 END
+      WHERE NOT EXISTS (SELECT 1 FROM updated)
+      `,
+      [tenantId, phone, params.countCall]
+    );
+
+    console.log("[CONTACTOS][VOICE_CONTACT_UPSERTED]", {
+      tenantId,
+      phone,
+      countCall: params.countCall,
+    });
+  } catch (error) {
+    console.error("[CONTACTOS][VOICE_CONTACT_UPSERT_ERROR]", {
+      tenantId,
+      phone,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function recordVoiceCallStarted(params: {
   tenantId: string | null;
   callSid: string | null;
@@ -21,7 +88,7 @@ export async function recordVoiceCallStarted(params: {
   }
 
   try {
-    await pool.query(
+    const { rows } = await pool.query(
       `
       WITH updated AS (
         UPDATE voice_calls
@@ -32,44 +99,57 @@ export async function recordVoiceCallStarted(params: {
         WHERE tenant_id = $1
           AND call_sid = $2
         RETURNING id
-      )
-      INSERT INTO voice_calls (
-        tenant_id,
-        call_sid,
-        from_number,
-        to_number,
-        started_at,
-        duration_sec,
-        total_tokens,
-        created_at,
-        updated_at
-      )
-      SELECT
-        $1,
-        $2,
-        $3,
-        $4,
-        NOW(),
-        0,
-        0,
-        NOW(),
-        NOW()
-      WHERE NOT EXISTS (SELECT 1 FROM updated)
-        AND NOT EXISTS (
-          SELECT 1
-          FROM voice_calls
-          WHERE tenant_id = $1
-            AND call_sid = $2
+      ),
+      inserted AS (
+        INSERT INTO voice_calls (
+          tenant_id,
+          call_sid,
+          from_number,
+          to_number,
+          started_at,
+          duration_sec,
+          total_tokens,
+          created_at,
+          updated_at
         )
+        SELECT
+          $1,
+          $2,
+          $3,
+          $4,
+          NOW(),
+          0,
+          0,
+          NOW(),
+          NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM updated)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM voice_calls
+            WHERE tenant_id = $1
+              AND call_sid = $2
+          )
+        RETURNING id
+      )
+      SELECT EXISTS(SELECT 1 FROM inserted) AS inserted
       `,
       [tenantId, callSid, fromNumber, toNumber]
     );
+
+    const inserted = rows[0]?.inserted === true;
+
+    await upsertVoiceContactFromCallStart({
+      tenantId,
+      fromNumber,
+      countCall: inserted,
+    });
 
     console.log("[VOICE_CALLS][START_RECORDED]", {
       tenantId,
       callSid,
       fromNumber,
       toNumber,
+      inserted,
     });
   } catch (error) {
     console.error("[VOICE_CALLS][START_RECORD_ERROR]", {
