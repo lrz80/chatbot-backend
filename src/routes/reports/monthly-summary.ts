@@ -1,6 +1,8 @@
 // src/routes/reports/monthly-summary.ts
 import { Router, Request, Response } from "express";
 import PDFDocument = require("pdfkit");
+import fs = require("fs");
+import path = require("path");
 import { authenticateUser } from "../../middleware/auth";
 import pool from "../../lib/db";
 import { DateTime } from "luxon";
@@ -8,6 +10,21 @@ import { getBusinessHours } from "../../lib/appointments/booking/db";
 import { isWithinBusinessHours } from "../../lib/appointments/booking/time";
 
 const router = Router();
+
+const REPORT_LOGO_PATH = path.resolve(
+  process.cwd(),
+  "assets",
+  "branding",
+  "aamy-report-logo.png"
+);
+
+function getReportLogo(): Buffer {
+  if (!fs.existsSync(REPORT_LOGO_PATH)) {
+    throw new Error(`No se encontró el logo en: ${REPORT_LOGO_PATH}`);
+  }
+
+  return fs.readFileSync(REPORT_LOGO_PATH);
+}
 
 type ParsedMonth = {
   start: string;
@@ -602,22 +619,41 @@ function generateMonthlyReportPdf(params: {
     .fill("#21002F");
 
   doc
+    .roundedRect(margin + 18, 46, 74, 78, 12)
+    .fill("#FFFFFF");
+
+  doc.image(getReportLogo(), margin + 24, 53, {
+    fit: [62, 64],
+    align: "center",
+    valign: "center",
+    });
+
+  doc
     .fillColor("#FFFFFF")
     .font("Helvetica-Bold")
-    .fontSize(26)
-    .text("Aamy Monthly Report", margin + 24, 58);
+    .fontSize(21)
+    .text("Monthly Report", margin + 108, 52, {
+        width: 250,
+        ellipsis: true,
+    });
 
   doc
     .fillColor("#D8B4FE")
     .font("Helvetica")
-    .fontSize(12)
-    .text(tenantName || "Business report", margin + 24, 92);
+    .fontSize(11)
+    .text(tenantName || "Business report", margin + 108, 83, {
+        width: 250,
+        ellipsis: true,
+    });
 
   doc
     .fillColor("#E9D5FF")
     .font("Helvetica-Bold")
-    .fontSize(14)
-    .text(formatMonthLabel(summary.month), margin + 24, 112);
+    .fontSize(13)
+    .text(formatMonthLabel(summary.month), margin + 108, 104, {
+        width: 250,
+        ellipsis: true,
+    });
 
   doc
     .roundedRect(pageWidth - 164, 58, 96, 34, 17)
