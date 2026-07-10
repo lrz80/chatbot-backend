@@ -15,6 +15,7 @@ import {
   type BookingState,
 } from "../realtimeBookingFlowUtils";
 import { resolvePostCreateBookingTransition } from "../bookingStep/resolvePostCreateBookingTransition";
+import { registerConfirmedVoiceBooking } from "../contacts/voiceContactCrm";
 
 type RealtimeBookingContext = {
   tenant: any;
@@ -260,25 +261,20 @@ export async function handleRealtimeCreateAppointment(
       clean(answersBySlot.customer_phone) ||
       clean(callerPhone);
 
-    if (contactPhone) {
-      await pool.query(
-        `
-        UPDATE contactos
-        SET
-          reservas = COALESCE(reservas, 0) + 1,
-          ultima_cita = $3,
-          segmento = 'cliente',
-          updated_at = NOW()
-        WHERE tenant_id = $1
-          AND telefono = $2
-        `,
-        [
-          tenantId,
-          contactPhone,
-          appointment.start_time || answersBySlot.datetime_iso || null,
-        ]
-      );
-    }
+    await registerConfirmedVoiceBooking({
+      tenantId,
+      callerPhone: contactPhone,
+      appointmentId: clean(appointment.id),
+      scheduledAt:
+        appointment.start_time ||
+        answersBySlot.datetime_iso ||
+        answersBySlot.datetime ||
+        null,
+      serviceName:
+        clean(answersBySlot.service) ||
+        clean(answersBySlot.requested_service) ||
+        null,
+    });
 
     const bookingSmsPayload = buildRealtimeBookingSmsPayload({
       tenant: bookingContext.tenant,
