@@ -741,6 +741,164 @@ router.get("/crm/export", authenticateUser, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/contactos/crm/:id
+ * Devuelve el detalle completo de un contacto del tenant autenticado.
+ */
+router.get("/crm/:id", authenticateUser, async (req, res) => {
+  const tenantId = req.user?.tenant_id;
+  const contactId = Number.parseInt(String(req.params.id || ""), 10);
+
+  if (!tenantId) {
+    return res.status(401).json({
+      ok: false,
+      error: "TENANT_NOT_FOUND_IN_TOKEN",
+    });
+  }
+
+  if (!Number.isInteger(contactId) || contactId <= 0) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_CONTACT_ID",
+    });
+  }
+
+  try {
+    const contactResult = await pool.query(
+      `
+      SELECT
+        c.id,
+        c.tenant_id,
+        c.nombre,
+        c.telefono,
+        c.email,
+        c.segmento,
+        COALESCE(c.estado_cliente, 'lead') AS estado_cliente,
+        COALESCE(c.marketing_opt_in, false) AS marketing_opt_in,
+        c.opt_in_source,
+        c.opt_in_at,
+        c.idioma,
+        c.origen,
+        c.ultimo_canal,
+        COALESCE(c.llamadas, 0)::int AS llamadas,
+        COALESCE(c.reservas, 0)::int AS reservas,
+        c.ultimo_servicio,
+        c.primera_llamada,
+        c.ultima_llamada,
+        c.primera_reserva_at,
+        c.ultima_reserva_at,
+        c.ultima_cita,
+        c.proxima_cita_at,
+        c.ultima_interaccion_at,
+        COALESCE(c.valor_generado, 0)::numeric AS valor_generado,
+        c.resumen_ia,
+        c.resumen_ia_actualizado_at,
+        c.notas,
+        c.fecha_creacion,
+        c.updated_at
+      FROM contactos c
+      WHERE c.id = $1
+        AND c.tenant_id = $2
+      LIMIT 1
+      `,
+      [contactId, tenantId]
+    );
+
+    const contact = contactResult.rows[0];
+
+    if (!contact) {
+      return res.status(404).json({
+        ok: false,
+        error: "CONTACT_NOT_FOUND",
+      });
+    }
+
+    const phone = String(contact.telefono || "").trim();
+
+    const appointmentsResult = phone
+      ? await pool.query(
+          `
+          SELECT
+            a.id::text AS id,
+            a.customer_name,
+            a.customer_phone,
+            a.customer_email,
+            a.channel,
+            a.start_time,
+            a.end_time,
+            a.status,
+            a.created_at,
+            a.google_event_link,
+            s.name AS service_name
+          FROM appointments a
+          LEFT JOIN services s
+            ON s.id = a.service_id
+          WHERE a.tenant_id = $1
+            AND a.customer_phone = $2
+          ORDER BY a.start_time DESC
+          LIMIT 100
+          `,
+          [tenantId, phone]
+        )
+      : { rows: [] };
+
+    const messagesResult = phone
+      ? await pool.query(
+          `
+          SELECT
+            m.id,
+            m.message_id,
+            m.content,
+            m.role,
+            m.canal,
+            m.timestamp,
+            m.from_number,
+            m.emotion
+          FROM messages m
+          WHERE m.tenant_id = $1
+            AND m.from_number = $2
+          ORDER BY m.timestamp DESC, m.id DESC
+          LIMIT 200
+          `,
+          [tenantId, phone]
+        )
+      : { rows: [] };
+
+    const bookingHistoryResult = await pool.query(
+      `
+      SELECT
+        cr.id,
+        cr.appointment_id,
+        cr.scheduled_at,
+        cr.service_name,
+        cr.channel,
+        cr.created_at
+      FROM contacto_reservas cr
+      WHERE cr.tenant_id = $1
+        AND cr.contacto_id = $2
+      ORDER BY cr.scheduled_at DESC NULLS LAST, cr.created_at DESC
+      LIMIT 100
+      `,
+      [tenantId, contactId]
+    );
+
+    return res.json({
+      ok: true,
+      contact,
+      appointments: appointmentsResult.rows,
+      messages: messagesResult.rows,
+      bookingHistory: bookingHistoryResult.rows,
+    });
+  } catch (error) {
+    console.error("[GET /api/contactos/crm/:id] Error:", error);
+
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL_SERVER_ERROR",
+    });
+  }
+});
+
 // 🧼 Eliminar todos los contactos del tenant
 router.delete("/", authenticateUser, async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
