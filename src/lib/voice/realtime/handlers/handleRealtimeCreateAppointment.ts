@@ -255,6 +255,31 @@ export async function handleRealtimeCreateAppointment(
       },
     });
 
+    const contactPhone =
+      clean(appointment.customer_phone) ||
+      clean(answersBySlot.customer_phone) ||
+      clean(callerPhone);
+
+    if (contactPhone) {
+      await pool.query(
+        `
+        UPDATE contactos
+        SET
+          reservas = COALESCE(reservas, 0) + 1,
+          ultima_cita = $3,
+          segmento = 'cliente',
+          updated_at = NOW()
+        WHERE tenant_id = $1
+          AND telefono = $2
+        `,
+        [
+          tenantId,
+          contactPhone,
+          appointment.start_time || answersBySlot.datetime_iso || null,
+        ]
+      );
+    }
+
     const bookingSmsPayload = buildRealtimeBookingSmsPayload({
       tenant: bookingContext.tenant,
       answersBySlot,
