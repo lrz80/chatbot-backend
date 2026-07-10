@@ -81,6 +81,93 @@ function parseDateLoose(v: any): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+function parsePositiveInteger(
+  value: unknown,
+  fallback: number,
+  max: number
+): number {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return Math.min(parsed, max);
+}
+
+function getSingleQueryValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return String(value[0] ?? "").trim();
+  }
+
+  return String(value ?? "").trim();
+}
+
+function escapeCsvValue(value: unknown): string {
+  const text = String(value ?? "");
+
+  if (
+    text.includes(",") ||
+    text.includes('"') ||
+    text.includes("\n") ||
+    text.includes("\r")
+  ) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  return text;
+}
+
+function buildCrmContactsFilters(params: {
+  tenantId: string;
+  query: Record<string, unknown>;
+}): {
+  whereSql: string;
+  values: unknown[];
+} {
+  const values: unknown[] = [params.tenantId];
+  const conditions = ["c.tenant_id = $1"];
+
+  const search = getSingleQueryValue(params.query.q);
+  const estado = getSingleQueryValue(params.query.estado).toLowerCase();
+  const origen = getSingleQueryValue(params.query.origen).toLowerCase();
+  const marketing = getSingleQueryValue(params.query.marketing).toLowerCase();
+
+  if (search) {
+    values.push(`%${search}%`);
+    const index = values.length;
+
+    conditions.push(`
+      (
+        c.nombre ILIKE $${index}
+        OR c.telefono ILIKE $${index}
+        OR c.email ILIKE $${index}
+        OR c.ultimo_servicio ILIKE $${index}
+      )
+    `);
+  }
+
+  if (estado && estado !== "todos") {
+    values.push(estado);
+    conditions.push(`LOWER(COALESCE(c.estado_cliente, 'lead')) = $${values.length}`);
+  }
+
+  if (origen && origen !== "todos") {
+    values.push(origen);
+    conditions.push(`LOWER(COALESCE(c.origen, '')) = $${values.length}`);
+  }
+
+  if (marketing === "true" || marketing === "false") {
+    values.push(marketing === "true");
+    conditions.push(`COALESCE(c.marketing_opt_in, false) = $${values.length}`);
+  }
+
+  return {
+    whereSql: `WHERE ${conditions.join(" AND ")}`,
+    values,
+  };
+}
+
 // ✅ Inferir segmento sin depender de columnas (usa TODOS los valores de la fila)
 function inferSegmentFromRow(rawLine: string, headers: string[], cols: string[]): Segmento {
   // 1) Señales fuertes por texto (en cualquier columna)
@@ -377,6 +464,280 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
   } catch (err) {
     console.error("❌ Error al subir contactos:", err);
     res.status(500).json({ error: "Error al procesar archivo." });
+  }
+});
+
+/**
+ * GET /api/contactos/crm
+ * Listado paginado para la pantalla CRM.
+ *
+ * Query params:
+ * q
+ * estado
+ * origen
+ * marketing
+ * page
+ * limit
+ */
+router.get("/crm", authenticateUser, async (req, res) => {
+  const tenantId = req.user?.tenant_id;
+
+  if (!tenantId) {
+    return res.status(401).json({
+      ok: false,
+      error: "TENANT_NOT_FOUND_IN_TOKEN",
+    });
+  }
+
+  try {
+    const page = parsePositiveInteger(req.query.page, 1, 1_000_000);
+    const limit = parsePositiveInteger(req.query.limit, 25, 100);
+    const offset = (page - 1) * limit;
+
+    const filters = buildCrmContactsFilters({
+      tenantId,
+      query: req.query as Record<string, unknown>,
+    });
+
+    const totalResult = await pool.query(
+      `
+      SELECT COUNT(*)::int AS total
+      FROM contactos c
+      ${filters.whereSql}
+      `,
+      filters.values
+    );
+
+    const total = Number(totalResult.rows[0]?.total || 0);
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+
+    const listValues = [...filters.values, limit, offset];
+    const limitIndex = listValues.length - 1;
+    const offsetIndex = listValues.length;
+
+    const contactsResult = await pool.query(
+      `
+      SELECT
+        c.id,
+        c.nombre,
+        c.telefono,
+        c.email,
+        c.segmento,
+        COALESCE(c.estado_cliente, 'lead') AS estado_cliente,
+        COALESCE(c.marketing_opt_in, false) AS marketing_opt_in,
+        c.opt_in_source,
+        c.opt_in_at,
+        c.idioma,
+        c.origen,
+        c.ultimo_canal,
+        COALESCE(c.llamadas, 0)::int AS llamadas,
+        COALESCE(c.reservas, 0)::int AS reservas,
+        c.ultimo_servicio,
+        c.primera_llamada,
+        c.ultima_llamada,
+        c.primera_reserva_at,
+        c.ultima_reserva_at,
+        c.ultima_cita,
+        c.proxima_cita_at,
+        c.ultima_interaccion_at,
+        COALESCE(c.valor_generado, 0)::numeric AS valor_generado,
+        c.resumen_ia,
+        c.resumen_ia_actualizado_at,
+        c.fecha_creacion,
+        c.updated_at
+      FROM contactos c
+      ${filters.whereSql}
+      ORDER BY
+        COALESCE(
+          c.ultima_interaccion_at,
+          c.ultima_llamada,
+          c.updated_at,
+          c.fecha_creacion
+        ) DESC NULLS LAST,
+        c.id DESC
+      LIMIT $${limitIndex}
+      OFFSET $${offsetIndex}
+      `,
+      listValues
+    );
+
+    const statsResult = await pool.query(
+      `
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (
+          WHERE COALESCE(estado_cliente, 'lead') = 'lead'
+        )::int AS leads,
+        COUNT(*) FILTER (
+          WHERE COALESCE(estado_cliente, '') = 'cliente'
+        )::int AS clientes,
+        COUNT(*) FILTER (
+          WHERE COALESCE(estado_cliente, '') = 'recurrente'
+        )::int AS recurrentes,
+        COUNT(*) FILTER (
+          WHERE COALESCE(marketing_opt_in, false) = true
+        )::int AS marketing_opt_in
+      FROM contactos
+      WHERE tenant_id = $1
+      `,
+      [tenantId]
+    );
+
+    return res.json({
+      ok: true,
+      contacts: contactsResult.rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
+      stats: {
+        total: Number(statsResult.rows[0]?.total || 0),
+        leads: Number(statsResult.rows[0]?.leads || 0),
+        clientes: Number(statsResult.rows[0]?.clientes || 0),
+        recurrentes: Number(statsResult.rows[0]?.recurrentes || 0),
+        marketingOptIn: Number(
+          statsResult.rows[0]?.marketing_opt_in || 0
+        ),
+      },
+    });
+  } catch (error) {
+    console.error("[GET /api/contactos/crm] Error:", error);
+
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL_SERVER_ERROR",
+    });
+  }
+});
+
+/**
+ * GET /api/contactos/crm/export
+ * Exporta los contactos respetando búsqueda y filtros.
+ */
+router.get("/crm/export", authenticateUser, async (req, res) => {
+  const tenantId = req.user?.tenant_id;
+
+  if (!tenantId) {
+    return res.status(401).json({
+      ok: false,
+      error: "TENANT_NOT_FOUND_IN_TOKEN",
+    });
+  }
+
+  try {
+    const filters = buildCrmContactsFilters({
+      tenantId,
+      query: req.query as Record<string, unknown>,
+    });
+
+    const result = await pool.query(
+      `
+      SELECT
+        c.nombre,
+        c.telefono,
+        c.email,
+        c.segmento,
+        COALESCE(c.estado_cliente, 'lead') AS estado_cliente,
+        c.idioma,
+        c.origen,
+        c.ultimo_canal,
+        COALESCE(c.llamadas, 0)::int AS llamadas,
+        COALESCE(c.reservas, 0)::int AS reservas,
+        c.ultimo_servicio,
+        c.ultima_llamada,
+        c.ultima_reserva_at,
+        c.proxima_cita_at,
+        COALESCE(c.valor_generado, 0)::numeric AS valor_generado,
+        COALESCE(c.marketing_opt_in, false) AS marketing_opt_in,
+        c.opt_in_source,
+        c.opt_in_at,
+        c.fecha_creacion
+      FROM contactos c
+      ${filters.whereSql}
+      ORDER BY
+        COALESCE(
+          c.ultima_interaccion_at,
+          c.ultima_llamada,
+          c.updated_at,
+          c.fecha_creacion
+        ) DESC NULLS LAST,
+        c.id DESC
+      `,
+      filters.values
+    );
+
+    const headers = [
+      "Nombre",
+      "Teléfono",
+      "Email",
+      "Segmento",
+      "Estado",
+      "Idioma",
+      "Origen",
+      "Último canal",
+      "Llamadas",
+      "Reservas",
+      "Último servicio",
+      "Última llamada",
+      "Última reserva",
+      "Próxima cita",
+      "Valor generado",
+      "Marketing opt-in",
+      "Fuente del consentimiento",
+      "Fecha del consentimiento",
+      "Fecha de creación",
+    ];
+
+    const csvRows = result.rows.map((row) =>
+      [
+        row.nombre,
+        row.telefono,
+        row.email,
+        row.segmento,
+        row.estado_cliente,
+        row.idioma,
+        row.origen,
+        row.ultimo_canal,
+        row.llamadas,
+        row.reservas,
+        row.ultimo_servicio,
+        row.ultima_llamada,
+        row.ultima_reserva_at,
+        row.proxima_cita_at,
+        row.valor_generado,
+        row.marketing_opt_in ? "Sí" : "No",
+        row.opt_in_source,
+        row.opt_in_at,
+        row.fecha_creacion,
+      ]
+        .map(escapeCsvValue)
+        .join(",")
+    );
+
+    const csv = [
+      headers.map(escapeCsvValue).join(","),
+      ...csvRows,
+    ].join("\r\n");
+
+    const date = new Date().toISOString().slice(0, 10);
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="contactos-${date}.csv"`
+    );
+
+    // BOM para que Excel detecte correctamente acentos y caracteres UTF-8.
+    return res.status(200).send(`\uFEFF${csv}`);
+  } catch (error) {
+    console.error("[GET /api/contactos/crm/export] Error:", error);
+
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL_SERVER_ERROR",
+    });
   }
 });
 
