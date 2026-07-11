@@ -8,6 +8,8 @@ import pool from "../../lib/db";
 import { DateTime } from "luxon";
 import { getBusinessHours } from "../../lib/appointments/booking/db";
 import { isWithinBusinessHours } from "../../lib/appointments/booking/time";
+import { createHash } from "crypto";
+import { createReportTranslator } from "../../lib/reports/reportTranslations";
 
 const router = Router();
 
@@ -30,6 +32,15 @@ type ParsedMonth = {
   start: string;
   end: string;
   label: string;
+};
+
+type ReportLanguage = string;
+
+type MonthlyAiAnalysis = {
+  executiveSummary: string;
+  insights: string[];
+  recommendations: string[];
+  generatedAt: string | null;
 };
 
 type MonthlySummary = {
@@ -60,6 +71,7 @@ type MonthlySummary = {
     total: number;
   }>;
   followUpNeeded: number;
+  aiAnalysis?: MonthlyAiAnalysis;
 };
 
 function clean(value: unknown): string {
@@ -97,6 +109,62 @@ function toNumber(value: unknown): number {
 
 function roundOne(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+function resolveReportLanguage(value: unknown): ReportLanguage {
+  const rawLocale = clean(value).replace(/_/g, "-");
+
+  if (!rawLocale) {
+    return "en";
+  }
+
+  try {
+    return new Intl.Locale(rawLocale).baseName.toLowerCase();
+  } catch {
+    console.warn("[MONTHLY_REPORT][INVALID_LANGUAGE]", {
+      receivedLanguage: rawLocale,
+    });
+
+    return "en";
+  }
+}
+
+function ensureStringArray(
+  value: unknown,
+  maxItems: number
+): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => clean(item))
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+function buildMonthlySummaryFingerprint(
+  summary: MonthlySummary
+): string {
+  const payload = {
+    month: summary.month,
+    totalMessages: summary.totalMessages,
+    uniqueCustomers: summary.uniqueCustomers,
+    estimatedTimeSavedMinutes:
+      summary.estimatedTimeSavedMinutes,
+    estimatedTimeSavedHours:
+      summary.estimatedTimeSavedHours,
+    conversationsByChannel:
+      summary.conversationsByChannel,
+    voice: summary.voice,
+    bookings: summary.bookings,
+    topIntentions: summary.topIntentions,
+    followUpNeeded: summary.followUpNeeded,
+  };
+
+  return createHash("sha256")
+    .update(JSON.stringify(payload))
+    .digest("hex");
 }
 
 function calculateEstimatedTimeSavedMinutes(params: {
@@ -494,6 +562,318 @@ async function buildMonthlySummary(params: {
   };
 }
 
+async function getOrGenerateMonthlyAiAnalysis(params: {
+  tenantId: string;
+  tenantName: string;
+  summary: MonthlySummary;
+  language: ReportLanguage;
+  force?: boolean;
+}): Promise<MonthlyAiAnalysis> {
+  const {
+    tenantId,
+    tenantName,
+    summary,
+    language,
+    force = false,
+  } = params;
+
+  const fingerprint =
+    buildMonthlySummaryFingerprint(summary);
+
+  if (!force) {
+    const cachedResult = await pool.query(
+      `
+      SELECT
+        executive_summary,
+        insights,
+        recommendations,
+        generated_at
+      FROM monthly_report_ai_summaries
+      WHERE tenant_id = $1
+        AND report_month = $2
+        AND language = $3
+        AND data_fingerprint = $4
+      LIMIT 1
+      `,
+      [
+        tenantId,
+        summary.month,
+        language,
+        fingerprint,
+      ]
+    );
+
+    const cached = cachedResult.rows[0];
+
+    if (cached) {
+      return {
+        executiveSummary:
+          clean(cached.executive_summary),
+        insights: ensureStringArray(
+          cached.insights,
+          4
+        ),
+        recommendations: ensureStringArray(
+          cached.recommendations,
+          4
+        ),
+        generatedAt: cached.generated_at
+          ? new Date(cached.generated_at).toISOString()
+          : null,
+      };
+    }
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn(
+      "[MONTHLY_REPORT_AI][SKIPPED_NO_OPENAI_KEY]",
+      {
+        tenantId,
+        month: summary.month,
+      }
+    );
+
+    return {
+      executiveSummary: "",
+      insights: [],
+      recommendations: [],
+      generatedAt: null,
+    };
+  }
+
+  const reportData = {
+    language,
+    business: tenantName,
+    month: summary.month,
+
+    activity: {
+      totalMessages: summary.totalMessages,
+      uniqueCustomers: summary.uniqueCustomers,
+      conversationsByChannel:
+        summary.conversationsByChannel,
+    },
+
+    voice: {
+      calls: summary.voice.calls,
+      minutes: summary.voice.minutes,
+      afterHoursCalls:
+        summary.voice.afterHoursAvailable
+          ? summary.voice.afterHoursCalls
+          : null,
+      afterHoursDataAvailable:
+        summary.voice.afterHoursAvailable,
+      estimatedFromMessages:
+        summary.voice.estimatedFromMessages,
+    },
+
+    bookings: {
+      started: summary.bookings.started,
+      created:
+        summary.bookings.appointmentsCreated,
+      confirmed: summary.bookings.confirmed,
+      conversionRate:
+        summary.bookings.conversionRate,
+      startedEstimatedFromAppointments:
+        summary.bookings
+          .startedEstimatedFromAppointments,
+    },
+
+    productivity: {
+      estimatedTimeSavedMinutes:
+        summary.estimatedTimeSavedMinutes,
+      estimatedTimeSavedHours:
+        summary.estimatedTimeSavedHours,
+    },
+
+    topIntentions: summary.topIntentions,
+    capturedLeads: summary.followUpNeeded,
+  };
+
+  const { default: OpenAI } = await import("openai");
+
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    20_000
+  );
+
+  try {
+    const completion =
+      await openai.chat.completions.create(
+        {
+          model:
+            clean(
+              process.env
+                .OPENAI_REPORT_SUMMARY_MODEL
+            ) ||
+            clean(process.env.OPENAI_MODEL) ||
+            "gpt-4o-mini",
+
+          temperature: 0.1,
+          max_tokens: 700,
+
+          response_format: {
+            type: "json_object",
+          },
+
+          messages: [
+            {
+              role: "system",
+              content: [
+                "You are an operational analyst generating a monthly business report.",
+                `Write the entire response in the locale identified by this BCP 47 language tag: ${language}.`,
+                "Use that language naturally and professionally.",
+                "Do not translate business names, service names, channel names, or proper nouns unless required for grammatical clarity.",
+                "Analyze only the supplied JSON data.",
+                "Do not invent revenue, services, conversions, trends, preferences, outcomes, comparisons, or causal relationships absent from the data.",
+                "Do not claim a call produced a booking unless the supplied data proves it.",
+                "Do not present estimated values as confirmed facts.",
+                "If the amount of data is too low to support a reliable conclusion, state that clearly in the requested language.",
+                "Return valid JSON only.",
+                'Required format: {"executiveSummary":"...","insights":["..."],"recommendations":["..."]}.',
+                "executiveSummary must contain one professional paragraph of 80 to 140 words.",
+                "insights must contain between 2 and 4 concise observations supported by the supplied data.",
+                "recommendations must contain between 2 and 4 prudent and actionable suggestions.",
+                "Do not use Markdown inside any JSON value.",
+              ].join("\n"),
+            },
+            {
+              role: "user",
+              content: JSON.stringify(reportData),
+            },
+          ],
+        },
+        {
+          signal: controller.signal as any,
+        }
+      );
+
+    const rawContent = clean(
+      completion.choices[0]?.message?.content
+    );
+
+    if (!rawContent) {
+      throw new Error(
+        "EMPTY_MONTHLY_REPORT_AI_RESPONSE"
+      );
+    }
+
+    let parsed: any;
+
+    try {
+      parsed = JSON.parse(rawContent);
+    } catch {
+      throw new Error(
+        "INVALID_MONTHLY_REPORT_AI_JSON"
+      );
+    }
+
+    const executiveSummary = clean(
+      parsed?.executiveSummary
+    );
+
+    const insights = ensureStringArray(
+      parsed?.insights,
+      4
+    );
+
+    const recommendations = ensureStringArray(
+      parsed?.recommendations,
+      4
+    );
+
+    if (!executiveSummary) {
+      throw new Error(
+        "EMPTY_MONTHLY_REPORT_EXECUTIVE_SUMMARY"
+      );
+    }
+
+    const savedResult = await pool.query(
+      `
+      INSERT INTO monthly_report_ai_summaries (
+        tenant_id,
+        report_month,
+        language,
+        executive_summary,
+        insights,
+        recommendations,
+        data_fingerprint,
+        generated_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5::jsonb,
+        $6::jsonb,
+        $7,
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (
+        tenant_id,
+        report_month,
+        language
+      )
+      DO UPDATE SET
+        executive_summary =
+          EXCLUDED.executive_summary,
+        insights = EXCLUDED.insights,
+        recommendations =
+          EXCLUDED.recommendations,
+        data_fingerprint =
+          EXCLUDED.data_fingerprint,
+        generated_at = NOW(),
+        updated_at = NOW()
+      RETURNING generated_at
+      `,
+      [
+        tenantId,
+        summary.month,
+        language,
+        executiveSummary,
+        JSON.stringify(insights),
+        JSON.stringify(recommendations),
+        fingerprint,
+      ]
+    );
+
+    const generatedAt =
+      savedResult.rows[0]?.generated_at;
+
+    console.log(
+      "[MONTHLY_REPORT_AI][GENERATED]",
+      {
+        tenantId,
+        month: summary.month,
+        language,
+        insights: insights.length,
+        recommendations:
+          recommendations.length,
+        totalTokens:
+          completion.usage?.total_tokens || 0,
+      }
+    );
+
+    return {
+      executiveSummary,
+      insights,
+      recommendations,
+      generatedAt: generatedAt
+        ? new Date(generatedAt).toISOString()
+        : new Date().toISOString(),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function drawMetricCard(params: {
   doc: PDFKit.PDFDocument;
   x: number;
@@ -582,20 +962,167 @@ function drawChannelRow(params: {
     .fill("#4C1D95");
 }
 
+function ensurePdfSpace(
+  doc: PDFKit.PDFDocument,
+  requiredHeight: number,
+  margin = 40
+): void {
+  const pageBottom =
+    doc.page.height - margin;
+
+  if (doc.y + requiredHeight > pageBottom) {
+    doc.addPage();
+    doc.y = margin;
+  }
+}
+
+function drawAnalysisList(params: {
+  doc: PDFKit.PDFDocument;
+  title: string;
+  items: string[];
+  x: number;
+  y: number;
+  width: number;
+}) {
+  const {
+    doc,
+    title,
+    items,
+    x,
+    y,
+    width,
+  } = params;
+
+  doc
+    .fillColor("#111827")
+    .font("Helvetica-Bold")
+    .fontSize(15)
+    .text(title, x, y, {
+      width,
+    });
+
+  let currentY = y + 30;
+
+  if (items.length === 0) {
+    doc
+      .fillColor("#6B7280")
+      .font("Helvetica")
+      .fontSize(10)
+      .text(
+        "Not enough data was available for this section.",
+        x,
+        currentY,
+        {
+          width,
+          lineGap: 3,
+        }
+      );
+
+    return;
+  }
+
+  for (const item of items) {
+    const bulletHeight = doc.heightOfString(
+      item,
+      {
+        width: width - 28,
+        lineGap: 3,
+      }
+    );
+
+    ensurePdfSpace(
+      doc,
+      bulletHeight + 24
+    );
+
+    currentY = doc.y > currentY
+      ? doc.y
+      : currentY;
+
+    doc
+      .circle(x + 6, currentY + 6, 3)
+      .fill("#7E22CE");
+
+    doc
+      .fillColor("#374151")
+      .font("Helvetica")
+      .fontSize(10)
+      .text(
+        item,
+        x + 18,
+        currentY,
+        {
+          width: width - 28,
+          lineGap: 3,
+        }
+      );
+
+    currentY =
+      doc.y + 12;
+  }
+
+  doc.y = currentY;
+}
+
 function generateMonthlyReportPdf(params: {
   res: Response;
   summary: MonthlySummary;
   tenantName: string;
+  language: ReportLanguage;
 }) {
-  const { res, summary, tenantName } = params;
+  const {
+    res,
+    summary,
+    tenantName,
+    language,
+  } = params;
+
+  const t = createReportTranslator(language);
+
+  function formatLocalizedMonthLabel(month: string): string {
+    const [yearRaw, monthRaw] = month.split("-");
+    const year = Number(yearRaw);
+    const monthIndex = Number(monthRaw) - 1;
+    const date = new Date(year, monthIndex, 1);
+
+    try {
+      return date.toLocaleDateString(language || "en", {
+        month: "long",
+        year: "numeric",
+      });
+    } catch {
+      return date.toLocaleDateString("en", {
+        month: "long",
+        year: "numeric",
+      });
+    }
+  }
+
+  function formatLocalizedDateTime(value: string | null): string {
+    if (!value) {
+      return t("generatedAtUnavailable");
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return t("generatedAtUnavailable");
+    }
+
+    try {
+      return date.toLocaleString(language || "en");
+    } catch {
+      return date.toLocaleString("en");
+    }
+  }
 
   const doc = new PDFDocument({
     size: "LETTER",
     margin: 40,
     info: {
-      Title: `Aamy Monthly Report - ${summary.month}`,
+      Title: `${t("monthlyReport")} - ${summary.month}`,
       Author: "Aamy AI",
-      Subject: "Monthly performance report",
+      Subject: t("monthlyReport"),
     },
   });
 
@@ -613,7 +1140,7 @@ function generateMonthlyReportPdf(params: {
   const margin = 40;
   const contentWidth = pageWidth - margin * 2;
 
-  // Header background
+  // Header
   doc
     .roundedRect(margin, 34, contentWidth, 104, 18)
     .fill("#21002F");
@@ -626,34 +1153,44 @@ function generateMonthlyReportPdf(params: {
     fit: [62, 64],
     align: "center",
     valign: "center",
-    });
+  });
 
   doc
     .fillColor("#FFFFFF")
     .font("Helvetica-Bold")
     .fontSize(21)
-    .text("Monthly Report", margin + 108, 52, {
-        width: 250,
-        ellipsis: true,
+    .text(t("monthlyReport"), margin + 108, 52, {
+      width: 250,
+      ellipsis: true,
     });
 
   doc
     .fillColor("#D8B4FE")
     .font("Helvetica")
     .fontSize(11)
-    .text(tenantName || "Business report", margin + 108, 83, {
+    .text(
+      tenantName || t("businessReport"),
+      margin + 108,
+      83,
+      {
         width: 250,
         ellipsis: true,
-    });
+      }
+    );
 
   doc
     .fillColor("#E9D5FF")
     .font("Helvetica-Bold")
     .fontSize(13)
-    .text(formatMonthLabel(summary.month), margin + 108, 104, {
+    .text(
+      formatLocalizedMonthLabel(summary.month),
+      margin + 108,
+      104,
+      {
         width: 250,
         ellipsis: true,
-    });
+      }
+    );
 
   doc
     .roundedRect(pageWidth - 164, 58, 96, 34, 17)
@@ -680,20 +1217,20 @@ function generateMonthlyReportPdf(params: {
     y: y1,
     w: cardW,
     h: cardH,
-    title: "Total messages",
+    title: t("totalMessages"),
     value: String(summary.totalMessages),
-    subtitle: "Customer and assistant messages",
+    subtitle: t("totalMessagesSubtitle"),
   });
 
   drawMetricCard({
     doc,
-    x: margin + (cardW + gap),
+    x: margin + cardW + gap,
     y: y1,
     w: cardW,
     h: cardH,
-    title: "Unique customers",
+    title: t("uniqueCustomers"),
     value: String(summary.uniqueCustomers),
-    subtitle: "Unique contacts detected",
+    subtitle: t("uniqueCustomersSubtitle"),
   });
 
   drawMetricCard({
@@ -702,11 +1239,11 @@ function generateMonthlyReportPdf(params: {
     y: y1,
     w: cardW,
     h: cardH,
-    title: "Voice calls",
+    title: t("voiceCalls"),
     value: String(summary.voice.calls),
     subtitle: summary.voice.estimatedFromMessages
-      ? "Estimated from history"
-      : "Based on real call records",
+      ? t("estimatedFromHistory")
+      : t("basedOnRealCalls"),
   });
 
   drawMetricCard({
@@ -715,29 +1252,36 @@ function generateMonthlyReportPdf(params: {
     y: y1,
     w: cardW,
     h: cardH,
-    title: "Estimated time saved",
+    title: t("estimatedTimeSaved"),
     value: `${summary.estimatedTimeSavedMinutes} min`,
     subtitle:
       summary.estimatedTimeSavedHours >= 1
-        ? `${summary.estimatedTimeSavedHours} hours estimated`
-        : "Based on messages, calls, and bookings",
+        ? t("estimatedHours", {
+            hours: summary.estimatedTimeSavedHours,
+          })
+        : t("timeSavedSubtitle"),
   });
 
-  // Bookings section
+  // Bookings
   const y2 = 304;
 
   doc
     .roundedRect(margin, y2, contentWidth, 144, 18)
     .fillAndStroke("#FFFFFF", "#E5E7EB");
 
-  drawSectionTitle(doc, "Bookings", margin + 20, y2 + 20);
+  drawSectionTitle(
+    doc,
+    t("bookings"),
+    margin + 20,
+    y2 + 20
+  );
 
   doc
     .fillColor("#6B7280")
     .font("Helvetica")
     .fontSize(10)
     .text(
-      "Booking activity created by Aamy during this period.",
+      t("bookingsSubtitle"),
       margin + 20,
       y2 + 42
     );
@@ -750,13 +1294,21 @@ function generateMonthlyReportPdf(params: {
     .fillColor("#FFFFFF")
     .font("Helvetica-Bold")
     .fontSize(10)
-    .text(`${summary.bookings.conversionRate}% conversion`, pageWidth - 174, y2 + 27, {
-      width: 104,
-      align: "center",
-    });
+    .text(
+      t("conversion", {
+        rate: summary.bookings.conversionRate,
+      }),
+      pageWidth - 174,
+      y2 + 27,
+      {
+        width: 104,
+        align: "center",
+      }
+    );
 
   const bookingCardY = y2 + 70;
-  const bookingCardW = (contentWidth - 40 - gap * 2) / 3;
+  const bookingCardW =
+    (contentWidth - 40 - gap * 2) / 3;
 
   drawMetricCard({
     doc,
@@ -764,7 +1316,7 @@ function generateMonthlyReportPdf(params: {
     y: bookingCardY,
     w: bookingCardW,
     h: 58,
-    title: "Started",
+    title: t("started"),
     value: String(summary.bookings.started),
   });
 
@@ -774,8 +1326,10 @@ function generateMonthlyReportPdf(params: {
     y: bookingCardY,
     w: bookingCardW,
     h: 58,
-    title: "Created",
-    value: String(summary.bookings.appointmentsCreated),
+    title: t("created"),
+    value: String(
+      summary.bookings.appointmentsCreated
+    ),
   });
 
   drawMetricCard({
@@ -784,11 +1338,11 @@ function generateMonthlyReportPdf(params: {
     y: bookingCardY,
     w: bookingCardW,
     h: 58,
-    title: "Confirmed",
+    title: t("confirmed"),
     value: String(summary.bookings.confirmed),
   });
 
-  // Channels and followup
+  // Channels and captured leads
   const y3 = 478;
   const halfW = (contentWidth - 16) / 2;
 
@@ -796,16 +1350,30 @@ function generateMonthlyReportPdf(params: {
     .roundedRect(margin, y3, halfW, 188, 18)
     .fillAndStroke("#FFFFFF", "#E5E7EB");
 
-  drawSectionTitle(doc, "Conversations by channel", margin + 20, y3 + 20);
+  drawSectionTitle(
+    doc,
+    t("conversationsByChannel"),
+    margin + 20,
+    y3 + 20
+  );
 
-  const channels = Object.entries(summary.conversationsByChannel);
-  const maxChannelValue = Math.max(...channels.map(([, value]) => value), 0);
+  const channels = Object.entries(
+    summary.conversationsByChannel
+  );
+
+  const maxChannelValue = Math.max(
+    ...channels.map(([, value]) => value),
+    0
+  );
 
   let channelY = y3 + 52;
+
   for (const [channel, value] of channels) {
     drawChannelRow({
       doc,
-      label: channel.charAt(0).toUpperCase() + channel.slice(1),
+      label:
+        channel.charAt(0).toUpperCase() +
+        channel.slice(1),
       value,
       max: maxChannelValue,
       x: margin + 20,
@@ -822,14 +1390,19 @@ function generateMonthlyReportPdf(params: {
     .roundedRect(rightX, y3, halfW, 188, 18)
     .fillAndStroke("#FFFFFF", "#E5E7EB");
 
-  drawSectionTitle(doc, "Captured leads", rightX + 20, y3 + 20);
+  drawSectionTitle(
+    doc,
+    t("capturedLeads"),
+    rightX + 20,
+    y3 + 20
+  );
 
   doc
     .fillColor("#6B7280")
     .font("Helvetica")
     .fontSize(10)
     .text(
-      "New contacts identified by Aamy during this period.",
+      t("capturedLeadsSubtitle"),
       rightX + 20,
       y3 + 44,
       {
@@ -841,22 +1414,38 @@ function generateMonthlyReportPdf(params: {
     .fillColor("#111827")
     .font("Helvetica-Bold")
     .fontSize(42)
-    .text(String(summary.followUpNeeded), rightX + 20, y3 + 92, {
-      width: halfW - 40,
-      align: "center",
-    });
+    .text(
+      String(summary.followUpNeeded),
+      rightX + 20,
+      y3 + 92,
+      {
+        width: halfW - 40,
+        align: "center",
+      }
+    );
 
   doc
     .fillColor("#6B7280")
     .font("Helvetica")
     .fontSize(10)
-    .text("leads generated this month", rightX + 20, y3 + 138, {
-      width: halfW - 40,
-      align: "center",
-    });
+    .text(
+      t("leadsGenerated"),
+      rightX + 20,
+      y3 + 138,
+      {
+        width: halfW - 40,
+        align: "center",
+      }
+    );
 
   doc
-    .roundedRect(rightX + 28, y3 + 158, halfW - 56, 22, 11)
+    .roundedRect(
+      rightX + 28,
+      y3 + 158,
+      halfW - 56,
+      22,
+      11
+    )
     .fill("#F3F4F6");
 
   doc
@@ -865,8 +1454,10 @@ function generateMonthlyReportPdf(params: {
     .fontSize(9)
     .text(
       summary.voice.afterHoursAvailable
-        ? `After-hours calls: ${summary.voice.afterHoursCalls}`
-        : "After-hours calls: not available",
+        ? t("afterHoursCalls", {
+            calls: summary.voice.afterHoursCalls,
+          })
+        : t("afterHoursUnavailable"),
       rightX + 28,
       y3 + 165,
       {
@@ -875,7 +1466,7 @@ function generateMonthlyReportPdf(params: {
       }
     );
 
-  // Footer
+  // Footer página 1
   doc
     .moveTo(margin, 720)
     .lineTo(pageWidth - margin, 720)
@@ -887,7 +1478,7 @@ function generateMonthlyReportPdf(params: {
     .font("Helvetica")
     .fontSize(8)
     .text(
-      "Generated by Aamy AI. Metrics may vary depending on integrations, configuration, and available records.",
+      t("reportFooter"),
       margin,
       732,
       {
@@ -895,6 +1486,179 @@ function generateMonthlyReportPdf(params: {
         align: "center",
       }
     );
+
+  // Página 2: análisis inteligente
+  if (summary.aiAnalysis) {
+    doc.addPage();
+
+    const analysis = summary.aiAnalysis;
+    const analysisMargin = 40;
+    const analysisWidth =
+      doc.page.width - analysisMargin * 2;
+
+    doc
+      .roundedRect(
+        analysisMargin,
+        34,
+        analysisWidth,
+        82,
+        18
+      )
+      .fill("#21002F");
+
+    doc
+      .fillColor("#FFFFFF")
+      .font("Helvetica-Bold")
+      .fontSize(21)
+      .text(
+        t("intelligentAnalysis"),
+        analysisMargin + 22,
+        55,
+        {
+          width: analysisWidth - 44,
+        }
+      );
+
+    doc
+      .fillColor("#E9D5FF")
+      .font("Helvetica")
+      .fontSize(10)
+      .text(
+        `${tenantName || t(
+          "businessReport"
+        )} · ${formatLocalizedMonthLabel(
+          summary.month
+        )}`,
+        analysisMargin + 22,
+        86,
+        {
+          width: analysisWidth - 44,
+        }
+      );
+
+    const executiveY = 146;
+
+    const executiveSummaryText =
+      clean(analysis.executiveSummary) ||
+      t("insufficientData");
+
+    const executiveTextHeight =
+      doc.heightOfString(
+        executiveSummaryText,
+        {
+          width: analysisWidth - 40,
+          lineGap: 4,
+        }
+      );
+
+    const executiveBoxHeight = Math.max(
+      150,
+      executiveTextHeight + 82
+    );
+
+    doc
+      .roundedRect(
+        analysisMargin,
+        executiveY,
+        analysisWidth,
+        executiveBoxHeight,
+        18
+      )
+      .fillAndStroke("#FFFFFF", "#E5E7EB");
+
+    doc
+      .fillColor("#111827")
+      .font("Helvetica-Bold")
+      .fontSize(16)
+      .text(
+        t("executiveSummary"),
+        analysisMargin + 20,
+        executiveY + 20,
+        {
+          width: analysisWidth - 40,
+        }
+      );
+
+    doc
+      .fillColor("#374151")
+      .font("Helvetica")
+      .fontSize(10.5)
+      .text(
+        executiveSummaryText,
+        analysisMargin + 20,
+        executiveY + 52,
+        {
+          width: analysisWidth - 40,
+          lineGap: 4,
+        }
+      );
+
+    doc.y =
+      executiveY +
+      executiveBoxHeight +
+      28;
+
+    drawAnalysisList({
+      doc,
+      title: t("keyInsights"),
+      items:
+        analysis.insights.length > 0
+          ? analysis.insights
+          : [t("insufficientData")],
+      x: analysisMargin,
+      y: doc.y,
+      width: analysisWidth,
+    });
+
+    doc.y += 14;
+
+    drawAnalysisList({
+      doc,
+      title: t("recommendations"),
+      items:
+        analysis.recommendations.length > 0
+          ? analysis.recommendations
+          : [t("insufficientData")],
+      x: analysisMargin,
+      y: doc.y,
+      width: analysisWidth,
+    });
+
+    const generatedLabel =
+      formatLocalizedDateTime(
+        analysis.generatedAt
+      );
+
+    const footerY = doc.page.height - 54;
+
+    doc
+      .moveTo(
+        analysisMargin,
+        footerY - 12
+      )
+      .lineTo(
+        doc.page.width - analysisMargin,
+        footerY - 12
+      )
+      .strokeColor("#E5E7EB")
+      .stroke();
+
+    doc
+      .fillColor("#6B7280")
+      .font("Helvetica")
+      .fontSize(8)
+      .text(
+        t("analysisFooter", {
+          date: generatedLabel,
+        }),
+        analysisMargin,
+        footerY,
+        {
+          width: analysisWidth,
+          align: "center",
+        }
+      );
+  }
 
   doc.end();
 }
@@ -923,6 +1687,26 @@ router.get(
         tenantId,
         month,
       });
+
+      const tenantContext =
+        await getTenantReportContext(tenantId);
+
+      const language =
+        resolveReportLanguage(req.query.lang);
+
+      const aiAnalysis =
+        await getOrGenerateMonthlyAiAnalysis({
+          tenantId,
+          tenantName:
+            tenantContext.tenantName,
+          summary,
+          language,
+          force:
+            clean(req.query.regenerate) ===
+            "true",
+        });
+
+      summary.aiAnalysis = aiAnalysis;
 
       return res.json(summary);
     } catch (error) {
@@ -959,6 +1743,9 @@ router.get(
         month,
       });
 
+      const language =
+        resolveReportLanguage(req.query.lang);
+
       const tenantResult = await pool.query(
         `
         SELECT name
@@ -971,10 +1758,24 @@ router.get(
 
       const tenantName = clean(tenantResult.rows[0]?.name) || "Business";
 
+      const aiAnalysis =
+        await getOrGenerateMonthlyAiAnalysis({
+          tenantId,
+          tenantName,
+          summary,
+          language,
+          force:
+            clean(req.query.regenerate) ===
+            "true",
+        });
+
+      summary.aiAnalysis = aiAnalysis;
+
       generateMonthlyReportPdf({
         res,
         summary,
         tenantName,
+        language,
       });
     } catch (error) {
       console.error("❌ Error generando monthly summary PDF:", error);
