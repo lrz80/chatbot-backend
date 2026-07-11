@@ -3,6 +3,7 @@ import express from "express";
 import multer from "multer";
 import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
+import { generateContactSummary } from "../../lib/crm/generateContactSummary";
 
 const router = express.Router();
 
@@ -895,6 +896,79 @@ router.get("/crm/:id", authenticateUser, async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "INTERNAL_SERVER_ERROR",
+    });
+  }
+});
+
+/**
+ * POST /api/contactos/crm/:id/summary
+ * Genera o regenera el resumen inteligente del contacto.
+ */
+router.post("/crm/:id/summary", authenticateUser, async (req, res) => {
+  const tenantId = req.user?.tenant_id;
+  const contactId = Number.parseInt(String(req.params.id || ""), 10);
+
+  if (!tenantId) {
+    return res.status(401).json({
+      ok: false,
+      error: "TENANT_NOT_FOUND_IN_TOKEN",
+    });
+  }
+
+  if (!Number.isInteger(contactId) || contactId <= 0) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_CONTACT_ID",
+    });
+  }
+
+  const requestedLanguage =
+    String(req.body?.language || "")
+      .trim()
+      .toLowerCase()
+      .startsWith("en")
+      ? "en"
+      : "es";
+
+  try {
+    const result = await generateContactSummary({
+      tenantId,
+      contactId,
+      language: requestedLanguage,
+    });
+
+    return res.json({
+      ok: true,
+      summary: result.summary,
+      generatedAt: result.generatedAt,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "UNKNOWN_ERROR";
+
+    console.error("[POST /api/contactos/crm/:id/summary] Error:", {
+      tenantId,
+      contactId,
+      error: message,
+    });
+
+    if (message === "CONTACT_NOT_FOUND") {
+      return res.status(404).json({
+        ok: false,
+        error: "CONTACT_NOT_FOUND",
+      });
+    }
+
+    if (message === "OPENAI_API_KEY_NOT_CONFIGURED") {
+      return res.status(500).json({
+        ok: false,
+        error: "OPENAI_NOT_CONFIGURED",
+      });
+    }
+
+    return res.status(500).json({
+      ok: false,
+      error: "SUMMARY_GENERATION_FAILED",
     });
   }
 });
