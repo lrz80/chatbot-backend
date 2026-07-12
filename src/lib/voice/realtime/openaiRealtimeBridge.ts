@@ -577,12 +577,9 @@ export async function createOpenAiRealtimeBridge({
           tool_choice: "none",
 
           metadata: {
-            purpose:
-              "returning_customer_initial_greeting",
-            contact_id:
-              returningContact.contactId,
-            previous_service:
-              returningContact.lastService,
+            purpose: "returning_customer_initial_greeting",
+            contact_id: String(returningContact.contactId),
+            previous_service: String(returningContact.lastService),
           },
 
           instructions: [
