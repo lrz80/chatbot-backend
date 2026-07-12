@@ -45,7 +45,6 @@ import {
   recordVoiceCallStarted,
   recordVoiceCallEnded,
 } from "./voiceCallRecorder";
-import { resolveReturningCustomerDecision } from "../runtime/resolveReturningCustomerDecision";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -461,78 +460,29 @@ export async function createOpenAiRealtimeBridge({
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
 
     const context = await resolveInitialRealtimeSessionContext({
-    callSid,
-    didNumber,
-    callerPhone,
-    realtimeState,
-  });
-
-  if (!context.ok) {
-    console.warn("[VOICE_REALTIME][CONTEXT_BLOCKED]", {
       callSid,
       didNumber,
+      realtimeState,
     });
 
-    twilioSocket.close();
-    return;
-  }
+    if (!context.ok) {
+      console.warn("[VOICE_REALTIME][CONTEXT_BLOCKED]", {
+        callSid,
+        didNumber,
+      });
 
-  const storedContactLanguage = clean(
-    context.returningContact?.language
-  );
+      twilioSocket.close();
+      return;
+    }
 
-  currentLocale =
-    context.returningContact && storedContactLanguage
-      ? storedContactLanguage
-      : "en-US";
+    currentLocale = "en-US";
 
-  if (context.returningContact) {
-    realtimeState = {
-      ...realtimeState,
-      lang: currentLocale,
-
-      returningCustomer: true,
-      returningCustomerContactId:
-        context.returningContact.contactId,
-
-      returningCustomerName:
-        context.returningContact.name,
-
-      returningCustomerLocale:
-        currentLocale,
-
-      suggestedPreviousService:
-        context.returningContact.lastService,
-
-      awaitingRepeatServiceConfirmation:
-        true,
-    };
-  } else {
-    realtimeState = {
-      ...realtimeState,
-      lang: currentLocale,
-
-      returningCustomer: false,
-      returningCustomerContactId: null,
-      returningCustomerName: null,
-      returningCustomerLocale: null,
-      suggestedPreviousService: null,
-      awaitingRepeatServiceConfirmation:
-        false,
-    };
-  }
-
-  const sessionUpdatePayload =
-    buildRealtimeSessionUpdatePayload({
+    const sessionUpdatePayload = buildRealtimeSessionUpdatePayload({
       businessName: context.brand,
-      businessInfo:
-        context.tenant.info_clave || "",
-      systemPrompt:
-        context.cfg.system_prompt || "",
+      businessInfo: context.tenant.info_clave || "",
+      systemPrompt: context.cfg.system_prompt || "",
       locale: currentLocale,
       model,
-      canSendUsefulLinkSms:
-        context.canSendUsefulLinkSms,
     });
 
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
@@ -543,164 +493,68 @@ export async function createOpenAiRealtimeBridge({
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
     if (twilioSocket.readyState !== WebSocket.OPEN) return;
 
-    const configuredWelcomeMessage =
-      resolveConfiguredWelcomeMessage({
-        cfg: context.cfg || {},
-        tenant: context.tenant || {},
-      });
+    const configuredWelcomeMessage = resolveConfiguredWelcomeMessage({
+      cfg: context.cfg || {},
+      tenant: context.tenant || {},
+    });
 
-    const returningContact =
-      context.returningContact;
+    const fallbackGreetingText = buildInitialGreetingFromConfiguredWelcome({
+      configuredWelcome: "",
+      brand: context.brand,
+      locale: currentLocale,
+    });
 
-    if (returningContact) {
-      console.log(
-        "[VOICE_REALTIME][RETURNING_CUSTOMER_GREETING_SELECTED]",
-        {
-          callSid,
-          tenantId: context.tenantId,
-          brand: context.brand,
-          contactId: returningContact.contactId,
-          customerName: returningContact.name,
-          previousService:
-            returningContact.lastService,
-          reservations:
-            returningContact.reservations,
-          language:
-            returningContact.language,
-          locale: currentLocale,
-        }
-      );
+    const initialGreetingText =
+      clean(configuredWelcomeMessage) || clean(fallbackGreetingText);
 
-      requestRealtimeResponse(
-        {
-          conversation: "none",
-          tool_choice: "none",
+    console.log("[VOICE_REALTIME][INITIAL_GREETING_SELECTED]", {
+      callSid,
+      tenantId: context.tenantId,
+      brand: context.brand,
+      configuredWelcomeLength: configuredWelcomeMessage.length,
+      initialGreetingLength: initialGreetingText.length,
+      hasSpanishLine:
+        initialGreetingText.toLowerCase().includes("español") ||
+        initialGreetingText.toLowerCase().includes("espanol"),
+    });
 
-          metadata: {
-            purpose: "returning_customer_initial_greeting",
-            contact_id: String(returningContact.contactId),
-            previous_service: String(returningContact.lastService),
-          },
-
-          instructions: [
-            "You are producing the first spoken greeting for a live phone call.",
-            `The caller's stored language is: ${currentLocale}.`,
-            "Speak the entire greeting naturally in that stored language.",
-            "Do not default to English when a stored language is provided.",
-            "Do not switch languages during the greeting.",
-            "",
-            "Address the caller by the provided first name or customer name.",
-            "Welcome the caller back briefly.",
-            "Mention the exact previous service provided in the input.",
-            "Ask whether the caller would like to book that same service again.",
-            "",
-            "Use no more than two short sentences.",
-            "Do not mention CRM, records, databases, history systems, or stored data.",
-            "Do not say that a booking has already started.",
-            "Do not ask for a date, time, phone number, staff member, or any other booking field.",
-            "Do not change or translate the business name.",
-            "Do not invent details.",
-            "Ask only the single question about repeating the previous service.",
-          ].join("\n"),
-
-          input: [
-            {
-              type: "message",
-              role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: JSON.stringify({
-                    businessName:
-                      context.brand,
-                    customerName:
-                      returningContact.name,
-                    previousService:
-                      returningContact.lastService,
-                    locale:
-                      currentLocale,
-                  }),
-                },
-              ],
-            },
-          ],
+    requestRealtimeResponse(
+      {
+        conversation: "none",
+        tool_choice: "none",
+        metadata: {
+          purpose: "initial_greeting",
+          expected_prompt: initialGreetingText,
         },
-        "bridge:returning_customer_greeting"
-      );
-    } else {
-      const fallbackGreetingText =
-        buildInitialGreetingFromConfiguredWelcome({
-          configuredWelcome: "",
-          brand: context.brand,
-          locale: currentLocale,
-        });
-
-      const initialGreetingText =
-        clean(configuredWelcomeMessage) ||
-        clean(fallbackGreetingText);
-
-      console.log(
-        "[VOICE_REALTIME][INITIAL_GREETING_SELECTED]",
-        {
-          callSid,
-          tenantId: context.tenantId,
-          brand: context.brand,
-          configuredWelcomeLength:
-            configuredWelcomeMessage.length,
-          initialGreetingLength:
-            initialGreetingText.length,
-          hasSpanishLine:
-            initialGreetingText
-              .toLowerCase()
-              .includes("español") ||
-            initialGreetingText
-              .toLowerCase()
-              .includes("espanol"),
-        }
-      );
-
-      requestRealtimeResponse(
-        {
-          conversation: "none",
-          tool_choice: "none",
-
-          metadata: {
-            purpose: "initial_greeting",
-            expected_prompt:
-              initialGreetingText,
+        instructions: [
+          "You are a speech renderer for a live phone call.",
+          "Speak exactly the greeting provided in the input.",
+          "Do not use conversation history.",
+          "Do not reason.",
+          "Do not translate.",
+          "Do not summarize.",
+          "Do not add words.",
+          "Do not remove words.",
+        ].join("\n"),
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "Speak exactly this greeting and nothing else:",
+                  "",
+                  initialGreetingText,
+                ].join("\n"),
+              },
+            ],
           },
-
-          instructions: [
-            "You are a speech renderer for a live phone call.",
-            "Speak exactly the greeting provided in the input.",
-            "Do not use conversation history.",
-            "Do not reason.",
-            "Do not translate.",
-            "Do not summarize.",
-            "Do not add words.",
-            "Do not remove words.",
-          ].join("\n"),
-
-          input: [
-            {
-              type: "message",
-              role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: [
-                    "Speak exactly this greeting and nothing else:",
-                    "",
-                    initialGreetingText,
-                  ].join("\n"),
-                },
-              ],
-            },
-          ],
-        },
-        "bridge:initial_greeting"
-      );
-    }
+        ],
+      },
+      "bridge:initial_greeting"
+    );
 
     tenantId = context.tenantId;
     realtimeTenant = context.tenant;
@@ -1069,7 +923,7 @@ export async function createOpenAiRealtimeBridge({
         lastAssistantTranscript,
         minMsAfterAssistantAudio: isBargeInTranscript ? 0 : 800,
       })
-        .then(async (transcriptResult) => {
+        .then((transcriptResult) => {
           if (!transcriptResult.consumed) {
             return;
           }
@@ -1106,134 +960,6 @@ export async function createOpenAiRealtimeBridge({
           realtimeCfg = transcriptResult.realtimeCfg;
           localeLocked = transcriptResult.localeLocked;
           tenantId = transcriptResult.tenantId;
-
-          const awaitingRepeatServiceConfirmation =
-            realtimeState
-              .awaitingRepeatServiceConfirmation ===
-            true;
-
-          const suggestedPreviousService = clean(
-            realtimeState
-              .suggestedPreviousService
-          );
-
-          const hasPendingBookingStepBeforeReturningDecision =
-            Boolean(
-              clean(
-                realtimeState
-                  .pendingBookingStepKey
-              )
-            );
-
-          if (
-            awaitingRepeatServiceConfirmation &&
-            suggestedPreviousService &&
-            !hasPendingBookingStepBeforeReturningDecision &&
-            !bookingFlowLoaded
-          ) {
-            const returningDecision =
-              await resolveReturningCustomerDecision(
-                {
-                  transcript:
-                    lastUserTranscript,
-                  previousService:
-                    suggestedPreviousService,
-                  locale:
-                    realtimeState
-                      .returningCustomerLocale ||
-                    currentLocale,
-                }
-              );
-
-            console.log(
-              "[VOICE_REALTIME][RETURNING_CUSTOMER_DECISION]",
-              {
-                callSid,
-                tenantId,
-                decision:
-                  returningDecision,
-                customerName:
-                  realtimeState
-                    .returningCustomerName ||
-                  null,
-                suggestedPreviousService,
-                transcript:
-                  lastUserTranscript,
-                transcriptSeq:
-                  lastUserTranscriptSeq,
-              }
-            );
-
-            if (
-              returningDecision ===
-              "repeat_previous_service"
-            ) {
-              realtimeState = {
-                ...realtimeState,
-                awaitingRepeatServiceConfirmation:
-                  false,
-              };
-
-              /**
-               * No cargamos bookingData manualmente.
-               *
-               * Este submit sintético entra con bookingFlowLoaded=false,
-               * por lo que realtimeToolCallHandler reutiliza:
-               *
-               * bootstrapSubmitBookingStepAfterFlowLoad(...)
-               *
-               * Ese flujo:
-               * 1. carga get_booking_flow;
-               * 2. encuentra el step service;
-               * 3. valida el servicio anterior;
-               * 4. avanza al siguiente step.
-               */
-              toolCallQueue
-                .enqueueSubmitBookingStepFromTranscript({
-                  stepKey: "service",
-                  value:
-                    suggestedPreviousService,
-                  source:
-                    "returning_customer_repeat_previous_service",
-                });
-
-              return;
-            }
-
-            if (
-              returningDecision ===
-              "start_new_booking"
-            ) {
-              realtimeState = {
-                ...realtimeState,
-                awaitingRepeatServiceConfirmation:
-                  false,
-                suggestedPreviousService:
-                  null,
-              };
-
-              toolCallQueue
-                .enqueueGetBookingFlowFromTranscript({
-                  source:
-                    "returning_customer_start_new_booking",
-                });
-
-              return;
-            }
-
-            /**
-             * No hubo intención clara de reservar.
-             * Se limpia únicamente la pregunta especial y la conversación
-             * continúa por la ruta libre normal.
-             */
-            realtimeState = {
-              ...realtimeState,
-              awaitingRepeatServiceConfirmation:
-                false,
-              suggestedPreviousService:
-                null,
-            };
-          }
 
           bookingCoordinator.nudgeBookingStepProcessingAfterTranscript();
 
