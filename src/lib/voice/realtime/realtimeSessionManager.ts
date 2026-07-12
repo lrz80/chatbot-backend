@@ -5,6 +5,10 @@ import { buildOpenAiRealtimeSessionUpdate } from "./buildOpenAiRealtimeSessionUp
 import { resolveVoiceRequestContext } from "../runtime/resolveVoiceRequestContext";
 import { tenantHasUsefulLinks } from "../runtime/sendUsefulLinkSms";
 import type { CallState, VoiceLocale } from "../types";
+import {
+  resolveReturningCallerContext,
+  type ReturningCallerContext,
+} from "../runtime/resolveReturningCallerContext";
 
 export type RefreshRealtimeVoiceContextResult = {
   tenantId: string | null;
@@ -285,6 +289,7 @@ export async function refreshRealtimeVoiceContext(params: {
 export async function resolveInitialRealtimeSessionContext(params: {
   callSid: string | null;
   didNumber: string | null;
+  callerPhone: string | null;
   realtimeState: CallState;
 }): Promise<
   | {
@@ -294,6 +299,7 @@ export async function resolveInitialRealtimeSessionContext(params: {
       cfg: any;
       brand: string;
       canSendUsefulLinkSms: boolean;
+      returningContact: ReturningCallerContext | null;
     }
   | {
       ok: false;
@@ -324,6 +330,12 @@ export async function resolveInitialRealtimeSessionContext(params: {
       tenant,
     }) || (await tenantHasUsefulLinks(tenant.id));
 
+  const returningContact =
+    await resolveReturningCallerContext({
+      tenantId: tenant.id,
+      callerPhone: params.callerPhone,
+    });
+
   return {
     ok: true,
     tenantId: tenant.id,
@@ -331,6 +343,7 @@ export async function resolveInitialRealtimeSessionContext(params: {
     cfg,
     brand: context.brand || tenant.name || "the business",
     canSendUsefulLinkSms,
+    returningContact,
   };
 }
 

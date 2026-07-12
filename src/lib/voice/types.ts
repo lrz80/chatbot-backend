@@ -46,6 +46,23 @@ export type CallState = {
   bookingLanguageLocked?: boolean;
   bookingLockedLocale?: VoiceLocale | null;
   bookingLockedLanguageSample?: string | null;
+
+  /**
+   * Contexto del CRM para una llamada de un cliente recurrente.
+   * Estos datos pertenecen exclusivamente a la llamada actual.
+   */
+  returningCustomer?: boolean;
+  returningCustomerContactId?: number | null;
+  returningCustomerName?: string | null;
+  returningCustomerLocale?: VoiceLocale | null;
+
+  /**
+   * Servicio de la última reserva válida.
+   * Es una sugerencia; no se considera confirmado hasta que
+   * el cliente acepte repetirlo.
+   */
+  suggestedPreviousService?: string | null;
+  awaitingRepeatServiceConfirmation?: boolean;
 };
 
 export type PhoneResolutionResult =
