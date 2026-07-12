@@ -934,7 +934,6 @@ export async function createOpenAiRealtimeBridge({
       });
 
       if (
-        !i18nBookingPromptsEnabled &&
         shouldEnforceExactPrompt &&
         !compatible
       ) {
@@ -1373,7 +1372,7 @@ export async function createOpenAiRealtimeBridge({
         lastUserTranscriptSeq,
       });
 
-      if (!i18nBookingPromptsEnabled && isCancelledExactPromptResponse) {
+      if (isCancelledExactPromptResponse) {
         responseController.markResponseDone({
           lastUserTranscriptSeq,
         });
