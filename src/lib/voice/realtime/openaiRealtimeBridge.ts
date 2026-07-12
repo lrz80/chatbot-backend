@@ -46,7 +46,6 @@ import {
   recordVoiceCallEnded,
 } from "./voiceCallRecorder";
 import {
-  buildReturningCustomerBookingSeed,
   buildReturningCustomerGreetingInput,
   resolveReturningCustomer,
 } from "../returningCustomer";
@@ -172,9 +171,6 @@ export async function createOpenAiRealtimeBridge({
   let realtimeTenant: any = null;
   let realtimeCfg: any = null;
   let realtimeState: CallState = {};
-
-  let returningCustomerBookingSeed: Record<string, string> | null = null;
-
   let lastUserTranscript = "";
   let lastUserDigits = "";
   let lastUserTranscriptSeq = 0;
@@ -259,19 +255,7 @@ export async function createOpenAiRealtimeBridge({
     getDidNumber: () => didNumber,
     getRealtimeTenant: () => realtimeTenant,
     getRealtimeCfg: () => realtimeCfg,
-    getRealtimeState: () => {
-      if (!returningCustomerBookingSeed) {
-        return realtimeState;
-      }
-
-      return {
-        ...realtimeState,
-        bookingData: {
-          ...(realtimeState.bookingData || {}),
-          ...returningCustomerBookingSeed,
-        },
-      };
-    },
+    getRealtimeState: () => realtimeState,
     getCurrentLocale: () => currentLocale,
     getBookingFlowLoaded: () => bookingFlowLoaded,
     getCallEnding: () => callEnding,
@@ -724,27 +708,6 @@ export async function createOpenAiRealtimeBridge({
     tenantId = context.tenantId;
     realtimeTenant = context.tenant;
     realtimeCfg = context.cfg || {};
-
-    returningCustomerBookingSeed =
-      returningCustomer
-        ? buildReturningCustomerBookingSeed(
-            returningCustomer
-          )
-        : null;
-
-    console.log(
-      "[VOICE_REALTIME][RETURNING_CUSTOMER_BOOKING_SEED_READY]",
-      {
-        callSid,
-        tenantId: context.tenantId,
-        attached: Boolean(returningCustomerBookingSeed),
-        customerName:
-          returningCustomerBookingSeed?.customer_name || null,
-        hasCustomerPhone: Boolean(
-          returningCustomerBookingSeed?.customer_phone
-        ),
-      }
-    );
 
     realtimeState = {
       ...realtimeState,
@@ -1706,7 +1669,6 @@ export async function createOpenAiRealtimeBridge({
       realtimeState = {};
       realtimeTenant = null;
       realtimeCfg = null;
-      returningCustomerBookingSeed = null;
       lastUserTranscript = "";
       lastUserDigits = "";
       lastUserTranscriptSeq = 0;
