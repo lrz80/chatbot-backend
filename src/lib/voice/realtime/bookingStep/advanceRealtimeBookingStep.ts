@@ -59,6 +59,129 @@ export type AdvanceRealtimeBookingStepResult =
       retry_prompt_error: string;
     };
 
+function normalizeKey(value: unknown): string {
+  return clean(value).toLowerCase();
+}
+
+function hasVerifiedReturningCustomerName(
+  state: CallState
+): boolean {
+  if (state.returningCustomer !== true) {
+    return false;
+  }
+
+  const crmName = clean(state.returningCustomerName);
+  const bookingName = clean(
+    state.bookingData?.customer_name
+  );
+
+  return Boolean(
+    crmName &&
+    bookingName &&
+    crmName === bookingName
+  );
+}
+
+function hasVerifiedReturningCustomerPhone(
+  state: CallState
+): boolean {
+  if (state.returningCustomer !== true) {
+    return false;
+  }
+
+  const crmPhone = clean(state.returningCustomerPhone);
+  const bookingPhone = clean(
+    state.bookingData?.customer_phone
+  );
+
+  return Boolean(
+    crmPhone &&
+    bookingPhone &&
+    crmPhone === bookingPhone
+  );
+}
+
+function canSkipVerifiedReturningCustomerStep(params: {
+  step: BookingFlowStepLike;
+  state: CallState;
+}): boolean {
+  const stepKey = normalizeKey(
+    params.step.step_key
+  );
+
+  const validationConfig =
+    params.step.validation_config &&
+    typeof params.step.validation_config === "object"
+      ? params.step.validation_config
+      : null;
+
+  const slot = normalizeKey(
+    validationConfig?.slot || stepKey
+  );
+
+  if (
+    stepKey === "customer_name" ||
+    slot === "customer_name"
+  ) {
+    return hasVerifiedReturningCustomerName(
+      params.state
+    );
+  }
+
+  if (
+    stepKey === "customer_phone" ||
+    slot === "customer_phone"
+  ) {
+    return hasVerifiedReturningCustomerPhone(
+      params.state
+    );
+  }
+
+  return false;
+}
+
+function resolveNextBookingStepIndex(params: {
+  steps: BookingFlowStepLike[];
+  currentIndex: number;
+  state: CallState;
+}): {
+  nextIndex: number | null;
+  skippedStepKeys: string[];
+} {
+  const skippedStepKeys: string[] = [];
+
+  for (
+    let index = params.currentIndex + 1;
+    index < params.steps.length;
+    index += 1
+  ) {
+    const step = params.steps[index];
+
+    if (
+      canSkipVerifiedReturningCustomerStep({
+        step,
+        state: params.state,
+      })
+    ) {
+      skippedStepKeys.push(
+        clean(step.step_key)
+      );
+
+      continue;
+    }
+
+    return {
+      nextIndex: index,
+      skippedStepKeys,
+    };
+  }
+
+  return {
+    nextIndex: null,
+    skippedStepKeys,
+  };
+}
+
 export async function advanceRealtimeBookingStep(
   params: AdvanceRealtimeBookingStepParams
 ): Promise<AdvanceRealtimeBookingStepResult> {
@@ -74,7 +197,26 @@ export async function advanceRealtimeBookingStep(
     persistVoiceState,
   } = params;
 
-  const nextIndex = currentIndex + 1 < steps.length ? currentIndex + 1 : null;
+  const {
+    nextIndex,
+    skippedStepKeys,
+  } = resolveNextBookingStepIndex({
+    steps,
+    currentIndex,
+    state: workingState,
+  });
+
+  if (skippedStepKeys.length > 0) {
+    console.log(
+      "[VOICE_REALTIME][RETURNING_CUSTOMER_IDENTITY_STEPS_SKIPPED]",
+      {
+        callSid,
+        skippedStepKeys,
+        returningCustomerContactId:
+          workingState.returningCustomerContactId ?? null,
+      }
+    );
+  }
 
   const advancedState: CallState = {
     ...workingState,

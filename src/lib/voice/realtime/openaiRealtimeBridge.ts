@@ -712,7 +712,50 @@ export async function createOpenAiRealtimeBridge({
     realtimeState = {
       ...realtimeState,
       lang: currentLocale,
+
+      returningCustomer: Boolean(returningCustomer),
+
+      returningCustomerContactId:
+        returningCustomer?.contactId ?? null,
+
+      returningCustomerName:
+        clean(returningCustomer?.fullName) || null,
+
+      returningCustomerFirstName:
+        clean(returningCustomer?.firstName) || null,
+
+      returningCustomerPhone:
+        clean(returningCustomer?.phone) || null,
+
+      returningCustomerLocale:
+        clean(returningCustomer?.language) || null,
+
+      bookingData: returningCustomer
+        ? {
+            ...(realtimeState.bookingData || {}),
+            customer_name: clean(returningCustomer.fullName),
+            customer_phone: clean(returningCustomer.phone),
+          }
+        : {
+            ...(realtimeState.bookingData || {}),
+          },
     };
+
+    console.log(
+      "[VOICE_REALTIME][RETURNING_CUSTOMER_RUNTIME_ATTACHED]",
+      {
+        callSid,
+        tenantId: context.tenantId,
+        returningCustomer:
+          realtimeState.returningCustomer === true,
+        contactId:
+          realtimeState.returningCustomerContactId ?? null,
+        customerName:
+          realtimeState.returningCustomerName ?? null,
+        hasCustomerPhone:
+          Boolean(realtimeState.returningCustomerPhone),
+      }
+    );
 
     void recordVoiceCallStarted({
       tenantId,

@@ -95,6 +95,36 @@ export function mergeTranscriptStatePreservingBookingRuntime(params: {
       ? currentToolState.bookingData
       : transcriptState.bookingData,
 
+    returningCustomer: pickDefined(
+      currentToolState.returningCustomer,
+      transcriptState.returningCustomer
+    ),
+
+    returningCustomerContactId: pickDefined(
+      currentToolState.returningCustomerContactId,
+      transcriptState.returningCustomerContactId
+    ),
+
+    returningCustomerName: pickDefined(
+      currentToolState.returningCustomerName,
+      transcriptState.returningCustomerName
+    ),
+
+    returningCustomerFirstName: pickDefined(
+      currentToolState.returningCustomerFirstName,
+      transcriptState.returningCustomerFirstName
+    ),
+
+    returningCustomerPhone: pickDefined(
+      currentToolState.returningCustomerPhone,
+      transcriptState.returningCustomerPhone
+    ),
+
+    returningCustomerLocale: pickDefined(
+      currentToolState.returningCustomerLocale,
+      transcriptState.returningCustomerLocale
+    ),
+
     bookingTurnStatus: pickDefined(
       (currentToolState as any).bookingTurnStatus,
       (transcriptState as any).bookingTurnStatus
