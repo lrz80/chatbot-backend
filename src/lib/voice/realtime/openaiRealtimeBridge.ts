@@ -46,6 +46,7 @@ import {
   recordVoiceCallEnded,
 } from "./voiceCallRecorder";
 import {
+  buildReturningCustomerBookingSeed,
   buildReturningCustomerGreetingInput,
   resolveReturningCustomer,
 } from "../returningCustomer";
@@ -709,9 +710,25 @@ export async function createOpenAiRealtimeBridge({
     realtimeTenant = context.tenant;
     realtimeCfg = context.cfg || {};
 
+    const returningCustomerBookingSeed =
+      returningCustomer
+        ? buildReturningCustomerBookingSeed(
+            returningCustomer
+          )
+        : null;
+
     realtimeState = {
       ...realtimeState,
       lang: currentLocale,
+
+      bookingData: returningCustomerBookingSeed
+        ? {
+            ...(realtimeState.bookingData || {}),
+            ...returningCustomerBookingSeed,
+          }
+        : {
+            ...(realtimeState.bookingData || {}),
+          },
     };
 
     void recordVoiceCallStarted({
