@@ -579,10 +579,13 @@ export async function createOpenAiRealtimeBridge({
 
             `Address the caller using only this first name: ${greetingInput.firstName}.`,
             "Do not say the caller's last name.",
-            "Welcome the caller back.",
-            "Ask how you can help today.",
+            "Sound warm, familiar, and conversational, like a helpful receptionist who recognizes a returning customer.",
+            "Do not sound formal, scripted, robotic, or overly enthusiastic.",
+            "Naturally acknowledge that it is good to speak with the caller again.",
+            "Use a conversational transition such as the equivalent of 'Cuéntame' or 'Dime' in the caller's stored language.",
+            "Ask naturally what the caller would like help with today.",
 
-            "Use no more than two short natural sentences.",
+            "Use no more than two short conversational sentences.",
             "Do not mention CRM, records, call history, reservations, appointments, or previous services.",
             "Do not start a booking.",
             "Do not ask for the caller's name, phone number, service, date, or time.",
