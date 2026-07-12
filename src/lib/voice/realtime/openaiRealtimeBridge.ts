@@ -45,6 +45,10 @@ import {
   recordVoiceCallStarted,
   recordVoiceCallEnded,
 } from "./voiceCallRecorder";
+import {
+  buildReturningCustomerGreetingInput,
+  resolveReturningCustomer,
+} from "../returningCustomer";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -459,6 +463,10 @@ export async function createOpenAiRealtimeBridge({
     if (!didNumber) return;
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
 
+    /**
+     * Primero resolvemos el tenant con la infraestructura existente.
+     * No cambiamos realtimeSessionManager ni el booking.
+     */
     const context = await resolveInitialRealtimeSessionContext({
       callSid,
       didNumber,
@@ -475,15 +483,42 @@ export async function createOpenAiRealtimeBridge({
       return;
     }
 
-    currentLocale = "en-US";
+    /**
+     * Módulo independiente de clientes recurrentes.
+     *
+     * Una falla, contacto inexistente o datos incompletos nunca bloquean
+     * la llamada: simplemente se utiliza la bienvenida normal.
+     */
+    const returningCustomerResult =
+      await resolveReturningCustomer({
+        tenantId: context.tenantId,
+        callerPhone,
+      });
 
-    const sessionUpdatePayload = buildRealtimeSessionUpdatePayload({
-      businessName: context.brand,
-      businessInfo: context.tenant.info_clave || "",
-      systemPrompt: context.cfg.system_prompt || "",
-      locale: currentLocale,
-      model,
-    });
+    const returningCustomer =
+      returningCustomerResult.isReturningCustomer
+        ? returningCustomerResult
+        : null;
+
+    /**
+     * Un cliente recurrente comienza en el idioma guardado en su contacto.
+     * No existe una lista fija de idiomas.
+     *
+     * Un cliente no recurrente conserva el comportamiento anterior.
+     */
+    currentLocale =
+      clean(returningCustomer?.language) || "en-US";
+
+    const sessionUpdatePayload =
+      buildRealtimeSessionUpdatePayload({
+        businessName: context.brand,
+        businessInfo:
+          context.tenant.info_clave || "",
+        systemPrompt:
+          context.cfg.system_prompt || "",
+        locale: currentLocale,
+        model,
+      });
 
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
     if (twilioSocket.readyState !== WebSocket.OPEN) return;
@@ -493,72 +528,187 @@ export async function createOpenAiRealtimeBridge({
     if (openAiSocket.readyState !== WebSocket.OPEN) return;
     if (twilioSocket.readyState !== WebSocket.OPEN) return;
 
-    const configuredWelcomeMessage = resolveConfiguredWelcomeMessage({
-      cfg: context.cfg || {},
-      tenant: context.tenant || {},
-    });
+    if (returningCustomer) {
+      const greetingInput =
+        buildReturningCustomerGreetingInput({
+          customer: returningCustomer,
+          businessName: context.brand,
+        });
 
-    const fallbackGreetingText = buildInitialGreetingFromConfiguredWelcome({
-      configuredWelcome: "",
-      brand: context.brand,
-      locale: currentLocale,
-    });
+      console.log(
+        "[VOICE_REALTIME][RETURNING_CUSTOMER_GREETING_SELECTED]",
+        {
+          callSid,
+          tenantId: context.tenantId,
+          contactId:
+            returningCustomer.contactId,
+          firstName:
+            returningCustomer.firstName,
+          fullName:
+            returningCustomer.fullName,
+          language:
+            returningCustomer.language,
+          reservations:
+            returningCustomer.reservations,
+        }
+      );
 
-    const initialGreetingText =
-      clean(configuredWelcomeMessage) || clean(fallbackGreetingText);
+      requestRealtimeResponse(
+        {
+          conversation: "none",
+          tool_choice: "none",
 
-    console.log("[VOICE_REALTIME][INITIAL_GREETING_SELECTED]", {
-      callSid,
-      tenantId: context.tenantId,
-      brand: context.brand,
-      configuredWelcomeLength: configuredWelcomeMessage.length,
-      initialGreetingLength: initialGreetingText.length,
-      hasSpanishLine:
-        initialGreetingText.toLowerCase().includes("español") ||
-        initialGreetingText.toLowerCase().includes("espanol"),
-    });
-
-    requestRealtimeResponse(
-      {
-        conversation: "none",
-        tool_choice: "none",
-        metadata: {
-          purpose: "initial_greeting",
-          expected_prompt: initialGreetingText,
-        },
-        instructions: [
-          "You are a speech renderer for a live phone call.",
-          "Speak exactly the greeting provided in the input.",
-          "Do not use conversation history.",
-          "Do not reason.",
-          "Do not translate.",
-          "Do not summarize.",
-          "Do not add words.",
-          "Do not remove words.",
-        ].join("\n"),
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: [
-                  "Speak exactly this greeting and nothing else:",
-                  "",
-                  initialGreetingText,
-                ].join("\n"),
-              },
-            ],
+          metadata: {
+            purpose:
+              "returning_customer_initial_greeting",
+            contact_id: String(
+              returningCustomer.contactId
+            ),
+            language: String(
+              returningCustomer.language
+            ),
           },
-        ],
-      },
-      "bridge:initial_greeting"
-    );
 
+          instructions: [
+            "You are producing the first spoken greeting for a live business phone call.",
+
+            `The caller's stored language is: ${greetingInput.language}.`,
+            "Speak the entire greeting naturally in that language.",
+            "Do not default to English when a stored language is provided.",
+            "Do not switch languages during the greeting.",
+
+            `Address the caller using only this first name: ${greetingInput.firstName}.`,
+            "Do not say the caller's last name.",
+            "Welcome the caller back.",
+            "Ask how you can help today.",
+
+            "Use no more than two short natural sentences.",
+            "Do not mention CRM, records, call history, reservations, appointments, or previous services.",
+            "Do not start a booking.",
+            "Do not ask for the caller's name, phone number, service, date, or time.",
+            "Do not invent information.",
+          ].join("\n"),
+
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: JSON.stringify({
+                    intent:
+                      greetingInput.intent,
+                    firstName:
+                      greetingInput.firstName,
+                    businessName:
+                      greetingInput.businessName,
+                    language:
+                      greetingInput.language,
+                  }),
+                },
+              ],
+            },
+          ],
+        },
+        "bridge:returning_customer_greeting"
+      );
+    } else {
+      /**
+       * Cliente nuevo o contacto que no cumple los requisitos:
+       * conserva exactamente la bienvenida anterior del dashboard.
+       */
+      const configuredWelcomeMessage =
+        resolveConfiguredWelcomeMessage({
+          cfg: context.cfg || {},
+          tenant: context.tenant || {},
+        });
+
+      const fallbackGreetingText =
+        buildInitialGreetingFromConfiguredWelcome({
+          configuredWelcome: "",
+          brand: context.brand,
+          locale: currentLocale,
+        });
+
+      const initialGreetingText =
+        clean(configuredWelcomeMessage) ||
+        clean(fallbackGreetingText);
+
+      console.log(
+        "[VOICE_REALTIME][INITIAL_GREETING_SELECTED]",
+        {
+          callSid,
+          tenantId: context.tenantId,
+          brand: context.brand,
+          configuredWelcomeLength:
+            configuredWelcomeMessage.length,
+          initialGreetingLength:
+            initialGreetingText.length,
+          returningCustomerReason:
+            returningCustomerResult.isReturningCustomer
+              ? null
+              : returningCustomerResult.reason,
+          hasSpanishLine:
+            initialGreetingText
+              .toLowerCase()
+              .includes("español") ||
+            initialGreetingText
+              .toLowerCase()
+              .includes("espanol"),
+        }
+      );
+
+      requestRealtimeResponse(
+        {
+          conversation: "none",
+          tool_choice: "none",
+
+          metadata: {
+            purpose: "initial_greeting",
+            expected_prompt:
+              initialGreetingText,
+          },
+
+          instructions: [
+            "You are a speech renderer for a live phone call.",
+            "Speak exactly the greeting provided in the input.",
+            "Do not use conversation history.",
+            "Do not reason.",
+            "Do not translate.",
+            "Do not summarize.",
+            "Do not add words.",
+            "Do not remove words.",
+          ].join("\n"),
+
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: [
+                    "Speak exactly this greeting and nothing else:",
+                    "",
+                    initialGreetingText,
+                  ].join("\n"),
+                },
+              ],
+            },
+          ],
+        },
+        "bridge:initial_greeting"
+      );
+    }
+
+    /**
+     * A partir de aquí permanece exactamente la infraestructura anterior.
+     */
     tenantId = context.tenantId;
     realtimeTenant = context.tenant;
     realtimeCfg = context.cfg || {};
+
     realtimeState = {
       ...realtimeState,
       lang: currentLocale,
@@ -579,16 +729,23 @@ export async function createOpenAiRealtimeBridge({
         call_started: true,
         from_number: callerPhone,
         to_number: didNumber,
-        tenant_name: clean(context.tenant?.name),
+        tenant_name:
+          clean(context.tenant?.name),
       },
       outcome: "voice_call_started",
     }).catch((error) => {
-      console.error("[SALES_INTELLIGENCE][VOICE_CALL_STARTED_ERROR]", {
-        tenantId,
-        callSid,
-        phone: callerPhone,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      console.error(
+        "[SALES_INTELLIGENCE][VOICE_CALL_STARTED_ERROR]",
+        {
+          tenantId,
+          callSid,
+          phone: callerPhone,
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error),
+        }
+      );
     });
 
     sessionConfigured = true;
