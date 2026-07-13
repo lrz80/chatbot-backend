@@ -192,6 +192,19 @@ function buildRealtimeTools(params: {
 
   tools.push({
     type: "function",
+    name: "transfer_to_human",
+    description:
+      "Transfer the current live phone call to the tenant-configured representative. Call this immediately when the caller explicitly asks to speak with a human, representative, agent, employee, manager, or person. Do not claim that transfer is unavailable before calling this tool.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+  });
+
+  tools.push({
+    type: "function",
     name: "end_call",
     description:
       "Request to end the call only after the caller clearly confirms they do not need anything else, says goodbye, or asks to end the call. Do not use immediately after sending an SMS, useful link, booking link, or appointment fallback message.",
@@ -239,6 +252,11 @@ export function buildOpenAiRealtimeSessionUpdate(
         "- Never call a tool named send_sms. That tool does not exist.",
         "- Call send_booking_sms only after the server has accepted the configured SMS consent step and no booking step is pending.",
         "- Never invent SMS text or phone numbers. The server sends booking SMS from canonical booking state.",
+        "- If the caller explicitly asks to speak with a human, representative, agent, employee, manager, or person, call transfer_to_human immediately.",
+        "- Do not ask the caller to repeat the request.",
+        "- Do not claim that nobody is available.",
+        "- Do not claim that transfer is unavailable before calling transfer_to_human.",
+        "- Do not keep offering your own assistance after an explicit request for a person.",
         ...buildUsefulLinkSmsInstructions({
           canSendUsefulLinkSms,
         }),

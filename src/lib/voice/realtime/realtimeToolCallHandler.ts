@@ -55,6 +55,7 @@ type HandleRealtimeToolCallParams = {
   callEnding: boolean;
   lastUserTranscript: string;
   lastUserDigits: string;
+  twilioAccountSid: string | null;
 };
 
 type HandleRealtimeToolCallResult = {
@@ -206,6 +207,7 @@ export async function handleRealtimeToolCall(
     callEnding,
     lastUserTranscript,
     lastUserDigits,
+    twilioAccountSid,
   } = params;
 
   if (event?.type !== "response.function_call_arguments.done") {
@@ -804,6 +806,7 @@ export async function handleRealtimeToolCall(
       cfg: realtimeCfg,
       callSid: callSid || undefined,
       didNumber: didNumber || undefined,
+      twilioAccountSid,
       currentLocale,
       state: realtimeState,
       userInput: lastUserTranscript,
@@ -851,6 +854,55 @@ export async function handleRealtimeToolCall(
           })
           ? unlockBookingLanguage(nextRealtimeState)
           : nextRealtimeState;
+
+    if (
+      toolName === "transfer_to_human" &&
+      toolResult?.ok === true &&
+      toolResult?.transferred === true
+    ) {
+      console.log("[VOICE_REALTIME][HUMAN_TRANSFER_COMPLETED]", {
+        callSid,
+        representativeNumber:
+          toolResult?.representative_number || null,
+      });
+
+      return {
+        consumed: true,
+        result: toolResult as RealtimeToolResult,
+        realtimeState: realtimeStateWithBookingLanguage,
+        bookingFlowLoaded: nextBookingFlowLoaded,
+        hangupRequestedByTool: false,
+        callEnding: true,
+        resetLastUserDigits: true,
+      };
+    }
+
+    if (
+      toolName === "transfer_to_human" &&
+      toolResult?.ok === false
+    ) {
+      requestRealtimeResponse(
+        buildToollessResponse(
+          [
+            buildLocaleInstruction(currentLocale),
+            "Briefly explain that the call cannot be transferred right now.",
+            "Do not mention tools, configuration, Twilio, APIs, backend errors, or technical details.",
+            "Offer to help with one short question.",
+          ].join("\n")
+        ),
+        "tool_followup:transfer_to_human:error"
+      );
+
+      return {
+        consumed: true,
+        result: toolResult as RealtimeToolResult,
+        realtimeState: realtimeStateWithBookingLanguage,
+        bookingFlowLoaded: nextBookingFlowLoaded,
+        hangupRequestedByTool: false,
+        callEnding,
+        resetLastUserDigits: true,
+      };
+    }
 
     const hangupRequestedByTool =
       toolName === "end_call" && toolResult?.ok === true;

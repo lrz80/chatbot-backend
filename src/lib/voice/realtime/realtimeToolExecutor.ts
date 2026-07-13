@@ -25,6 +25,7 @@ import {
   buildRealtimeNextRequiredStep,
   type RealtimeMappedStep,
 } from "./bookingStep/buildRealtimeNextRequiredStep";
+import { transferTwilioCall } from "./twilioRealtimeTransport";
 
 type ExecuteRealtimeToolParams = {
   tenantId: string;
@@ -40,6 +41,7 @@ type ExecuteRealtimeToolParams = {
   state?: CallState;
   userInput?: string;
   digits?: string;
+  twilioAccountSid?: string | null;
 };
 
 type RealtimeBookingContext = {
@@ -184,7 +186,13 @@ function buildContextMissingResult() {
 export async function executeRealtimeTool(
   params: ExecuteRealtimeToolParams
 ): Promise<any> {
-  const { tenantId, callerPhone, toolName, args } = params;
+  const {
+    tenantId,
+    callerPhone,
+    toolName,
+    args,
+    twilioAccountSid,
+  } = params;
 
   const bookingContext =
     toolName === "get_booking_flow" ||
@@ -429,6 +437,38 @@ export async function executeRealtimeTool(
           readyToCreate: false,
         }),
         next_required_step: null,
+      };
+    }
+
+    case "transfer_to_human": {
+      const representativeNumber =
+        clean(params.cfg?.representante_number) ||
+        clean(params.tenant?.representante_number) ||
+        null;
+
+      const transferResult = await transferTwilioCall({
+        callSid: params.callSid || null,
+        accountSid: twilioAccountSid,
+        representativeNumber,
+      });
+
+      if (!transferResult.ok) {
+        return {
+          ok: false,
+          transferred: false,
+          error: transferResult.error,
+          message:
+            transferResult.error === "REPRESENTATIVE_NOT_CONFIGURED"
+              ? "Direct transfer is not configured for this business."
+              : "The call could not be transferred right now.",
+        };
+      }
+
+      return {
+        ok: true,
+        transferred: true,
+        representative_number:
+          transferResult.representativeNumber,
       };
     }
 

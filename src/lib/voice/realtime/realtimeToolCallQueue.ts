@@ -35,6 +35,7 @@ type RealtimeToolCallQueueParams = {
   setHangupRequestedByTool: (value: boolean) => void;
   setCallEnding: (value: boolean) => void;
   resetLastUserDigits: () => void;
+  getTwilioAccountSid: () => string | null;
 };
 
 function clean(value: unknown): string {
@@ -247,6 +248,7 @@ export function createRealtimeToolCallQueue(
           callEnding: params.getCallEnding(),
           lastUserTranscript: params.getLastUserTranscript(),
           lastUserDigits: params.getLastUserDigits(),
+          twilioAccountSid: params.getTwilioAccountSid(),
         });
 
         if (!toolCallResult.consumed) {
