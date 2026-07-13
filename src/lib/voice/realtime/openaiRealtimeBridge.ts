@@ -253,6 +253,7 @@ export async function createOpenAiRealtimeBridge({
     getTenantId: () => tenantId,
     getCallerPhone: () => callerPhone,
     getDidNumber: () => didNumber,
+    getTwilioAccountSid: () => twilioAccountSid,
     getRealtimeTenant: () => realtimeTenant,
     getRealtimeCfg: () => realtimeCfg,
     getRealtimeState: () => realtimeState,
