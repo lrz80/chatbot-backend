@@ -858,21 +858,68 @@ export async function handleRealtimeToolCall(
     if (
       toolName === "transfer_to_human" &&
       toolResult?.ok === true &&
-      toolResult?.transferred === true
+      toolResult?.transfer_pending === true
     ) {
-      console.log("[VOICE_REALTIME][HUMAN_TRANSFER_COMPLETED]", {
-        callSid,
-        representativeNumber:
-          toolResult?.representative_number || null,
+      const representativeNumber = clean(
+        toolResult?.representative_number
+      );
+
+      const transferPendingState = {
+        ...realtimeStateWithBookingLanguage,
+
+        pendingHumanTransfer: true,
+        pendingHumanTransferNumber:
+          representativeNumber || null,
+        pendingHumanTransferAnnouncement: true,
+      } as CallState;
+
+      sendRealtimeJson(openAiSocket, {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify(toolResult),
+        },
       });
+
+      console.log(
+        "[VOICE_REALTIME][HUMAN_TRANSFER_ANNOUNCEMENT_REQUESTED]",
+        {
+          callSid,
+          representativeNumber,
+          currentLocale,
+        }
+      );
+
+      requestRealtimeResponse(
+        {
+          conversation: "none",
+          tool_choice: "none",
+          instructions: [
+            "You are speaking one short sentence before transferring a live phone call.",
+            buildLocaleInstruction(currentLocale),
+            "Say the natural equivalent of: 'Of course, I’ll transfer you right now.'",
+            "Use the same voice already active in this call.",
+            "Maximum 8 words.",
+            "Do not ask a question.",
+            "Do not offer more help.",
+            "Do not mention tools, systems, Twilio, AI, or technical details.",
+            "Say only the transfer announcement.",
+          ].join("\n"),
+        },
+        "tool_followup:transfer_to_human:announcement",
+        {
+          sendToolOutputToOpenAi: false,
+        }
+      );
 
       return {
         consumed: true,
         result: toolResult as RealtimeToolResult,
-        realtimeState: realtimeStateWithBookingLanguage,
+        realtimeState: transferPendingState,
         bookingFlowLoaded: nextBookingFlowLoaded,
         hangupRequestedByTool: false,
-        callEnding: true,
+        callEnding: false,
         resetLastUserDigits: true,
       };
     }

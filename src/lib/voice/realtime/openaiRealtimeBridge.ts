@@ -39,6 +39,7 @@ import {
 } from "./openAiRealtimeEvents";
 import { createRealtimeToolCallQueue } from "./realtimeToolCallQueue";
 import { createRealtimeBargeInController } from "./realtimeBargeInController";
+import { createHumanTransferController } from "./humanTransferController";
 import { saveAndEmitMessage } from "../../messages/saveAndEmitMessage";
 import { upsertVoiceSalesIntelligence } from "../../salesIntelligence/upsertVoiceSalesIntelligence";
 import {
@@ -279,6 +280,30 @@ export async function createOpenAiRealtimeBridge({
     resetLastUserDigits: () => {
       lastUserDigits = "";
     },
+  });
+
+  const humanTransferController =
+  createHumanTransferController({
+    twilioSocket,
+
+    getStreamSid: () => streamSid,
+    getCallSid: () => callSid,
+    getTwilioAccountSid: () => twilioAccountSid,
+    getCurrentLocale: () => currentLocale,
+    getRealtimeState: () => realtimeState,
+    getLastAssistantTranscript: () =>
+      lastAssistantTranscript,
+    getCallEnding: () => callEnding,
+
+    setRealtimeState: (state) => {
+      realtimeState = state;
+    },
+
+    setCallEnding: (value) => {
+      callEnding = value;
+    },
+
+    requestRealtimeResponse,
   });
 
   const bookingCoordinator = createBookingRealtimeCoordinator({
@@ -1357,6 +1382,10 @@ export async function createOpenAiRealtimeBridge({
 
       const completedResponseSource = responseStateBeforeDone.activeResponseSource;
 
+      const isHumanTransferAnnouncementResponse =
+        completedResponseSource ===
+        "tool_followup:transfer_to_human:announcement";
+
       const isCancelledExactPromptResponse =
         Boolean(cancelledExactPromptResponseId) &&
         responseStateBeforeDone.activeResponseId === cancelledExactPromptResponseId;
@@ -1375,6 +1404,21 @@ export async function createOpenAiRealtimeBridge({
         bookingTurnStatus: clean((realtimeState as any).bookingTurnStatus),
         lastUserTranscriptSeq,
       });
+
+      if (
+        isHumanTransferAnnouncementResponse &&
+        (realtimeState as any).pendingHumanTransfer === true
+      ) {
+        responseController.markResponseDone({
+          lastUserTranscriptSeq,
+        });
+
+        humanTransferController.scheduleAfterAnnouncement(
+          "transfer_announcement_response_done"
+        );
+
+        return;
+      }
 
       if (isCancelledExactPromptResponse) {
         responseController.markResponseDone({
@@ -1679,14 +1723,29 @@ export async function createOpenAiRealtimeBridge({
     if (!event) return;
 
     if ((event as any).event === "mark") {
-      const markName = clean((event as any)?.mark?.name || "");
+      const markName = clean(
+        (event as any)?.mark?.name || ""
+      );
 
       if (
         goodbyePlaybackMarkName &&
         markName === goodbyePlaybackMarkName
       ) {
         goodbyePlaybackMarkName = null;
-        performTwilioHangup("twilio_goodbye_mark_received");
+
+        performTwilioHangup(
+          "twilio_goodbye_mark_received"
+        );
+
+        return;
+      }
+
+      if (
+        humanTransferController.handleTwilioMark(
+          markName
+        )
+      ) {
+        return;
       }
 
       return;
@@ -1719,6 +1778,7 @@ export async function createOpenAiRealtimeBridge({
       lastUserDigits = "";
       lastUserTranscriptSeq = 0;
       bookingCoordinator.reset();
+      humanTransferController.reset();
       
       assistantSpeaking = false;
       lastAssistantAudioDeltaAtMs = 0;

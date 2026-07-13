@@ -147,14 +147,9 @@ export async function transferTwilioCall(params: {
   callSid: string | null;
   accountSid?: string | null;
   representativeNumber: string | null;
-  announcement: string;
-  locale?: string | null;
 }): Promise<TransferTwilioCallResult> {
   const callSid = clean(params.callSid);
   const representativeNumber = clean(params.representativeNumber);
-
-  const announcement = clean(params.announcement);
-  const locale = clean(params.locale) || "en-US";
 
   if (!callSid) {
     return {
@@ -192,16 +187,13 @@ export async function transferTwilioCall(params: {
     incomingAccountSid || authAccountSid;
 
   if (!authAccountSid || !authToken || !targetAccountSid) {
-    console.warn(
-      "[VOICE_REALTIME][TWILIO_TRANSFER_SKIPPED]",
-      {
-        callSid,
-        representativeNumber,
-        reason: "MISSING_TWILIO_CREDENTIALS",
-        authAccountSid,
-        targetAccountSid,
-      }
-    );
+    console.warn("[VOICE_REALTIME][TWILIO_TRANSFER_SKIPPED]", {
+      callSid,
+      representativeNumber,
+      reason: "MISSING_TWILIO_CREDENTIALS",
+      authAccountSid,
+      targetAccountSid,
+    });
 
     return {
       ok: false,
@@ -217,14 +209,6 @@ export async function transferTwilioCall(params: {
 
     const response = new twiml.VoiceResponse();
 
-    response.say(
-      {
-        language: locale as any,
-        voice: "alice",
-      },
-      announcement || "Of course. I’ll transfer you now."
-    );
-
     const dial = response.dial({
       answerOnBridge: true,
     });
@@ -235,14 +219,11 @@ export async function transferTwilioCall(params: {
       twiml: response.toString(),
     });
 
-    console.log(
-      "[VOICE_REALTIME][TWILIO_TRANSFER_EXECUTED]",
-      {
-        callSid,
-        representativeNumber,
-        targetAccountSid,
-      }
-    );
+    console.log("[VOICE_REALTIME][TWILIO_TRANSFER_EXECUTED]", {
+      callSid,
+      representativeNumber,
+      targetAccountSid,
+    });
 
     return {
       ok: true,
@@ -250,19 +231,16 @@ export async function transferTwilioCall(params: {
       representativeNumber,
     };
   } catch (error) {
-    console.error(
-      "[VOICE_REALTIME][TWILIO_TRANSFER_ERROR]",
-      {
-        callSid,
-        representativeNumber,
-        authAccountSid,
-        targetAccountSid,
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error),
-      }
-    );
+    console.error("[VOICE_REALTIME][TWILIO_TRANSFER_ERROR]", {
+      callSid,
+      representativeNumber,
+      authAccountSid,
+      targetAccountSid,
+      error:
+        error instanceof Error
+          ? error.message
+          : String(error),
+    });
 
     return {
       ok: false,

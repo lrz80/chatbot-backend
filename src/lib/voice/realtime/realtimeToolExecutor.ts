@@ -25,7 +25,6 @@ import {
   buildRealtimeNextRequiredStep,
   type RealtimeMappedStep,
 } from "./bookingStep/buildRealtimeNextRequiredStep";
-import { transferTwilioCall } from "./twilioRealtimeTransport";
 
 type ExecuteRealtimeToolParams = {
   tenantId: string;
@@ -454,8 +453,6 @@ export async function executeRealtimeTool(
         tenantRepresentativeNumber ||
         null;
 
-      const announcement = clean(args?.announcement);
-
       console.log("[VOICE_REALTIME][TRANSFER_CONTEXT]", {
         callSid: params.callSid || null,
         twilioAccountSid: twilioAccountSid || null,
@@ -467,38 +464,41 @@ export async function executeRealtimeTool(
         hasTenant: Boolean(params.tenant),
       });
 
-      const transferResult = await transferTwilioCall({
-        callSid: params.callSid || null,
-        accountSid: twilioAccountSid,
-        representativeNumber,
-        announcement,
-        locale: params.currentLocale || null,
-      });
-
-      console.log("[VOICE_REALTIME][TRANSFER_RESULT]", {
-        callSid: params.callSid || null,
-        ...transferResult,
-      });
-
-      if (!transferResult.ok) {
+      if (!params.callSid) {
         return {
           ok: false,
           transferred: false,
-          error: transferResult.error,
+          error: "CALL_SID_MISSING",
+          message: "The active call could not be identified.",
+        };
+      }
+
+      if (!representativeNumber) {
+        return {
+          ok: false,
+          transferred: false,
+          error: "REPRESENTATIVE_NOT_CONFIGURED",
           message:
-            transferResult.error === "REPRESENTATIVE_NOT_CONFIGURED"
-              ? "Direct transfer is not configured for this business."
-              : transferResult.error === "REPRESENTATIVE_NUMBER_INVALID"
-                ? "The configured representative number is invalid."
-                : "The call could not be transferred right now.",
+            "Direct transfer is not configured for this business.",
+        };
+      }
+
+      if (!/^\+\d{10,15}$/.test(representativeNumber)) {
+        return {
+          ok: false,
+          transferred: false,
+          error: "REPRESENTATIVE_NUMBER_INVALID",
+          message:
+            "The configured representative number is invalid.",
         };
       }
 
       return {
         ok: true,
-        transferred: true,
-        representative_number:
-          transferResult.representativeNumber,
+        transferred: false,
+        transfer_pending: true,
+        representative_number: representativeNumber,
+        announcement_required: true,
       };
     }
 
