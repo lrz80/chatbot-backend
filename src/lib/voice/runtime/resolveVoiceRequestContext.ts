@@ -218,6 +218,31 @@ export async function resolveVoiceRequestContext({
     );
   }
 
+  if (!String(cfg.representante_number || "").trim()) {
+    const representativeRes = await pool.query(
+      `SELECT representante_number
+        FROM voice_configs
+        WHERE tenant_id = $1
+          AND canal = $2
+          AND representante_number IS NOT NULL
+          AND TRIM(representante_number) <> ''
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1`,
+      [tenant.id, channelKey]
+    );
+
+    const representativeNumber = String(
+      representativeRes.rows[0]?.representante_number || ""
+    ).trim();
+
+    if (representativeNumber) {
+      cfg = {
+        ...cfg,
+        representante_number: representativeNumber,
+      };
+    }
+  }
+
   const cfgLocale = String(cfg.idioma || "").trim();
 
   const localeCompatibleVoiceName =
