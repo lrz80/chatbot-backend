@@ -873,14 +873,9 @@ export async function handleRealtimeToolCall(
         pendingHumanTransferAnnouncement: true,
       } as CallState;
 
-      sendRealtimeJson(openAiSocket, {
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: callId,
-          output: JSON.stringify(toolResult),
-        },
-      });
+      const modelAnnouncement = clean(
+        effectiveToolArgs?.announcement
+      );
 
       console.log(
         "[VOICE_REALTIME][HUMAN_TRANSFER_ANNOUNCEMENT_REQUESTED]",
@@ -888,6 +883,8 @@ export async function handleRealtimeToolCall(
           callSid,
           representativeNumber,
           currentLocale,
+          lastUserTranscript,
+          modelAnnouncement: modelAnnouncement || null,
         }
       );
 
@@ -895,17 +892,65 @@ export async function handleRealtimeToolCall(
         {
           conversation: "none",
           tool_choice: "none",
+
+          metadata: {
+            purpose: "human_transfer_announcement",
+            active_locale: clean(currentLocale) || "unknown",
+          },
+
           instructions: [
-            "You are speaking one short sentence before transferring a live phone call.",
-            buildLocaleInstruction(currentLocale),
-            "Say the natural equivalent of: 'Of course, I’ll transfer you right now.'",
-            "Use the same voice already active in this call.",
-            "Maximum 8 words.",
+            "You are producing one short spoken announcement before transferring a live phone call.",
+
+            "Language rules:",
+            "Speak entirely in the caller's active language.",
+            "Determine the active language primarily from the caller's latest message.",
+            "Use the previous assistant message as a secondary language signal.",
+            "Use the runtime locale only as a weak fallback.",
+            "Support any language without restricting the output to a predefined language list.",
+            "Do not switch languages.",
+
+            modelAnnouncement
+              ? "The transfer announcement suggested by the calling model is provided in the input. Preserve its meaning and use it when it already matches the caller's active language."
+              : "Produce the natural equivalent of: 'Of course, I’ll transfer you right now.'",
+
+            "Say only one short transfer announcement.",
+            "Maximum 10 words when natural in that language.",
+            "Do not say that the transfer failed.",
             "Do not ask a question.",
-            "Do not offer more help.",
-            "Do not mention tools, systems, Twilio, AI, or technical details.",
-            "Say only the transfer announcement.",
+            "Do not offer additional assistance.",
+            "Do not mention tools, systems, Twilio, AI, configuration, or technical details.",
           ].join("\n"),
+
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: [
+                    `Latest caller message: ${JSON.stringify(
+                      lastUserTranscript
+                    )}`,
+                    `Previous assistant message: ${JSON.stringify(
+                      clean(
+                        (realtimeStateWithBookingLanguage as any)
+                          .lastAssistantTranscript || ""
+                      )
+                    )}`,
+                    `Weak runtime locale hint: ${JSON.stringify(
+                      clean(currentLocale) || "unknown"
+                    )}`,
+                    `Suggested transfer announcement: ${JSON.stringify(
+                      modelAnnouncement || ""
+                    )}`,
+                    "",
+                    "Speak only the transfer announcement in the caller's active language.",
+                  ].join("\n"),
+                },
+              ],
+            },
+          ],
         },
         "tool_followup:transfer_to_human:announcement",
         {
