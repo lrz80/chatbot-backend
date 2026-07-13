@@ -194,12 +194,18 @@ function buildRealtimeTools(params: {
     type: "function",
     name: "transfer_to_human",
     description:
-      "Transfer the current live phone call to the tenant-configured representative. Call this immediately when the caller explicitly asks to speak with a human, representative, agent, employee, manager, or person. Do not claim that transfer is unavailable before calling this tool.",
+      "Transfer the current live call to the tenant-configured representative. Call immediately when the caller explicitly asks for a human. Provide one short natural announcement in the caller's active language that will be spoken before the transfer.",
     parameters: {
       type: "object",
       additionalProperties: false,
-      properties: {},
-      required: [],
+      properties: {
+        announcement: {
+          type: "string",
+          description:
+            "A short sentence in the caller's active language, equivalent to: 'Of course, I’ll transfer you right now.' Do not ask a question.",
+        },
+      },
+      required: ["announcement"],
     },
   });
 

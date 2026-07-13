@@ -454,6 +454,8 @@ export async function executeRealtimeTool(
         tenantRepresentativeNumber ||
         null;
 
+      const announcement = clean(args?.announcement);
+
       console.log("[VOICE_REALTIME][TRANSFER_CONTEXT]", {
         callSid: params.callSid || null,
         twilioAccountSid: twilioAccountSid || null,
@@ -469,6 +471,8 @@ export async function executeRealtimeTool(
         callSid: params.callSid || null,
         accountSid: twilioAccountSid,
         representativeNumber,
+        announcement,
+        locale: params.currentLocale || null,
       });
 
       console.log("[VOICE_REALTIME][TRANSFER_RESULT]", {

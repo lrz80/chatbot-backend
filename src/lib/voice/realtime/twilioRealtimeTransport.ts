@@ -147,9 +147,14 @@ export async function transferTwilioCall(params: {
   callSid: string | null;
   accountSid?: string | null;
   representativeNumber: string | null;
+  announcement: string;
+  locale?: string | null;
 }): Promise<TransferTwilioCallResult> {
   const callSid = clean(params.callSid);
   const representativeNumber = clean(params.representativeNumber);
+
+  const announcement = clean(params.announcement);
+  const locale = clean(params.locale) || "en-US";
 
   if (!callSid) {
     return {
@@ -211,6 +216,14 @@ export async function transferTwilioCall(params: {
     });
 
     const response = new twiml.VoiceResponse();
+
+    response.say(
+      {
+        language: locale as any,
+        voice: "alice",
+      },
+      announcement || "Of course. I’ll transfer you now."
+    );
 
     const dial = response.dial({
       answerOnBridge: true,
