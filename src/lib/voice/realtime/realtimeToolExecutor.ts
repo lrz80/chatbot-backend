@@ -441,15 +441,39 @@ export async function executeRealtimeTool(
     }
 
     case "transfer_to_human": {
+      const cfgRepresentativeNumber = clean(
+        params.cfg?.representante_number
+      );
+
+      const tenantRepresentativeNumber = clean(
+        params.tenant?.representante_number
+      );
+
       const representativeNumber =
-        clean(params.cfg?.representante_number) ||
-        clean(params.tenant?.representante_number) ||
+        cfgRepresentativeNumber ||
+        tenantRepresentativeNumber ||
         null;
+
+      console.log("[VOICE_REALTIME][TRANSFER_CONTEXT]", {
+        callSid: params.callSid || null,
+        twilioAccountSid: twilioAccountSid || null,
+        cfgRepresentativeNumber:
+          cfgRepresentativeNumber || null,
+        tenantRepresentativeNumber:
+          tenantRepresentativeNumber || null,
+        hasCfg: Boolean(params.cfg),
+        hasTenant: Boolean(params.tenant),
+      });
 
       const transferResult = await transferTwilioCall({
         callSid: params.callSid || null,
         accountSid: twilioAccountSid,
         representativeNumber,
+      });
+
+      console.log("[VOICE_REALTIME][TRANSFER_RESULT]", {
+        callSid: params.callSid || null,
+        ...transferResult,
       });
 
       if (!transferResult.ok) {
@@ -460,7 +484,9 @@ export async function executeRealtimeTool(
           message:
             transferResult.error === "REPRESENTATIVE_NOT_CONFIGURED"
               ? "Direct transfer is not configured for this business."
-              : "The call could not be transferred right now.",
+              : transferResult.error === "REPRESENTATIVE_NUMBER_INVALID"
+                ? "The configured representative number is invalid."
+                : "The call could not be transferred right now.",
         };
       }
 
