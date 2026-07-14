@@ -1,4 +1,5 @@
 // src/lib/voice/realtime/handleRealtimeUserTranscript.ts
+
 import WebSocket from "ws";
 import type { CallState, VoiceLocale } from "../types";
 import { handleUserTranscriptCompleted } from "./realtimeTranscriptRuntime";
@@ -66,7 +67,9 @@ function tokenOverlapRatio(a: string, b: string): number {
   const aTokens = tokenSet(a);
   const bTokens = tokenSet(b);
 
-  if (aTokens.size === 0 || bTokens.size === 0) return 0;
+  if (aTokens.size === 0 || bTokens.size === 0) {
+    return 0;
+  }
 
   let overlap = 0;
 
@@ -86,9 +89,13 @@ function isLikelyAssistantEcho(params: {
   const transcript = normalizeForEchoComparison(params.transcript);
   const assistant = normalizeForEchoComparison(params.lastAssistantTranscript);
 
-  if (!transcript || !assistant) return false;
+  if (!transcript || !assistant) {
+    return false;
+  }
 
-  if (transcript === assistant) return true;
+  if (transcript === assistant) {
+    return true;
+  }
 
   if (transcript.length >= 12 && assistant.includes(transcript)) {
     return true;
@@ -116,7 +123,9 @@ function uniqueLetterRatio(value: string): number {
     .toLowerCase()
     .match(/\p{L}/gu);
 
-  if (!letters || letters.length === 0) return 0;
+  if (!letters || letters.length === 0) {
+    return 0;
+  }
 
   return new Set(letters).size / letters.length;
 }
@@ -127,20 +136,28 @@ function isLikelyNoiseTranscript(params: {
 }): boolean {
   const cleaned = clean(params.transcript);
 
-  if (!cleaned) return true;
+  if (!cleaned) {
+    return true;
+  }
 
   const letters = letterCount(cleaned);
   const digits = digitCount(cleaned);
   const chars = normalizedCharCount(cleaned);
 
-  if (chars <= 1) return true;
+  if (chars <= 1) {
+    return true;
+  }
 
-  if (letters === 0 && digits === 0) return true;
+  if (letters === 0 && digits === 0) {
+    return true;
+  }
 
   /**
-   * Esta heurística sirve para filtrar ruido fuera del booking flow.
-   * Pero dentro de un booking step pendiente, una respuesta válida puede ser
-   * una dirección, teléfono, nombre, peso o fecha con baja variedad de caracteres.
+   * Esta heurística solo se aplica fuera de un booking step activo.
+   *
+   * Dentro del booking, respuestas como nombres, fechas, teléfonos,
+   * direcciones o confirmaciones pueden tener poca variedad de caracteres
+   * y aun así ser completamente válidas.
    */
   if (
     params.allowLowVarietyHeuristic &&
@@ -194,13 +211,14 @@ function cancelActiveAssistantAudio(params: {
 }
 
 /**
- * This guard is intentionally language-agnostic.
+ * Este guard es completamente independiente del idioma.
  *
- * Do not add Spanish/English/Portuguese phrases here.
- * This layer only decides whether the transcript is safe to accept as human input.
- * Meaning/intent/slot validation belongs to booking/service resolvers.
+ * No se deben agregar frases específicas en español, inglés, portugués
+ * ni ningún otro idioma. Aquí solo se decide si la transcripción puede
+ * representar audio humano real.
+ *
+ * La interpretación del significado pertenece a los resolvers del booking.
  */
-
 function canAcceptEarlyBookingAnswer(params: {
   bookingTurnStatus: string;
   pendingBookingStepKey: string;
@@ -223,11 +241,11 @@ function canAcceptEarlyBookingAnswer(params: {
   }
 
   /**
-   * These are short confirmation-style steps where callers commonly answer
-   * while Aamy is still finishing the prompt.
+   * Son steps cortos en los que el cliente frecuentemente responde
+   * antes de que Aamy termine por completo el prompt.
    *
-   * This guard does not decide the meaning of "sí", "no", etc.
-   * It only allows the transcript to reach the booking validator.
+   * Este guard no interpreta la respuesta. Solo permite que llegue
+   * al validador correspondiente.
    */
   const earlyAnswerAllowedSteps = new Set([
     "phone",
@@ -261,6 +279,8 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
   msSinceAssistantAudioDone: number | null;
 } {
   const transcript = clean(params.rawTranscript);
+  const bookingTurnStatus = clean(params.bookingTurnStatus);
+  const pendingBookingStepKey = clean(params.pendingBookingStepKey);
 
   if (params.callEnding) {
     return {
@@ -280,31 +300,24 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     };
   }
 
-  const isWaitingForBookingAnswer =
-    !!clean(params.pendingBookingStepKey) &&
-    canAcceptEarlyBookingAnswer({
-      bookingTurnStatus: clean(params.bookingTurnStatus),
-      pendingBookingStepKey: clean(params.pendingBookingStepKey),
-      transcript,
-    });
+  const hasPendingBookingStep = Boolean(pendingBookingStepKey);
 
-  const hasPendingBookingStep = !!clean(params.pendingBookingStepKey);
-
-  const bookingTurnStatus = clean(params.bookingTurnStatus);
-
-  /**
-   * Si ya hay un step pendiente, pero el sistema todavía no abrió
-   * formalmente el turno para escuchar al usuario, no aceptamos transcript.
-   *
-   * Esto evita que ruido/eco capturado mientras Aamy está cambiando de prompt
-   * se convierta en respuesta del próximo step.
-   */
   const canAcceptEarlyAnswer = canAcceptEarlyBookingAnswer({
     bookingTurnStatus,
-    pendingBookingStepKey: params.pendingBookingStepKey,
+    pendingBookingStepKey,
     transcript,
   });
 
+  const isWaitingForBookingAnswer =
+    hasPendingBookingStep && canAcceptEarlyAnswer;
+
+  /**
+   * Si existe un step pendiente, pero el sistema todavía no está preparado
+   * para aceptar respuestas, se bloquea la transcripción.
+   *
+   * Las excepciones se limitan a los steps explícitamente definidos en
+   * canAcceptEarlyBookingAnswer.
+   */
   if (
     hasPendingBookingStep &&
     bookingTurnStatus &&
@@ -333,28 +346,19 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     };
   }
 
-  if (
-    !isWaitingForBookingAnswer &&
-    isLikelyAssistantEcho({
-      transcript,
-      lastAssistantTranscript: params.lastAssistantTranscript,
-    })
-  ) {
-    return {
-      ignore: true,
-      interruptAssistant: false,
-      reason: "ASSISTANT_ECHO",
-      msSinceAssistantAudioDone: null,
-    };
-  }
+  const likelyAssistantEcho = isLikelyAssistantEcho({
+    transcript,
+    lastAssistantTranscript: params.lastAssistantTranscript,
+  });
+
   /**
-   * En booking NO debemos aceptar cualquier transcript mientras Aamy habla.
-   * Short answers can be valid after a direct question,
-   * but they should not interrupt assistant audio.
-   * pero deben entrar cuando el audio de Aamy ya terminó.
+   * Mientras Aamy está hablando:
    *
-   * Si el cliente realmente interrumpe mientras Aamy habla, exigimos una señal humana fuerte.
-   * Esto evita que brisa/eco/ruido avance steps.
+   * - En un booking step no aceptamos respuestas todavía, porque podría ser
+   *   eco del prompt o audio mezclado.
+   * - Fuera del booking, una frase distinta al mensaje de Aamy puede ser una
+   *   interrupción real del cliente y debe cancelar el audio del asistente.
+   * - Si el texto coincide con el mensaje de Aamy, se considera eco.
    */
   if (params.assistantSpeaking) {
     if (isWaitingForBookingAnswer) {
@@ -366,6 +370,15 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
       };
     }
 
+    if (likelyAssistantEcho) {
+      return {
+        ignore: true,
+        interruptAssistant: false,
+        reason: "ASSISTANT_ECHO",
+        msSinceAssistantAudioDone: null,
+      };
+    }
+
     return {
       ignore: false,
       interruptAssistant: true,
@@ -373,6 +386,10 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     };
   }
 
+  /**
+   * Un timestamp ausente o inválido no demuestra que la transcripción
+   * sea eco. En ese caso se permite pasar al runtime.
+   */
   const lastAssistantAudioDoneAtMs = finiteNumber(
     params.lastAssistantAudioDoneAtMs,
     0
@@ -386,51 +403,49 @@ function shouldIgnoreTranscriptBeforeRuntime(params: {
     };
   }
 
-  const msSinceAssistantAudioDone = nowMs() - lastAssistantAudioDoneAtMs;
+  const msSinceAssistantAudioDone = Math.max(
+    0,
+    nowMs() - lastAssistantAudioDoneAtMs
+  );
 
-  const effectiveMinMsAfterAssistantAudio = isWaitingForBookingAnswer
-    ? Math.max(params.minMsAfterAssistantAudio, 1500)
-    : params.minMsAfterAssistantAudio;
+  /**
+   * La ventana para detectar eco debe ser temporal y corta.
+   *
+   * Fuera de esta ventana, una coincidencia textual no es suficiente
+   * para descartar la frase del cliente.
+   */
+  const echoWindowMs = Math.max(
+    params.minMsAfterAssistantAudio,
+    1200
+  );
 
-  if (msSinceAssistantAudioDone < effectiveMinMsAfterAssistantAudio) {
-    if (
-      !isWaitingForBookingAnswer &&
-      isLikelyAssistantEcho({
-        transcript,
-        lastAssistantTranscript: params.lastAssistantTranscript,
-      })
-    ) {
-      return {
-        ignore: true,
-        interruptAssistant: false,
-        reason: "ASSISTANT_ECHO",
-        msSinceAssistantAudioDone,
-      };
-    }
+  const isInsideEchoWindow =
+    msSinceAssistantAudioDone < echoWindowMs;
 
-    /**
-     * If a booking step is waiting for the caller, do not go silent just because
-     * the transcript arrived close to assistant audio.
-     *
-     * Let the booking validator decide:
-     * - valid short answers like "sí" advance
-     * - invalid or echo-like text returns the configured retry prompt
-     */
-    if (isWaitingForBookingAnswer) {
-      return {
-        ignore: false,
-        interruptAssistant: false,
-        msSinceAssistantAudioDone,
-      };
-    }
-
+  if (
+    !isWaitingForBookingAnswer &&
+    isInsideEchoWindow &&
+    likelyAssistantEcho
+  ) {
     return {
-      ignore: false,
+      ignore: true,
       interruptAssistant: false,
+      reason: "ASSISTANT_ECHO",
       msSinceAssistantAudioDone,
     };
   }
 
+  /**
+   * En un booking step activo se permite la transcripción aunque llegue
+   * cerca del final del audio.
+   *
+   * El validador del step decidirá si es:
+   * - una respuesta válida;
+   * - una respuesta ambigua;
+   * - o texto que requiere repetir el prompt.
+   *
+   * No se debe perder silenciosamente una respuesta válida del cliente.
+   */
   return {
     ignore: false,
     interruptAssistant: false,
@@ -456,21 +471,19 @@ export async function handleRealtimeUserTranscript(params: {
   callEnding: boolean;
 
   /**
-   * True while OpenAI is producing assistant audio.
-   * This prevents assistant echo from being accepted as user input.
+   * True mientras OpenAI está generando audio del asistente.
    */
   assistantSpeaking: boolean;
 
   /**
-   * Timestamp from response.done or final audio event.
-   * Used as a short grace window after Aamy finishes speaking.
+   * Timestamp del último evento final de audio de Aamy.
    */
   lastAssistantAudioDoneAtMs: number;
+
   lastAssistantTranscript?: string | null;
 
   /**
-   * Production default: 700–1200ms.
-   * Keep configurable from bridge so tenants/calls can be tuned later.
+   * Ventana mínima configurable después del audio de Aamy.
    */
   minMsAfterAssistantAudio?: number;
 }): Promise<HandleRealtimeUserTranscriptResult> {
@@ -478,7 +491,8 @@ export async function handleRealtimeUserTranscript(params: {
 
   const minMsAfterAssistantAudio =
     typeof params.minMsAfterAssistantAudio === "number" &&
-    Number.isFinite(params.minMsAfterAssistantAudio)
+    Number.isFinite(params.minMsAfterAssistantAudio) &&
+    params.minMsAfterAssistantAudio >= 0
       ? params.minMsAfterAssistantAudio
       : 900;
 
@@ -488,7 +502,9 @@ export async function handleRealtimeUserTranscript(params: {
     assistantSpeaking: params.assistantSpeaking,
     lastAssistantAudioDoneAtMs: params.lastAssistantAudioDoneAtMs,
     minMsAfterAssistantAudio,
-    bookingTurnStatus: clean((params.realtimeState as any)?.bookingTurnStatus),
+    bookingTurnStatus: clean(
+      (params.realtimeState as any)?.bookingTurnStatus
+    ),
     pendingBookingStepKey: clean(
       (params.realtimeState as any)?.pendingBookingStepKey
     ),
@@ -501,9 +517,19 @@ export async function handleRealtimeUserTranscript(params: {
       reason: preGuard.reason,
       transcript: rawTranscript,
       assistantSpeaking: params.assistantSpeaking,
-      lastAssistantAudioDoneAtMs: params.lastAssistantAudioDoneAtMs || null,
-      msSinceAssistantAudioDone: preGuard.msSinceAssistantAudioDone,
+      lastAssistantAudioDoneAtMs:
+        finiteNumber(params.lastAssistantAudioDoneAtMs, 0) > 0
+          ? params.lastAssistantAudioDoneAtMs
+          : null,
+      msSinceAssistantAudioDone:
+        preGuard.msSinceAssistantAudioDone,
       minMsAfterAssistantAudio,
+      bookingTurnStatus: clean(
+        (params.realtimeState as any)?.bookingTurnStatus
+      ),
+      pendingBookingStepKey: clean(
+        (params.realtimeState as any)?.pendingBookingStepKey
+      ),
     });
 
     return {
