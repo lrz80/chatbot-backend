@@ -369,10 +369,28 @@ export async function bookingFlowMvp(opts: {
   //      porque frases genéricas como “horarios y precios”
   //      solo quieren información, no iniciar wizard.
   const wantsBooking =
-    hasExplicitDateTime(userText) ||    // “2026-03-02 14:00”, “lunes 2 a las 2pm”
-    directReq ||                        // “quiero agendar una cita”, “puedes reservarme...”
-    (rawWants && !capability) ||        // palabras tipo cita/reserva/agendar detectadas
-    (specificTime && !capability);      // “tienes disponibilidad lunes a las 3?”
+    hasExplicitDateTime(userText) ||
+    directReq ||
+    (rawWants && !capability) ||
+    (specificTime && !capability);
+
+  /**
+   * Una persona puede pedir una reserva y, en el mismo mensaje,
+   * preguntar por disponibilidad.
+   *
+   * Ejemplo:
+   * "I wanted to book indoor cycling for 7/18, do you have availability?"
+   *
+   * isCapabilityQuestion() puede devolver true por la segunda parte,
+   * pero rawWants + contexto de cita confirma que sí existe intención
+   * real de reservar.
+   */
+  const wantsExternalBooking =
+    wantsBooking ||
+    (
+      rawWants &&
+      hasCtx
+    );
 
   console.log("[BOOKING wantsBooking]", {
     userText,
@@ -453,29 +471,70 @@ if (!bookingEnabled) {
   return { handled: false };
 }
 
-// 2) Si hay link, responde con el link (y NO uses Google)
-if (wantsBooking && bookingLink) {
+// 2) Sin proveedor activo, pero con enlace externo:
+// responde con el enlace en lugar de iniciar el booking interno.
+if (
+  wantsExternalBooking &&
+  !providerConnected &&
+  bookingLink
+) {
+  const reply =
+    idioma === "es"
+      ? [
+          "Puedes consultar la disponibilidad y completar la reserva aquí:",
+          bookingLink,
+          "",
+          "Si deseas reservar para más de una persona, cada persona debe completar su propia reserva por separado.",
+        ].join("\n")
+      : idioma === "pt"
+      ? [
+          "Você pode consultar a disponibilidade e concluir a reserva aqui:",
+          bookingLink,
+          "",
+          "Para reservar para mais de uma pessoa, cada pessoa deve concluir sua própria reserva separadamente.",
+        ].join("\n")
+      : [
+          "You can check availability and complete the booking here:",
+          bookingLink,
+          "",
+          "If you are booking for more than one person, each person must complete a separate reservation.",
+        ].join("\n");
+
   return {
     handled: true,
-    reply: idioma === "es"
-      ? `Puedes agendar aquí: ${bookingLink}`
-      : `You can book here: ${bookingLink}`,
-    ctxPatch: { 
-        booking: { step: "idle" }, 
-        booking_last_touch_at: Date.now(), },
-    };
+    reply,
+    ctxPatch: {
+      booking: {
+        ...(booking || {}),
+        step: "idle",
+      },
+      booking_last_touch_at: Date.now(),
+    },
+  };
 }
 
-// 3) Si NO hay link y no hay provider disponible: no inicies flujo
-if (wantsBooking && !bookingLink && !providerAvailable) {
+// 3) Sin proveedor activo y sin enlace externo:
+// no iniciar un flujo que no podrá completarse.
+if (
+  wantsExternalBooking &&
+  !providerConnected &&
+  !bookingLink
+) {
   return {
     handled: true,
-    reply: idioma === "es"
-      ? "El agendamiento no está disponible en este momento."
-      : "Scheduling is unavailable right now.",
-    ctxPatch: { 
-        booking: { step: "idle" }, 
-        booking_last_touch_at: Date.now(), },
+    reply:
+      idioma === "es"
+        ? "El agendamiento no está disponible en este momento."
+        : idioma === "pt"
+        ? "O agendamento não está disponível no momento."
+        : "Scheduling is unavailable right now.",
+    ctxPatch: {
+      booking: {
+        ...(booking || {}),
+        step: "idle",
+      },
+      booking_last_touch_at: Date.now(),
+    },
   };
 }
 
