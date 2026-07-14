@@ -62,11 +62,21 @@ function buildDefaultTargets(): BusinessInfoFacetTargets {
 function hasExplicitGeneralScheduleScope(
   args: ResolveBusinessInfoFacetTargetsArgs
 ): boolean {
-  const scope = String(args.routingHints?.businessInfoScope || "")
+  const businessInfoScope = String(
+    args.routingHints?.businessInfoScope || ""
+  )
     .trim()
     .toLowerCase();
 
-  return scope === "schedule" || scope === "overview";
+  const catalogScope = String(args.routingHints?.catalogScope || "")
+    .trim()
+    .toLowerCase();
+
+  return (
+    businessInfoScope === "schedule" ||
+    businessInfoScope === "overview" ||
+    catalogScope === "overview"
+  );
 }
 
 function hasExplicitGeneralLocationScope(
