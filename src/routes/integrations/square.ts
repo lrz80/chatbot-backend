@@ -18,10 +18,10 @@ import { createSquareBookingFlowFromInternalServiceForTenant } from "../../lib/i
 import { clearTenantBookingProviderCache } from "../../lib/appointments/booking/providers/resolveTenantBookingProvider";
 import {
   getBookingProviderConnection,
-  getBookingProviderSecrets,
 } from "../../lib/appointments/booking/providers/providerConnections.repo";
 import { syncSquareServiceMappingsForTenant } from "../../lib/integrations/square/syncSquareServiceMappingsForTenant";
 import { getTenantInternalBookingServices } from "../../lib/appointments/serviceBookingRules.repo";
+import { getValidSquareAccessTokenForTenant } from "../../lib/integrations/square/getValidSquareAccessTokenForTenant";
 
 const router = Router();
 
@@ -858,27 +858,15 @@ router.get("/tenant/services", async (req, res) => {
       });
     }
 
-    const connection = await getBookingProviderConnection(tenantId, "square");
+    const tokenResult =
+      await getValidSquareAccessTokenForTenant(tenantId);
 
-    if (!connection || connection.status !== "active") {
-      return res.status(404).json({
-        ok: false,
-        error: "SQUARE_CONNECTION_NOT_FOUND",
-      });
+    if (!tokenResult.ok) {
+      return res.status(tokenResult.status || 500).json(tokenResult);
     }
 
-    const secrets = await getBookingProviderSecrets(tenantId, "square");
-    const accessToken = String(secrets?.accessToken || "").trim();
-
-    const environment =
-      connection.metadata?.environment === "sandbox" ? "sandbox" : "production";
-
-    if (!accessToken) {
-      return res.status(400).json({
-        ok: false,
-        error: "SQUARE_ACCESS_TOKEN_MISSING",
-      });
-    }
+    const accessToken = tokenResult.accessToken;
+    const environment = tokenResult.environment;
 
     const result = await getSquareBookableServices({
       accessToken,
@@ -972,27 +960,15 @@ router.get("/tenant/team-members", async (req, res) => {
       });
     }
 
-    const connection = await getBookingProviderConnection(tenantId, "square");
+    const tokenResult =
+      await getValidSquareAccessTokenForTenant(tenantId);
 
-    if (!connection || connection.status !== "active") {
-      return res.status(404).json({
-        ok: false,
-        error: "SQUARE_CONNECTION_NOT_FOUND",
-      });
+    if (!tokenResult.ok) {
+      return res.status(tokenResult.status || 500).json(tokenResult);
     }
 
-    const secrets = await getBookingProviderSecrets(tenantId, "square");
-    const accessToken = String(secrets?.accessToken || "").trim();
-
-    const environment =
-      connection.metadata?.environment === "sandbox" ? "sandbox" : "production";
-
-    if (!accessToken) {
-      return res.status(400).json({
-        ok: false,
-        error: "SQUARE_ACCESS_TOKEN_MISSING",
-      });
-    }
+    const accessToken = tokenResult.accessToken;
+    const environment = tokenResult.environment;
 
     const baseUrl =
       environment === "sandbox"

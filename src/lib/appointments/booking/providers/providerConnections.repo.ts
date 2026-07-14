@@ -35,6 +35,14 @@ export type UpsertBookingProviderConnectionInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type UpdateBookingProviderTokensInput = {
+  tenantId: string;
+  provider: BookingProvider;
+  accessToken: string;
+  refreshToken?: string | null;
+  tokenExpiresAt: string | null;
+};
+
 export async function getBookingProviderConnection(
   tenantId: string,
   provider: BookingProvider
@@ -170,6 +178,51 @@ export async function upsertBookingProviderConnection(
   );
 
   return mapRow(rows[0]);
+}
+
+export async function updateBookingProviderTokens(
+  input: UpdateBookingProviderTokensInput
+): Promise<boolean> {
+  const tenantId = String(input.tenantId || "").trim();
+  const accessToken = String(input.accessToken || "").trim();
+
+  if (!tenantId || !accessToken) {
+    return false;
+  }
+
+  const encryptedAccessToken = encryptToken(accessToken);
+
+  const refreshToken =
+    typeof input.refreshToken === "string"
+      ? input.refreshToken.trim()
+      : "";
+
+  const encryptedRefreshToken = refreshToken
+    ? encryptToken(refreshToken)
+    : null;
+
+  const { rowCount } = await pool.query(
+    `
+      UPDATE booking_provider_connections
+      SET
+        access_token = $3,
+        refresh_token = COALESCE($4, refresh_token),
+        token_expires_at = $5,
+        status = 'active',
+        updated_at = NOW()
+      WHERE tenant_id = $1
+        AND provider = $2
+    `,
+    [
+      tenantId,
+      input.provider,
+      encryptedAccessToken,
+      encryptedRefreshToken,
+      input.tokenExpiresAt,
+    ]
+  );
+
+  return (rowCount ?? 0) > 0;
 }
 
 function mapRow(row: any): BookingProviderConnection {

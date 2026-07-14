@@ -1,8 +1,5 @@
 //src/lib/appointments/booking/providers/squareProvider.ts
-import {
-  getBookingProviderConnection,
-  getBookingProviderSecrets,
-} from "./providerConnections.repo";
+import { getSquareConnectionForTenant } from "../../../integrations/square/getSquareConnectionForTenant";
 import {
   squareCreateBooking,
   squareCreateCustomer,
@@ -139,10 +136,6 @@ async function resolveSquareCustomerIdForBooking(args: {
   }
 
   return cleanString(result.data.customer?.id) || null;
-}
-
-function resolveSquareEnvironment(value: unknown): SquareEnvironment {
-  return value === "sandbox" ? "sandbox" : "production";
 }
 
 function cleanString(value: unknown): string {
@@ -570,12 +563,18 @@ export class SquareProvider implements BookingProviderAdapter {
       timeZone: input.timeZone,
     });
 
-    const connection = await getBookingProviderConnection(
-      input.tenantId,
-      this.provider
+    const connectionResult = await getSquareConnectionForTenant(
+      input.tenantId
     );
 
-    if (!connection || connection.status !== "active") {
+    if (!connectionResult.ok) {
+      console.error("🟥 [SQUARE_PROVIDER] valid connection unavailable", {
+        tenantId: input.tenantId,
+        status: connectionResult.status,
+        error: connectionResult.error,
+        details: connectionResult.details,
+      });
+
       return {
         ok: false,
         provider: this.provider,
@@ -585,14 +584,14 @@ export class SquareProvider implements BookingProviderAdapter {
       };
     }
 
-    const secrets = await getBookingProviderSecrets(input.tenantId, this.provider);
-    const accessToken = cleanString(secrets?.accessToken);
-    const environment = resolveSquareEnvironment(connection.metadata?.["environment"]);
+    const connection = connectionResult.connection;
+    const accessToken = connection.accessToken;
+    const environment = connection.environment;
 
     const squarePayload = await resolveSquarePayloadForInput({
       tenantId: input.tenantId,
       summary: input.summary,
-      connectionLocationId: connection.external_location_id,
+      connectionLocationId: connection.locationId,
       metadata: connection.metadata,
       payload: input.providerPayload?.square,
     });
@@ -730,13 +729,17 @@ export class SquareProvider implements BookingProviderAdapter {
       timeZone: input.timeZone,
     });
 
-    const connection = await getBookingProviderConnection(
-      input.tenantId,
-      this.provider
+    const connectionResult = await getSquareConnectionForTenant(
+      input.tenantId
     );
 
-    if (!connection || connection.status !== "active") {
-      console.log("🟥 [SQUARE_PROVIDER] no active connection");
+    if (!connectionResult.ok) {
+      console.error("🟥 [SQUARE_PROVIDER] valid connection unavailable", {
+        tenantId: input.tenantId,
+        status: connectionResult.status,
+        error: connectionResult.error,
+        details: connectionResult.details,
+      });
 
       return {
         ok: false,
@@ -746,14 +749,14 @@ export class SquareProvider implements BookingProviderAdapter {
       };
     }
 
-    const secrets = await getBookingProviderSecrets(input.tenantId, this.provider);
-    const accessToken = cleanString(secrets?.accessToken);
-    const environment = resolveSquareEnvironment(connection.metadata?.["environment"]);
+    const connection = connectionResult.connection;
+    const accessToken = connection.accessToken;
+    const environment = connection.environment;
 
     const squarePayload = await resolveSquarePayloadForInput({
       tenantId: input.tenantId,
       summary: input.summary,
-      connectionLocationId: connection.external_location_id,
+      connectionLocationId: connection.locationId,
       metadata: connection.metadata,
       payload: input.providerPayload?.square,
     });

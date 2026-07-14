@@ -1,11 +1,8 @@
-//src/lib/integrations/square/resolveSquareStaffMemberForTenant.ts
-import {
-  getBookingProviderConnection,
-  getBookingProviderSecrets,
-} from "../../appointments/booking/providers/providerConnections.repo";
+// src/lib/integrations/square/resolveSquareStaffMemberForTenant.ts
+
+import { getSquareConnectionForTenant } from "./getSquareConnectionForTenant";
 import {
   squareListTeamMemberBookingProfiles,
-  type SquareEnvironment,
   type SquareTeamMemberBookingProfile,
 } from "../../appointments/booking/providers/square.client";
 
@@ -23,10 +20,6 @@ function normalizeComparable(value: unknown): string {
     .trim();
 }
 
-function resolveSquareEnvironment(value: unknown): SquareEnvironment {
-  return value === "sandbox" ? "sandbox" : "production";
-}
-
 function tokenize(value: unknown): string[] {
   return normalizeComparable(value).split(" ").filter(Boolean);
 }
@@ -38,13 +31,20 @@ function computeStaffMatchScore(params: {
   const input = normalizeComparable(params.input);
   const displayName = normalizeComparable(params.displayName);
 
-  if (!input || !displayName) return 0;
-  if (input === displayName) return 1;
+  if (!input || !displayName) {
+    return 0;
+  }
+
+  if (input === displayName) {
+    return 1;
+  }
 
   const inputTokens = new Set(tokenize(input));
   const nameTokens = new Set(tokenize(displayName));
 
-  if (inputTokens.size === 0 || nameTokens.size === 0) return 0;
+  if (inputTokens.size === 0 || nameTokens.size === 0) {
+    return 0;
+  }
 
   let overlap = 0;
 
@@ -147,6 +147,7 @@ export type ResolveSquareStaffMemberForTenantResult =
       error:
         | "SQUARE_PROVIDER_NOT_CONFIGURED"
         | "SQUARE_ACCESS_TOKEN_MISSING"
+        | "SQUARE_TOKEN_REFRESH_FAILED"
         | "SQUARE_TEAM_MEMBERS_FETCH_FAILED"
         | "SQUARE_STAFF_NOT_FOUND"
         | "SQUARE_STAFF_AMBIGUOUS";
@@ -183,26 +184,30 @@ export async function resolveSquareStaffMemberForTenant(params: {
     };
   }
 
-  const connection = await getBookingProviderConnection(tenantId, "square");
+  const connectionResult = await getSquareConnectionForTenant(tenantId);
 
-  if (!connection || connection.status !== "active") {
+  if (!connectionResult.ok) {
+    const tokenError =
+      connectionResult.error === "SQUARE_REFRESH_TOKEN_MISSING" ||
+      connectionResult.error === "SQUARE_TOKEN_REFRESH_FAILED" ||
+      connectionResult.error === "SQUARE_REFRESHED_TOKEN_SAVE_FAILED";
+
     return {
       ok: false,
-      error: "SQUARE_PROVIDER_NOT_CONFIGURED",
+      error: tokenError
+        ? "SQUARE_TOKEN_REFRESH_FAILED"
+        : connectionResult.error === "SQUARE_ACCESS_TOKEN_MISSING"
+          ? "SQUARE_ACCESS_TOKEN_MISSING"
+          : "SQUARE_PROVIDER_NOT_CONFIGURED",
+      status: connectionResult.status,
+      details: {
+        sourceError: connectionResult.error,
+        sourceDetails: connectionResult.details,
+      },
     };
   }
 
-  const secrets = await getBookingProviderSecrets(tenantId, "square");
-  const accessToken = clean(secrets?.accessToken);
-
-  if (!accessToken) {
-    return {
-      ok: false,
-      error: "SQUARE_ACCESS_TOKEN_MISSING",
-    };
-  }
-
-  const environment = resolveSquareEnvironment(connection.metadata?.environment);
+  const { accessToken, environment } = connectionResult.connection;
 
   const staffResult = await squareListTeamMemberBookingProfiles({
     accessToken,
@@ -218,13 +223,21 @@ export async function resolveSquareStaffMemberForTenant(params: {
     };
   }
 
-  const profiles = Array.isArray(staffResult.data.team_member_booking_profiles)
+  const profiles = Array.isArray(
+    staffResult.data.team_member_booking_profiles
+  )
     ? staffResult.data.team_member_booking_profiles
     : [];
 
-  const bookableProfiles = profiles.filter((profile: SquareTeamMemberBookingProfile) => {
-    return profile.is_bookable === true && clean(profile.team_member_id) && clean(profile.display_name);
-  });
+  const bookableProfiles = profiles.filter(
+    (profile: SquareTeamMemberBookingProfile) => {
+      return (
+        profile.is_bookable === true &&
+        Boolean(clean(profile.team_member_id)) &&
+        Boolean(clean(profile.display_name))
+      );
+    }
+  );
 
   const candidates = bookableProfiles
     .map((profile) => {
@@ -250,6 +263,14 @@ export async function resolveSquareStaffMemberForTenant(params: {
 
   const best = candidates[0];
   const second = candidates[1];
+
+  if (!best) {
+    return {
+      ok: false,
+      error: "SQUARE_STAFF_NOT_FOUND",
+      candidates: [],
+    };
+  }
 
   if (second && best.score === second.score) {
     return {

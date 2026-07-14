@@ -1,8 +1,10 @@
-//src/lib/integrations/square/getSquareConnectionForTenant.ts
+// src/lib/integrations/square/getSquareConnectionForTenant.ts
+
 import {
   getBookingProviderConnection,
   getBookingProviderSecrets,
 } from "../../appointments/booking/providers/providerConnections.repo";
+import { getValidSquareAccessTokenForTenant } from "./getValidSquareAccessTokenForTenant";
 
 type SquareEnvironment = "sandbox" | "production";
 
@@ -17,8 +19,9 @@ type GetSquareConnectionForTenantResult =
         locationId: string | null;
         environment: SquareEnvironment;
         expiresAt: string | null;
-        status: "active" | "inactive" | "error";
+        status: "active";
         metadata: Record<string, unknown>;
+        tokenRefreshed: boolean;
       };
     }
   | {
@@ -28,14 +31,14 @@ type GetSquareConnectionForTenantResult =
       details?: unknown;
     };
 
-function resolveSquareEnvironment(value: unknown): SquareEnvironment {
-  return value === "sandbox" ? "sandbox" : "production";
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
 }
 
 export async function getSquareConnectionForTenant(
   tenantIdInput: string
 ): Promise<GetSquareConnectionForTenantResult> {
-  const tenantId = String(tenantIdInput || "").trim();
+  const tenantId = clean(tenantIdInput);
 
   if (!tenantId) {
     return {
@@ -45,9 +48,18 @@ export async function getSquareConnectionForTenant(
     };
   }
 
-  const connection = await getBookingProviderConnection(tenantId, "square");
+  /*
+   * Primero validamos que exista una conexión activa.
+   *
+   * También necesitamos los datos no sensibles de la conexión:
+   * merchantId, locationId y metadata.
+   */
+  const storedConnection = await getBookingProviderConnection(
+    tenantId,
+    "square"
+  );
 
-  if (!connection) {
+  if (!storedConnection) {
     return {
       ok: false,
       status: 404,
@@ -55,41 +67,63 @@ export async function getSquareConnectionForTenant(
     };
   }
 
-  if (connection.status !== "active") {
+  if (storedConnection.status !== "active") {
     return {
       ok: false,
       status: 409,
       error: "SQUARE_CONNECTION_NOT_ACTIVE",
       details: {
-        status: connection.status,
+        status: storedConnection.status,
       },
     };
   }
 
-  const secrets = await getBookingProviderSecrets(tenantId, "square");
+  /*
+   * Este helper revisa la expiración del access token.
+   *
+   * Si el token está vigente, lo devuelve.
+   * Si está próximo a expirar o ya expiró, usa el refresh token,
+   * guarda las nuevas credenciales y devuelve el nuevo access token.
+   */
+  const tokenResult = await getValidSquareAccessTokenForTenant(tenantId);
 
-  const accessToken = String(secrets?.accessToken || "").trim();
-
-  if (!accessToken) {
+  if (!tokenResult.ok) {
     return {
       ok: false,
-      status: 400,
-      error: "SQUARE_ACCESS_TOKEN_MISSING",
+      status: tokenResult.status ?? 500,
+      error: tokenResult.error,
+      details: tokenResult.details,
     };
   }
+
+  /*
+   * Volvemos a leer los secretos porque el helper pudo haber renovado
+   * y actualizado tanto refresh_token como token_expires_at.
+   *
+   * Esto mantiene el contrato actual del helper sin entregar información
+   * desactualizada a los consumidores existentes.
+   */
+  const currentSecrets = await getBookingProviderSecrets(
+    tenantId,
+    "square"
+  );
 
   return {
     ok: true,
     connection: {
-      tenantId: connection.tenant_id,
-      accessToken,
-      refreshToken: secrets?.refreshToken || null,
-      merchantId: connection.external_account_id,
-      locationId: connection.external_location_id,
-      environment: resolveSquareEnvironment(connection.metadata?.environment),
-      expiresAt: secrets?.tokenExpiresAt || connection.token_expires_at || null,
-      status: connection.status,
-      metadata: connection.metadata || {},
+      tenantId: storedConnection.tenant_id,
+      accessToken: tokenResult.accessToken,
+      refreshToken: currentSecrets?.refreshToken || null,
+      merchantId: storedConnection.external_account_id,
+      locationId: storedConnection.external_location_id,
+      environment: tokenResult.environment,
+      expiresAt:
+        currentSecrets?.tokenExpiresAt ||
+        storedConnection.token_expires_at ||
+        null,
+      status: "active",
+      metadata: storedConnection.metadata || {},
+      tokenRefreshed: tokenResult.refreshed,
     },
   };
 }
