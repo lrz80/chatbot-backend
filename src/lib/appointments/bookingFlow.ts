@@ -395,6 +395,7 @@ export async function bookingFlowMvp(opts: {
   console.log("[BOOKING wantsBooking]", {
     userText,
     wantsBooking,
+    wantsExternalBooking,
     specificTime,
     rawWants,
     directReq,
@@ -420,16 +421,16 @@ export async function bookingFlowMvp(opts: {
     capability &&
     hasAppointmentContext(userText) &&
     !hasExplicitDateTime(userText) &&
-    !directReq
+    !directReq &&
+    !wantsExternalBooking
   ) {
-    // ✅ No hardcode aquí. Que responda el LLM con el prompt del tenant.
     return {
       handled: false,
       ctxPatch: {
         booking: { step: "idle" },
         booking_last_touch_at: Date.now(),
       },
-    }; 
+    };
   }
 
   const gate = await canUseChannel(tenantId, "google_calendar");
