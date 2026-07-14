@@ -203,11 +203,24 @@ export async function composeBusinessInfoAnswer(
     }
   }
 
-  const hasExternalAction =
-    externalAction?.type === "link" &&
-    String(externalAction?.targetUrl || "").trim().length > 0;
+  const externalActionUrl =
+    externalAction?.type === "link"
+      ? String(externalAction.targetUrl || "").trim()
+      : "";
 
-  const canonicalBody = blocks.filter(Boolean).join("\n\n").trim();
+  const hasExternalAction = externalActionUrl.length > 0;
+
+  const canonicalContent = blocks.filter(Boolean).join("\n\n").trim();
+
+  const canonicalBody = [
+    canonicalContent,
+    hasExternalAction && !canonicalContent.includes(externalActionUrl)
+      ? externalActionUrl
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 
   if (!canonicalBody && !hasExternalAction) {
     return {
@@ -241,18 +254,12 @@ export async function composeBusinessInfoAnswer(
     contactoNorm,
     messageId,
     promptBaseMem,
-    fastpathText: canonicalBody || String(externalAction?.targetUrl || "").trim(),
+    fastpathText: canonicalBody,
     fp: {
-      reply: canonicalBody || String(externalAction?.targetUrl || "").trim(),
+      reply: canonicalBody,
       source: finalSource,
       intent: finalIntent,
       catalogPayload: undefined,
-      externalAction: hasExternalAction
-        ? {
-            type: "link",
-            targetUrl: String(externalAction?.targetUrl || "").trim(),
-          }
-        : undefined,
     },
     detectedIntent: finalIntent,
     intentFallback: finalIntent,
