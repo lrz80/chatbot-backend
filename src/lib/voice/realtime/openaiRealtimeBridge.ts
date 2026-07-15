@@ -138,7 +138,12 @@ function extractExactBookingPromptFromInstructions(
 function isExactBookingPromptResponseSource(source: unknown): boolean {
   const value = clean(source);
 
-  return value.startsWith("tool_followup:submit_booking_step");
+  return (
+    value === "tool_followup:get_booking_flow" ||
+    value === "tool_followup:submit_booking_step" ||
+    value === "tool_followup:submit_booking_step:retry" ||
+    value === "tool_followup:submit_booking_step:exact_retry"
+  );
 }
 
 function isAssistantTranscriptCompatibleWithExpectedPrompt(params: {
@@ -866,7 +871,7 @@ export async function createOpenAiRealtimeBridge({
       );
 
       const isBookingToolFollowupResponse =
-        createdResponseSource.startsWith("tool_followup:") &&
+        isExactBookingPromptResponseSource(createdResponseSource) &&
         Boolean(pendingBookingStepKey);
 
       if (isBookingToolFollowupResponse) {
@@ -1499,22 +1504,16 @@ export async function createOpenAiRealtimeBridge({
         (realtimeState as any).bookingTurnStatus
       );
 
-      const isToolFollowupResponse =
-        typeof completedResponseSource === "string" &&
-        completedResponseSource.startsWith("tool_followup:");
-
-      const hasPendingBookingStep = !!pendingBookingStepKey;
+      const hasPendingBookingStep = Boolean(pendingBookingStepKey);
 
       /**
-       * A tool follow-up can create or continue a booking prompt.
-       *
-       * Do not require bookingTurnStatus === "waiting_assistant_prompt" here,
-       * because some tools, like create_appointment, can return a next_required_step
-       * after completing a side effect. In that case the pending step may already
-       * exist, but the runtime status can still be stale.
+       * Only deterministic booking prompts should open a booking turn.
+       * Operational follow-ups, such as provider errors, must not be treated
+       * as questions that expect another booking-step answer.
        */
       const isBookingAssistantPromptResponse =
-        isToolFollowupResponse && hasPendingBookingStep;
+        isExactBookingPromptResponseSource(completedResponseSource) &&
+        hasPendingBookingStep;
 
       if (
         isBookingAssistantPromptResponse &&
@@ -1619,7 +1618,10 @@ export async function createOpenAiRealtimeBridge({
        * the booking turn may open after the transcript was already accepted.
        * This catch-up prevents the user from having to repeat the same answer.
        */
-      if (!isCancelledExactPromptResponse) {
+      if (
+        !isCancelledExactPromptResponse &&
+        isBookingAssistantPromptResponse
+      ) {
         bookingCoordinator.catchUpBookingStepIfCallerAnsweredBeforeTurnOpened();
       }
 
