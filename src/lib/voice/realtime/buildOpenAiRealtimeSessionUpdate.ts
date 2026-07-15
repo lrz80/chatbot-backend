@@ -48,45 +48,29 @@ function buildRealtimeTurnDetection(): Record<string, unknown> {
   return {
     type: "server_vad",
 
-    /**
-     * Higher = less sensitive.
-     * Speakerphone/echo needs a stricter threshold than headphones.
-     */
     threshold: numberFromEnv({
       key: "OPENAI_REALTIME_VAD_THRESHOLD",
-      fallback: 0.9,
+      fallback: 0.94,
       min: 0.5,
       max: 0.98,
     }),
 
-    /**
-     * Keeps a small amount of audio before speech starts,
-     * so words are not clipped when the caller really speaks.
-     */
     prefix_padding_ms: numberFromEnv({
       key: "OPENAI_REALTIME_VAD_PREFIX_PADDING_MS",
-      fallback: 450,
+      fallback: 300,
       min: 100,
       max: 1000,
     }),
 
-    /**
-     * Requires longer silence before considering the user turn complete.
-     * This reduces false turns from short speaker noise.
-     */
     silence_duration_ms: numberFromEnv({
       key: "OPENAI_REALTIME_VAD_SILENCE_DURATION_MS",
-      fallback: 1300,
+      fallback: 900,
       min: 500,
       max: 2500,
     }),
 
     interrupt_response: false,
 
-    /**
-     * Keep this false because your server already controls when responses
-     * are created through requestRealtimeResponse().
-     */
     create_response: booleanFromEnv({
       key: "OPENAI_REALTIME_VAD_CREATE_RESPONSE",
       fallback: false,
