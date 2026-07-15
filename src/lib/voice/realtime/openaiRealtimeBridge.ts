@@ -866,6 +866,25 @@ export async function createOpenAiRealtimeBridge({
       didLogInternalModelResolutionAudioSuppressed = false;
 
       const createdResponseSource = clean(responseState.activeResponseSource || "");
+
+      if (
+        createdResponseSource ===
+        "tool_followup:submit_booking_step:provider_not_configured"
+      ) {
+        realtimeState = {
+          ...realtimeState,
+          bookingTurnStatus: "idle",
+          pendingBookingStepKey: "",
+          pendingBookingStepPrompt: "",
+          pendingBookingStepSlot: "",
+          pendingBookingStepExpectedType: "",
+          pendingBookingStepValidationConfig: null,
+          pendingBookingStepPromptAnchorSeq: undefined,
+        } as CallState;
+
+        bookingFlowLoaded = false;
+      }
+
       const pendingBookingStepKey = clean(
         (realtimeState as any).pendingBookingStepKey
       );

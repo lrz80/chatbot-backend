@@ -1280,11 +1280,22 @@ export async function handleRealtimeToolCall(
         }
       );
 
+      const exitedBookingState = {
+        ...realtimeStateWithBookingLanguage,
+        bookingTurnStatus: "idle",
+        pendingBookingStepKey: "",
+        pendingBookingStepPrompt: "",
+        pendingBookingStepSlot: "",
+        pendingBookingStepExpectedType: "",
+        pendingBookingStepValidationConfig: null,
+        pendingBookingStepPromptAnchorSeq: undefined,
+      } as CallState;
+
       return {
         consumed: true,
         result: toolResult as RealtimeToolResult,
-        realtimeState: realtimeStateWithBookingLanguage,
-        bookingFlowLoaded: nextBookingFlowLoaded,
+        realtimeState: exitedBookingState,
+        bookingFlowLoaded: false,
         hangupRequestedByTool,
         callEnding: nextCallEnding,
         resetLastUserDigits: true,
