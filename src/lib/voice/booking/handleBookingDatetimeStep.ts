@@ -82,7 +82,11 @@ export type CanonicalBookingDatetimeStepResult =
         | "empty_datetime"
         | "incomplete_datetime"
         | "slot_unavailable"
-        | "availability_window";
+        | "availability_window"
+        | "provider_not_configured"
+        | "provider_auth_required"
+        | "provider_unavailable"
+        | "provider_check_failed";
     }
   | {
       kind: "resolved";
@@ -402,7 +406,24 @@ export async function executeCanonicalBookingDatetimeStep(
     scheduleValidationReason === "schedule_not_available" ||
     scheduleValidationReason === "lead_time_not_met";
 
-  const isIncompleteDatetimeReason = !isUnavailableReason;
+  const isProviderNotConfiguredReason =
+    scheduleValidationReason === "provider_not_configured";
+
+  const isProviderAuthRequiredReason =
+    scheduleValidationReason === "provider_auth_required";
+
+  const isProviderUnavailableReason =
+    scheduleValidationReason === "provider_unavailable";
+
+  const isProviderCheckFailedReason =
+    scheduleValidationReason === "provider_check_failed";
+
+  const isIncompleteDatetimeReason =
+    !isUnavailableReason &&
+    !isProviderNotConfiguredReason &&
+    !isProviderAuthRequiredReason &&
+    !isProviderUnavailableReason &&
+    !isProviderCheckFailedReason;
 
   if (!scheduleValidation.ok) {
         const rawTopLevelSuggestedStarts = Array.isArray(
@@ -563,7 +584,15 @@ export async function executeCanonicalBookingDatetimeStep(
       prompt: retryPrompt,
       context: isIncompleteDatetimeReason
         ? "incomplete_datetime"
-        : "slot_unavailable",
+        : isProviderNotConfiguredReason
+          ? "provider_not_configured"
+          : isProviderAuthRequiredReason
+            ? "provider_auth_required"
+            : isProviderUnavailableReason
+              ? "provider_unavailable"
+              : isProviderCheckFailedReason
+                ? "provider_check_failed"
+                : "slot_unavailable",
     };
   }
 
@@ -643,7 +672,17 @@ export async function handleBookingDatetimeStep(
           ? `booking_retry_empty_datetime:${currentStep.step_key}`
           : canonical.context === "incomplete_datetime"
             ? `booking_retry_incomplete_datetime:${currentStep.step_key}`
-            : `booking_retry:${currentStep.step_key}`,
+            : canonical.context === "provider_not_configured"
+              ? `booking_retry_provider_not_configured:${currentStep.step_key}`
+              : canonical.context === "provider_auth_required"
+                ? `booking_retry_provider_auth_required:${currentStep.step_key}`
+                : canonical.context === "provider_unavailable"
+                  ? `booking_retry_provider_unavailable:${currentStep.step_key}`
+                  : canonical.context === "provider_check_failed"
+                    ? `booking_retry_provider_check_failed:${currentStep.step_key}`
+                    : canonical.context === "availability_window"
+                      ? `booking_retry_availability_window:${currentStep.step_key}`
+                      : `booking_retry_slot_unavailable:${currentStep.step_key}`,
     });
 
     return {

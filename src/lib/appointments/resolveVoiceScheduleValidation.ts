@@ -44,6 +44,19 @@ export type ResolveVoiceScheduleValidationResult =
       availableTimes: string[];
       suggestedStarts: string[];
       timeZone: string;
+    }
+  | {
+      ok: false;
+      reason:
+        | "provider_not_configured"
+        | "provider_auth_required"
+        | "provider_unavailable"
+        | "provider_check_failed";
+      providerError: string;
+      requestedAt: Date;
+      availableTimes: [];
+      suggestedStarts: string[];
+      timeZone: string;
     };
 
 function dedupeStringArray(values: string[]): string[] {
@@ -333,6 +346,12 @@ export async function resolveVoiceScheduleValidation(
   });
 
   if (!requestedAvailability.ok) {
+    const providerError = String(
+      (requestedAvailability as { error?: unknown }).error ?? ""
+    )
+      .trim()
+      .toUpperCase();
+
     const rawProviderSuggestedStarts = normalizeSuggestedStarts(
       (requestedAvailability as { suggestedStarts?: unknown }).suggestedStarts
     );
@@ -346,20 +365,39 @@ export async function resolveVoiceScheduleValidation(
       ...rawScheduleSuggestedStarts,
     ]);
 
-    const suggestedStarts = (
-      await filterBookableSuggestedStarts({
-        tenantId: params.tenantId,
-        serviceName: params.serviceName,
-        candidateStarts: rawSuggestedStarts,
-        durationMin: defaultDurationMin,
-        bufferMin,
-        timeZone,
-      })
-    ).slice(0, 3);
+    const shouldResolveSuggestions =
+      providerError === "SLOT_UNAVAILABLE" ||
+      providerError === "SLOT_BUSY" ||
+      providerError === "TIME_SLOT_UNAVAILABLE";
+
+    const suggestedStarts = shouldResolveSuggestions
+      ? (
+          await filterBookableSuggestedStarts({
+            tenantId: params.tenantId,
+            serviceName: params.serviceName,
+            candidateStarts: rawSuggestedStarts,
+            durationMin: defaultDurationMin,
+            bufferMin,
+            timeZone,
+          })
+        ).slice(0, 3)
+      : [];
 
     return {
       ok: false,
-      reason: "schedule_not_available",
+      reason:
+        providerError === "PROVIDER_NOT_CONFIGURED"
+          ? "provider_not_configured"
+          : providerError === "PROVIDER_AUTH_REQUIRED"
+            ? "provider_auth_required"
+            : providerError === "PROVIDER_UNAVAILABLE"
+              ? "provider_unavailable"
+              : providerError === "SLOT_UNAVAILABLE" ||
+                  providerError === "SLOT_BUSY" ||
+                  providerError === "TIME_SLOT_UNAVAILABLE"
+                ? "schedule_not_available"
+                : "provider_check_failed",
+      providerError: providerError || "UNKNOWN_PROVIDER_ERROR",
       requestedAt: parsed.requestedAt,
       availableTimes: [],
       suggestedStarts,

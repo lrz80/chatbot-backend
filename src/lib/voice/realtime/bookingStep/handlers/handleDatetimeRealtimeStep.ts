@@ -137,7 +137,15 @@ export async function handleDatetimeRealtimeStep(params: {
           ? undefined
           : datetimeResult.context === "slot_unavailable"
             ? "SLOT_UNAVAILABLE"
-            : "INVALID_DATETIME_STEP",
+            : datetimeResult.context === "provider_not_configured"
+              ? "PROVIDER_NOT_CONFIGURED"
+              : datetimeResult.context === "provider_auth_required"
+                ? "PROVIDER_AUTH_REQUIRED"
+                : datetimeResult.context === "provider_unavailable"
+                  ? "PROVIDER_UNAVAILABLE"
+                  : datetimeResult.context === "provider_check_failed"
+                    ? "PROVIDER_CHECK_FAILED"
+                    : "INVALID_DATETIME_STEP",
         action_required: isAvailabilityWindow
           ? "choose_from_availability_window"
           : undefined,
