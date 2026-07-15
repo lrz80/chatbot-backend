@@ -1185,6 +1185,112 @@ export async function handleRealtimeToolCall(
       };
     }
 
+    const normalizedToolError = clean(
+      (toolResult as any)?.error || ""
+    ).toUpperCase();
+
+    const shouldHandleProviderNotConfigured =
+      toolName === "submit_booking_step" &&
+      (toolResult as any)?.ok === false &&
+      normalizedToolError === "PROVIDER_NOT_CONFIGURED";
+
+    if (shouldHandleProviderNotConfigured) {
+      const activeBookingLanguage = clean(
+        (realtimeStateWithBookingLanguage as any).conversationLanguage ||
+          (nextRealtimeState as any).conversationLanguage ||
+          (realtimeState as any).conversationLanguage ||
+          ""
+      );
+
+      const lockedBookingLocale = getBookingLockedLocale(
+        realtimeStateWithBookingLanguage
+      );
+
+      console.warn(
+        "[VOICE_REALTIME][BOOKING_PROVIDER_NOT_CONFIGURED_FOLLOWUP_REQUESTED]",
+        {
+          callSid,
+          toolName,
+          error: normalizedToolError,
+          currentLocale,
+          activeBookingLanguage,
+          lockedBookingLocale,
+          source:
+            "tool_followup:submit_booking_step:provider_not_configured",
+        }
+      );
+
+      requestRealtimeResponse(
+        buildToollessResponse(
+          [
+            "Produce one short spoken response for the caller.",
+
+            "",
+            "Language rules:",
+            "Speak entirely in the caller's active conversation language.",
+            "Use the booking language and the previous assistant message as the strongest language signals.",
+            "Use the runtime locale only as a fallback.",
+            "Support any language.",
+            "Do not switch languages.",
+
+            "",
+            "Meaning to communicate:",
+            "Briefly apologize.",
+            "Explain that the reservation cannot be completed during the call right now.",
+            "Tell the caller that they need to finish the reservation online.",
+            "If an online booking link is available in the business context, tell the caller they can use that link.",
+            "If no booking link is available, do not invent one and do not claim that a link will be sent.",
+
+            "",
+            "Accuracy rules:",
+            "Do not say that the caller's date or time was misunderstood.",
+            "Do not say that the requested time is unavailable.",
+            "Do not ask the caller for another date or time.",
+            "Do not mention providers, integrations, configuration, APIs, tools, backend systems, internal errors, or technical details.",
+            "Do not expose the error code.",
+            "Do not invent availability.",
+            "Do not claim that an appointment was created.",
+
+            "",
+            "Style rules:",
+            "Keep the response concise, natural, and suitable for a live phone call.",
+            "Use no more than two short sentences.",
+
+            "",
+            `Active booking language: ${JSON.stringify(
+              activeBookingLanguage || "unknown"
+            )}`,
+            `Locked booking locale: ${JSON.stringify(
+              lockedBookingLocale || "unknown"
+            )}`,
+            `Runtime locale fallback: ${JSON.stringify(
+              clean(currentLocale) || "unknown"
+            )}`,
+            `Previous assistant message: ${JSON.stringify(
+              clean(
+                (realtimeStateWithBookingLanguage as any)
+                  .lastAssistantTranscript || ""
+              )
+            )}`,
+          ].join("\n")
+        ),
+        "tool_followup:submit_booking_step:provider_not_configured",
+        {
+          sendToolOutputToOpenAi: false,
+        }
+      );
+
+      return {
+        consumed: true,
+        result: toolResult as RealtimeToolResult,
+        realtimeState: realtimeStateWithBookingLanguage,
+        bookingFlowLoaded: nextBookingFlowLoaded,
+        hangupRequestedByTool,
+        callEnding: nextCallEnding,
+        resetLastUserDigits: true,
+      };
+    }
+
     const retryPrompt =
       clean((toolResult as any)?.next_required_step?.retry_prompt || "") ||
       clean((toolResult as any)?.next_required_step?.prompt || "");
