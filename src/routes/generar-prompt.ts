@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v17"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v18"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -82,34 +82,83 @@ function stripGeneratedPolicySections(text: string): string {
   const generatedHeadings = new Set([
     "REGLAS_DEL_CANAL",
     "CHANNEL_RULES",
+    "REGRAS_DO_CANAL",
+
     "LANGUAGE_RULES",
+    "REGLAS_DE_IDIOMA",
+    "REGRAS_DE_IDIOMA",
+
     "ESTRUCTURA_DE_RESPUESTA",
     "RESPONSE_FORMAT",
+    "FORMATO_DE_RESPOSTA",
+
     "MODO_CONVERSION",
     "MODO DE CONVERSIÓN",
     "CONVERSION_MODE",
+    "MODO_DE_CONVERSÃO",
+
     "REGLAS_CONVERSACIONALES",
     "CONVERSATION_RULES",
+    "REGRAS_DE_CONVERSAÇÃO",
+
+    "REGLAS DE CALIDAD",
+    "QUALITY RULES",
+    "REGRAS DE QUALIDADE",
+
+    "MODO DE VENTA CONVERSACIONAL",
+    "CONVERSATIONAL SALES MODE",
+    "MODO DE VENDAS CONVERSACIONAL",
+
+    "COMPORTAMIENTO_Y_ESTILO",
+    "COMPORTAMIENTO Y ESTILO",
+    "BEHAVIOR_AND_STYLE",
+    "BEHAVIOR AND STYLE",
+    "COMPORTAMENTO_E_ESTILO",
+    "COMPORTAMENTO E ESTILO",
+
+    "REGLAS PRINCIPALES",
+    "MAIN RULES",
+    "REGRAS PRINCIPAIS",
+
+    "REGLAS Y COMPORTAMIENTO",
+    "RULES AND BEHAVIOR",
+    "REGRAS E COMPORTAMENTO",
+
     "REGLA_INTENCION_VAGA",
-    "REGLA_INTENCIÓN_VAGA",
+    "REGLA INTENCIÓN VAGA",
     "VAGUE_INTENT",
+    "INTENÇÃO_VAGA",
+
     "REGLA_CLASE_DE_PRUEBA",
     "TRIAL_OR_FIRST_VISIT",
+    "TESTE_OU_PRIMEIRA_VISITA",
+
     "REGLA_HORARIOS",
     "SCHEDULES",
+    "HORÁRIOS",
+
     "REGLA_PRECIOS_ESTRUCTURA",
     "PRICING",
+    "PRECIOS",
+    "PREÇOS",
+
     "ENLACES Y CTA",
     "GUIA_DE_CTA",
     "GUÍA_DE_CTA",
     "CTA_GUIDE",
+
     "POLITICA_DE_ENLACES",
     "POLÍTICA_DE_ENLACES",
     "LINK_POLICY",
+    "POLÍTICA_DE_LINKS",
+
     "ENLACES_OFICIALES",
     "OFFICIAL_LINKS",
+    "LINKS_OFICIAIS",
+
     "REGLAS",
     "RULES",
+    "REGRAS",
   ]);
 
   const normalizeHeading = (line: string): string =>
