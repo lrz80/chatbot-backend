@@ -475,123 +475,31 @@ function proseToBullets(text: string, maxItems = 10) {
   return parts.slice(0, maxItems).map(s => s.replace(/\s+/g, " "));
 }
 
-function buildOperationalBusinessContext(infoClean: string, nombreNegocio: string) {
-  const kv = parseKeyValueTemplate(infoClean);
+function buildOperationalBusinessContext(
+  infoClean: string,
+  nombreNegocio: string
+): string {
+  const content = compact(infoClean || "");
 
- // Detecta si realmente era una plantilla (tiene llaves tipo "Nombre del negocio", etc.)
-  const hasTemplateSignals =
-    Object.keys(kv).some(k =>
-      /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|servicios principales|horarios|precios|reserva(s)?|reservas \/ contacto|contacto|soporte/i.test(k)
-    );
-
-    const splitReservaVsSoporte = (lines: string[]) => {
-    const urls = extractAllLinksFromText(lines.join("\n"), 24);
-    const groups = classifyLinks(urls);
-
-    // Mantén también líneas NO-URL (por si el usuario escribe instrucciones sin link)
-    const nonUrl = lines
-      .map(l => String(l || "").trim())
-      .filter(Boolean)
-      .filter(l => !/^https?:\/\//i.test(l) && !/^mailto:/i.test(l) && !/^tel:/i.test(l));
-
-    return {
-      reservaUrls: groups.reservas,
-      soporteUrls: groups.soporte,
-      otherUrls: groups.otros,     // por si meten otro link raro en esa sección
-      notes: nonUrl,
-    };
-  };
-
-  if (hasTemplateSignals) {
-    const nombre = (kv["Nombre del negocio"]?.[0] || nombreNegocio || "").trim();
-    const tipo = (kv["Tipo de negocio"]?.[0] || "").trim();
-    const ubic = (kv["Ubicación"]?.[0] || "").trim();
-    const tel  = (kv["Teléfono"]?.[0] || "").trim();
-
-    const servicios = kv["Servicios principales"] || kv["Servicios"] || [];
-    const horarios  = kv["Horarios"] || kv["Horario"] || [];
-    const precios   = kv["Precios o cómo consultar precios"] || kv["Precios"] || [];
-    const reservaLines =
-      kv["Reserva"] ||
-      kv["Reservas / contacto"] ||
-      kv["Reservas / Contacto"] ||
-      [];
-
-    const contactoLines = kv["Contacto"] || [];
-    const soporteLines = kv["Soporte"] || [];
-
-    // Si venía mezclado en "Reservas / contacto", lo separamos por URL
-    const mixed = splitReservaVsSoporte(reservaLines);
-
-    const reservaFinal = [
-      ...mixed.reservaUrls,
-      // si el usuario puso texto en esa sección (sin URL), lo dejamos como nota debajo
-      ...mixed.notes,
-    ];
-
-    const contactoSoporteFinal = [
-      ...contactoLines,
-      ...soporteLines,
-      ...mixed.soporteUrls,
-      // si hay otros links que no clasificaron como reserva/soporte, los mandamos aquí
-      ...mixed.otherUrls,
-    ];
-
-    const politicas = kv["Políticas"] || kv["Politicas"] || kv["Política"] || kv["Politica"] || [];
-
-    const out: string[] = [];
-
-    out.push("DATOS DEL NEGOCIO");
-    out.push(...toBullets([
-      nombre ? `Nombre: ${nombre}` : `Nombre: ${nombreNegocio}`,
-      tipo ? `Tipo: ${tipo}` : "",
-      ubic ? `Ubicación: ${ubic}` : "",
-      tel ? `Teléfono: ${tel}` : "",
-    ].filter(Boolean)));
-
-    if (servicios.length) {
-      out.push("");
-      out.push("SERVICIOS");
-      out.push(...toBullets(servicios));
-    }
-
-    if (horarios.length) {
-      out.push("");
-      out.push("HORARIOS");
-      out.push(...toBullets(horarios));
-    }
-
-    if (precios.length) {
-      out.push("");
-      out.push("PRECIOS");
-      out.push(...toBullets(precios));
-    }
-
-        if (reservaFinal.length) {
-      out.push("");
-      out.push("RESERVA");
-      out.push(...toBullets(reservaFinal));
-    }
-
-    if (contactoSoporteFinal.length) {
-      out.push("");
-      out.push("CONTACTO / SOPORTE");
-      out.push(...toBullets(contactoSoporteFinal));
-    }
-
-    if (politicas.length) {
-      out.push("");
-      out.push("POLÍTICAS");
-      out.push(...toBullets(politicas));
-    }
-
-    return compact(out.join("\n"));
+  if (!content) {
+    return nombreNegocio
+      ? `DATOS DEL NEGOCIO\n- Nombre: ${nombreNegocio}`
+      : "";
   }
 
-  // Fallback: si no era plantilla, lo compacta como bullets (sin inventar)
-  const t = compact(infoClean || "");
-  if (!t) return "";
-  return compact(["CONOCIMIENTO DEL NEGOCIO", t].join("\n"));
+  /*
+   * El campo "Información que el asistente debe conocer" es contenido
+   * administrado por cada tenant.
+   *
+   * No debe reconstruirse mediante una lista cerrada de headings porque:
+   * - cada negocio puede tener categorías diferentes;
+   * - se perderían planes, políticas, condiciones y reglas específicas;
+   * - obligaría a hardcodear nombres de secciones por industria;
+   * - nuevos tenants podrían romperse silenciosamente.
+   *
+   * Solo compactamos espacios y preservamos íntegramente el contenido.
+   */
+  return content;
 }
 
 function buildOperationalRules(funcionesClean: string) {
