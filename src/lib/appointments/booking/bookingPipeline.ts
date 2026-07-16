@@ -38,6 +38,8 @@ export type BookingPipelineDeps = {
   // promptBase para sacar link
   promptBase: string;
 
+  bookingLink?: string | null;
+
   // intent detectado (para guardrail)
   detectedIntent: string | null;
 
@@ -65,12 +67,15 @@ export async function runBookingPipeline(deps: BookingPipelineDeps): Promise<Boo
     persistState,
     bookingEnabled,
     promptBase,
+    bookingLink: structuredBookingLink,
     detectedIntent,
     mode,
     sourceTag,
   } = deps;
 
-  const bookingLink = extractBookingLinkFromPrompt(promptBase);
+  const bookingLink =
+    String(structuredBookingLink || "").trim() ||
+    extractBookingLinkFromPrompt(promptBase);
 
   // Si booking está OFF: limpia booking del ctx y persiste
   if (!bookingEnabled) {

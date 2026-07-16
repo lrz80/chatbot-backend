@@ -9,7 +9,10 @@ import {
   renderOfficialLinksSection,
 } from "../prompts/officialLinks";
 import type { LangCode } from "../i18n/lang";
-import { normalizeLangCode } from "../i18n/lang";
+import {
+  DEFAULT_CANONICAL_LANG,
+  normalizeLangCode,
+} from "../i18n/lang";
 
 type ResolvedEntityType =
   | "service"
@@ -258,11 +261,20 @@ function buildInstructionBlock(
   maxLines: number,
   policy: Required<ResponsePolicy>
 ): string {
-  const responseLanguage = idiomaDestino === "es" ? "Español" : "English";
+  const responseLanguageCode =
+    normalizeLangCode(idiomaDestino) ?? DEFAULT_CANONICAL_LANG;
 
   const base = [
     "OUTPUT_RULES:",
-    `- response_language = ${responseLanguage}`,
+    `- response_language_code = ${responseLanguageCode}`,
+    "- respond_exclusively_in_response_language_code = true",
+    "- preserve_the_language_used_by_the_customer = true",
+    "- do_not_default_to_english_for_unknown_non_english_languages = true",
+    "- do_not_mix_languages_unless_the_customer_explicitly_requests_it = true",
+    "- respond_in_the_exact_language_and_locale_indicated_by_response_language_code = true",
+    "- preserve_the_user_current_language = true",
+    "- do_not_default_to_english_when_the_language_code_is_not_es_or_en = true",
+    "- do_not_mix_languages_unless_the_user_explicitly_requests_it = true",
     `- max_lines = ${maxLines}`,
     "- style = concise_chat",
     "- use_only_grounded_business_data = true",
@@ -272,8 +284,8 @@ function buildInstructionBlock(
 
     "- if_response_policy_disallows_specific_catalog_item_then_do_not_choose_or_recommend_one",
     "- if_response_policy_disallows_specific_price_then_do_not_output_numeric_price",
-    "- if_response_policy_disallows_booking_times_then_do_not_propose_dates_or times",
-    "- if_response_policy_disallows_official_links_then_do_not include_links",
+    "- if_response_policy_disallows_booking_times_then_do_not_propose_dates_or_times",
+    "- if_response_policy_disallows_official_links_then_do_not_include_links",
 
     "- if_structured_turn_data_exists_then_it_has_highest_priority",
     "- answer_as_business = true",

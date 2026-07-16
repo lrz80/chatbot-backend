@@ -45,6 +45,8 @@ export type HandleBookingTurnArgs = {
   // prompt base SIN memoria
   promptBase: string;
 
+  bookingLink?: string | null;
+
   // señal de intención detectada / fallback
   detectedIntent: string | null;
   intentFallback: string | null;
@@ -79,6 +81,7 @@ export async function handleBookingTurn(
     messageId,
     bookingEnabled,
     promptBase,
+    bookingLink,
     detectedIntent,
     intentFallback,
     mode,
@@ -106,6 +109,7 @@ export async function handleBookingTurn(
 
     bookingEnabled,
     promptBase,
+    bookingLink,
 
     // si no hay intent explícito, usamos fallback canónico
     detectedIntent: detectedIntent || intentFallback || null,

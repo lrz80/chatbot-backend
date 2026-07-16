@@ -73,6 +73,7 @@ import type { VisualTurnEvidence } from '../../lib/channels/engine/turn/types';
 import { userExternalLinkGuard } from "../../lib/guards/userExternalLinkGuard";
 import { executeDomainRouterTurn } from "../../lib/channels/engine/domain/executeDomainRouterTurn";
 import { applyStaleSelectionContextReset } from "../../lib/channels/engine/state/applyStaleSelectionContextReset";
+import { runSimplePromptTurn } from "../../lib/channels/simplePrompt/runSimplePromptTurn";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -92,6 +93,53 @@ type IntentFacets = {
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
+
+type WhatsAppEngineMode = "orchestrated" | "simple_hybrid";
+
+function resolveWhatsAppEngineMode(tenant: any): WhatsAppEngineMode {
+  const raw = String(
+    tenant?.settings?.whatsapp?.engine_mode ||
+    tenant?.settings?.channels?.whatsapp?.engine_mode ||
+    tenant?.whatsapp_engine_mode ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+
+  return raw === "simple_hybrid"
+    ? "simple_hybrid"
+    : "orchestrated";
+}
+
+function resolveTenantBookingLink(tenant: any): string | null {
+  const candidates = [
+    tenant?.booking_url,
+    tenant?.bookingUrl,
+    tenant?.settings?.booking?.booking_url,
+    tenant?.links?.booking_url,
+    tenant?.links?.booking?.booking_url,
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate || "").trim();
+
+    if (!value) {
+      continue;
+    }
+
+    try {
+      const url = new URL(value);
+
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        return url.toString();
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
 
 // 🛡️ Cache en memoria para dedupe de inbound (texto+contacto+tenant)
 const inboundDedupCache = new Map<string, number>();
@@ -701,6 +749,7 @@ export async function procesarMensajeWhatsApp(
 
       bookingEnabled,
       promptBase,
+      bookingLink: resolveTenantBookingLink(tenant),
 
       detectedIntent,
       intentFallback: INTENCION_FINAL_CANONICA,
@@ -1172,6 +1221,71 @@ export async function procesarMensajeWhatsApp(
       signals.humanOverrideSource || "human_override_explicit",
       detectedIntent
     );
+  }
+
+  // ===============================
+  // 🧠 SIMPLE HYBRID MODE
+  // Booking ya tuvo prioridad en tryBooking("gate", "pre_sm").
+  // Seguridad, membership y human override ya fueron evaluados.
+  // ===============================
+  {
+    const engineMode = resolveWhatsAppEngineMode(tenant);
+
+    console.log("[WHATSAPP][ENGINE_MODE_DECISION]", {
+      tenantId: tenant.id,
+      engineMode,
+      rawSettingsWhatsappMode:
+        tenant?.settings?.whatsapp?.engine_mode ?? null,
+      rawSettingsChannelsMode:
+        tenant?.settings?.channels?.whatsapp?.engine_mode ?? null,
+      rawTenantMode:
+        tenant?.whatsapp_engine_mode ?? null,
+    });
+
+    const activeBookingStep = String(
+      (convoCtx as any)?.booking?.step || "idle"
+    )
+      .trim()
+      .toLowerCase();
+
+    const hasActiveBooking =
+      activeBookingStep.length > 0 &&
+      activeBookingStep !== "idle";
+
+    if (
+      engineMode === "simple_hybrid" &&
+      !hasActiveBooking
+    ) {
+      const simpleResult = await runSimplePromptTurn({
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        messageId: messageId || null,
+        idiomaDestino,
+        userInput,
+        promptBaseMem,
+        bookingLink: resolveTenantBookingLink(tenant),
+        maxLines: MAX_WHATSAPP_LINES,
+      });
+
+      if (simpleResult.handled && simpleResult.reply) {
+        transition({
+          flow: "simple_hybrid",
+          step: "answer",
+          patchCtx: {
+            last_bot_action: "simple_prompt_reply",
+            last_reply_source: simpleResult.source,
+            simple_hybrid_last_touch_at: Date.now(),
+          },
+        });
+
+        return await replyAndExit(
+          simpleResult.reply,
+          simpleResult.source,
+          simpleResult.intent
+        );
+      }
+    }
   }
 
   // ===============================
