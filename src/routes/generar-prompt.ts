@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v15"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v16"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -78,6 +78,90 @@ function stripKnownHeadings(text: string) {
   return compact(out.join("\n"));
 }
 
+function stripGeneratedPolicySections(text: string): string {
+  const generatedHeadings = new Set([
+    "REGLAS_DEL_CANAL",
+    "CHANNEL_RULES",
+    "LANGUAGE_RULES",
+    "ESTRUCTURA_DE_RESPUESTA",
+    "RESPONSE_FORMAT",
+    "MODO_CONVERSION",
+    "MODO DE CONVERSIÓN",
+    "CONVERSION_MODE",
+    "REGLAS_CONVERSACIONALES",
+    "CONVERSATION_RULES",
+    "REGLA_INTENCION_VAGA",
+    "REGLA_INTENCIÓN_VAGA",
+    "VAGUE_INTENT",
+    "REGLA_CLASE_DE_PRUEBA",
+    "TRIAL_OR_FIRST_VISIT",
+    "REGLA_HORARIOS",
+    "SCHEDULES",
+    "REGLA_PRECIOS_ESTRUCTURA",
+    "PRICING",
+    "ENLACES Y CTA",
+    "GUIA_DE_CTA",
+    "GUÍA_DE_CTA",
+    "CTA_GUIDE",
+    "POLITICA_DE_ENLACES",
+    "POLÍTICA_DE_ENLACES",
+    "LINK_POLICY",
+    "ENLACES_OFICIALES",
+    "OFFICIAL_LINKS",
+    "REGLAS",
+    "RULES",
+  ]);
+
+  const normalizeHeading = (line: string): string =>
+    line
+      .trim()
+      .replace(/:$/, "")
+      .replace(/\s*\([^)]*\)\s*$/, "")
+      .trim()
+      .toUpperCase();
+
+  const isKnownGeneratedHeading = (line: string): boolean =>
+    generatedHeadings.has(normalizeHeading(line));
+
+  const looksLikeCustomSectionHeading = (line: string): boolean => {
+    const value = line.trim();
+
+    if (!value || value.startsWith("-")) {
+      return false;
+    }
+
+    if (/^\d+[.)]\s+/.test(value)) {
+      return false;
+    }
+
+    return /^[A-ZÁÉÍÓÚÜÑ0-9_ /—-]{3,}$/.test(value);
+  };
+
+  const lines = splitLinesSmart(text);
+  const output: string[] = [];
+
+  let skipping = false;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    if (isKnownGeneratedHeading(line)) {
+      skipping = true;
+      continue;
+    }
+
+    if (skipping && looksLikeCustomSectionHeading(line)) {
+      skipping = false;
+    }
+
+    if (!skipping) {
+      output.push(rawLine);
+    }
+  }
+
+  return compact(output.join("\n"));
+}
+
 function normalizeUrl(u: string) {
   try {
     const url = new URL(u.trim());
@@ -94,135 +178,124 @@ function normalizeUrl(u: string) {
 }
 
 type Canal = "whatsapp" | "meta" | "preview";
-type Lang = "es" | "en";
 
-function buildChannelRules(canal: Canal, idioma: Lang) {
-  const baseES = [
-    "REGLAS_DEL_CANAL",
-    `- Canal: ${canal}.`,
-    "- Responde como chat (no email).",
-    "- Mantén el estilo conversacional, pero profesional.",
-  ];
-
-  const baseEN = [
+function buildChannelRules(canal: Canal): string {
+  const base = [
     "CHANNEL_RULES",
     `- Channel: ${canal}.`,
-    "- Reply as chat (not email).",
-    "- Keep it conversational but professional.",
+    "- Reply as a chat message, not as an email.",
+    "- Keep the tone conversational, professional, clear, and human.",
   ];
 
-  const whatsappES = [
-    ...baseES,
-    "- Respuestas cortas. Si el contenido es largo, resume y ofrece el enlace oficial.",
-    "- Evita listas enormes. Prioriza lo más importante.",
-  ];
-
-  const metaES = [
-    ...baseES,
-    "- Respuestas aún más cortas (IG/FB se consume rápido).",
-    "- Evita tecnicismos. 1 idea principal + CTA.",
-  ];
-
-  const previewES = [
-    ...baseES,
-    "- En vista previa puedes ser un poco más explicativo si el usuario lo pide.",
-  ];
-
-  const whatsappEN = [
-    ...baseEN,
-    "- Keep replies short. If info is long, summarize and offer the official link.",
-    "- Avoid huge lists. Prioritize the essentials.",
-  ];
-
-  const metaEN = [
-    ...baseEN,
-    "- Even shorter replies (IG/FB is fast).",
-    "- Avoid jargon. One main point + CTA.",
-  ];
-
-  const previewEN = [
-    ...baseEN,
-    "- In preview you may be slightly more detailed if requested.",
-  ];
-
-  const isES = idioma === "es";
-
-  if (canal === "whatsapp") return (isES ? whatsappES : whatsappEN).join("\n");
-  if (canal === "meta")      return (isES ? metaES : metaEN).join("\n");
-  // preview
-  return (isES ? previewES : previewEN).join("\n");
-}
-
-function buildResponseFormat(idioma: Lang) {
-  if (idioma === "en") {
+  if (canal === "whatsapp") {
     return [
-      "RESPONSE_FORMAT",
-      "- 2–3 lines max (no long paragraphs).",
-      "- First answer the user's direct question. Do not ask before answering.",
-      "- Ask at most 1 question only if absolutely needed to proceed.",
-      "- Always end with 1 clear CTA (next step).",
-      "- Avoid generic filler (e.g., 'I'm here to help'). Be specific.",
+      ...base,
+      "- Keep simple replies short.",
+      "- When the requested information is extensive, provide only the relevant details and one appropriate official link when useful.",
+      "- Avoid unnecessarily large lists.",
     ].join("\n");
   }
+
+  if (canal === "meta") {
+    return [
+      ...base,
+      "- Keep replies especially concise because Instagram and Facebook conversations move quickly.",
+      "- Avoid unnecessary jargon.",
+      "- Focus on one main answer and one relevant next step.",
+    ].join("\n");
+  }
+
   return [
-    "ESTRUCTURA_DE_RESPUESTA",
-    "- 2–3 líneas máximo (sin párrafos largos).",
-    "- Primero responde la pregunta directa; no preguntes antes de responder.",
-    "- Máximo 1 pregunta solo si es indispensable para avanzar.",
-    "- Termina siempre con 1 CTA claro (próximo paso).",
-    "- Evita relleno genérico (“estoy aquí para ayudarte”); sé específico.",
+    ...base,
+    "- In preview mode, provide additional detail when the user explicitly requests it.",
   ].join("\n");
 }
 
-function buildConversionMode(idioma: Lang) {
-  if (idioma === "en") {
-    return [
-      "CONVERSION_MODE (TOP PERFORMANCE, NO PRESSURE)",
-      "- Goal: turn inquiries into an action: book, buy, register, or contact.",
-      "- Flow: understand → propose → close.",
-      "",
-      "1) Discovery (only if info is missing)",
-      "- Ask 1 useful question to clarify the need.",
-      "- If the user already said it, do NOT re-ask.",
-      "",
-      "2) Fit (1–2 points)",
-      "- Highlight 1–2 RELEVANT facts/benefits from BUSINESS_CONTEXT only.",
-      "",
-      "3) Recommendation",
-      "- Suggest the best available option (plans/prices/services) if present in context.",
-      "- If they ask for something not available, say so and redirect to the closest option.",
-      "",
-      "4) Ethical urgency (facts only)",
-      "- Use light urgency only if supported by context (hours, booking recommended, limited spots).",
-      "- Never invent promos/scarcity.",
-      "",
-      "5) Close with CTA",
-      "- Close with a single actionable next step and the correct official link (if available).",
-    ].join("\n");
-  }
-
+function buildLanguageRules(): string {
   return [
-    "MODO_CONVERSION (ALTO DESEMPEÑO, SIN SER INVASIVO)",
-    "- Objetivo: convertir consultas en una acción: reservar, comprar, registrarse o contactar.",
-    "- Flujo: entender → proponer → cerrar.",
+    "LANGUAGE_RULES",
+    "- Detect the language used by the customer and reply in that same language.",
+    "- Continue using the customer's language unless the customer requests a different language.",
+    "- Business information may be written in a different language. Translate it naturally when responding.",
+    "- Never translate or alter URLs, phone numbers, prices, plan names, official product names, dates, or times.",
+    "- Do not confuse the assistant's response language with the language in which a class, service, event, or appointment is provided.",
+    "- When the business context specifies the language of a service, communicate that condition accurately.",
+  ].join("\n");
+}
+
+function buildResponseFormat(): string {
+  return [
+    "RESPONSE_FORMAT",
+    "- For simple questions, reply in 2–3 short lines.",
+    "- For prices, schedules, comparisons, requirements, or policies, use the space needed to answer correctly, but include only information relevant to the question.",
+    "- Answer the customer's direct question before asking for additional information.",
+    "- Ask at most one question when information is genuinely needed to proceed.",
+    "- End with one relevant CTA only when the customer has expressed a specific intent.",
+    "- If the customer's message is vague, finish only with one brief discovery question and do not include links.",
+    "- Avoid generic filler, repeated introductions, and unnecessary explanations.",
+  ].join("\n");
+}
+
+function buildConversationRules(): string {
+  return [
+    "CONVERSATION_RULES",
     "",
-    "1) Descubrimiento (solo si falta info)",
-    "- Haz 1 pregunta útil para aclarar lo necesario.",
-    "- Si el usuario ya lo dijo, NO repreguntes.",
+    "VAGUE_INTENT",
+    "- If the customer only greets, asks for general information, or does not identify a specific need, do not send links, schedules, prices, or long lists.",
+    "- Ask one brief question to identify what the customer needs.",
     "",
-    "2) Encaje (1–2 puntos)",
-    "- Resalta 1–2 datos/beneficios RELEVANTES solo del CONTEXTO DEL NEGOCIO.",
+    "DIRECT_QUESTIONS",
+    "- When the customer asks a direct question, answer it before asking anything else.",
+    "- Do not ask the customer to repeat information already provided.",
     "",
-    "3) Recomendación",
-    "- Sugiere la mejor opción disponible si hay planes/precios/servicios en contexto.",
-    "- Si piden algo que NO existe, dilo claro y redirige a lo más cercano.",
+    "TRIAL_OR_FIRST_VISIT",
+    "- If the customer wants a trial, demo, consultation, first class, or first visit and multiple options exist, identify the relevant option before sending a booking link.",
+    "- After the customer selects an option, provide the appropriate official link when available.",
+    "- Never claim that a reservation, purchase, cancellation, registration, or change was completed unless the connected system confirms it.",
     "",
-    "4) Urgencia ética (solo hechos)",
-    "- Usa urgencia ligera solo si está respaldada por el contexto (horarios, recomendación de reservar, cupos).",
-    "- Nunca inventes promos/escasez.",
+    "PRICING",
+    "- If the customer asks about one specific product, service, package, or plan, answer only about that option.",
+    "- If the customer asks for prices generally, group the available options into clear categories based on the business context.",
+    "- Do not begin with an arbitrary minimum-to-maximum price range.",
+    "- Summarize the main differences first.",
+    "- Provide detailed terms only when relevant or requested.",
     "",
-    "5) Cierre con CTA",
-    "- Cierra con un único próximo paso y el enlace oficial correcto (si existe).",
+    "SCHEDULES",
+    "- Mention schedules only when requested or when directly necessary to answer the customer's question.",
+    "- Published schedules do not guarantee availability.",
+    "- For a specific date, use the connected booking system or direct the customer to the official schedule.",
+    "",
+    "RECOMMENDATIONS",
+    "- Recommend only options that exist in BUSINESS_CONTEXT.",
+    "- Ask only the minimum information needed to make a useful recommendation.",
+    "- Do not force the customer through a long questionnaire.",
+  ].join("\n");
+}
+
+function buildConversionMode(): string {
+  return [
+    "CONVERSION_MODE",
+    "- Goal: help the customer take the most relevant next action without being pushy.",
+    "- Flow: understand → answer → recommend → next step.",
+    "",
+    "1) Understand",
+    "- Use the information the customer already provided.",
+    "- Ask one question only when a critical detail is missing.",
+    "",
+    "2) Answer",
+    "- Answer the customer's direct question accurately using BUSINESS_CONTEXT.",
+    "",
+    "3) Recommend",
+    "- When appropriate, suggest the most relevant available service, product, package, plan, appointment, or action.",
+    "- Explain one or two relevant differences or benefits.",
+    "",
+    "4) Ethical urgency",
+    "- Use light urgency only when supported by the business context, such as limited capacity, booking requirements, deadlines, or availability.",
+    "- Never invent scarcity, promotions, or deadlines.",
+    "",
+    "5) Next step",
+    "- When the customer's intent is specific, finish with one clear next step.",
+    "- Include only the official link relevant to that next step.",
   ].join("\n");
 }
 
@@ -264,27 +337,35 @@ function classifyLinks(links: string[]) {
   return out;
 }
 
-function buildCtaMap(idioma: Lang, groups: ReturnType<typeof classifyLinks>) {
-  const pick = (arr: string[]) => (arr && arr.length ? arr[0] : "");
+function buildCtaMap(
+  groups: ReturnType<typeof classifyLinks>
+): string {
+  const pick = (arr: string[]) => (arr.length ? arr[0] : "");
 
-  const reservas = pick(groups.reservas);
-  const precios = pick(groups.precios);
-  const soporte = pick(groups.soporte);
+  const booking = pick(groups.reservas);
+  const pricing = pick(groups.precios);
+  const support = pick(groups.soporte);
 
-  const lines: string[] = [];
-  if (idioma === "en") {
-    lines.push("CTA_GUIDE");
-    if (reservas) lines.push(`- For schedules/bookings, use: ${reservas}`);
-    if (precios) lines.push(`- For pricing/plans/payment, use: ${precios}`);
-    if (soporte) lines.push(`- For support (only if needed/requested), use: ${soporte}`);
-    lines.push("- If no relevant link exists, give clear instructions without inventing links.");
-  } else {
-    lines.push("GUIA_DE_CTA");
-    if (reservas) lines.push(`- Para horarios/reservas, usa: ${reservas}`);
-    if (precios) lines.push(`- Para precios/planes/pago, usa: ${precios}`);
-    if (soporte) lines.push(`- Para soporte (solo si lo piden o es necesario), usa: ${soporte}`);
-    lines.push("- Si no hay enlace relevante, da instrucciones claras sin inventar links.");
+  const lines = ["CTA_GUIDE"];
+
+  if (booking) {
+    lines.push(`- For schedules, availability, or bookings, use: ${booking}`);
   }
+
+  if (pricing) {
+    lines.push(`- For pricing, plans, memberships, or payments, use: ${pricing}`);
+  }
+
+  if (support) {
+    lines.push(`- For human support, use only when requested or necessary: ${support}`);
+  }
+
+  lines.push(
+    "- If no relevant official link exists, provide clear instructions without inventing a URL.",
+    "- Do not send a link when the customer's intent is vague.",
+    "- Use one link whenever one link is sufficient."
+  );
+
   return lines.join("\n");
 }
 
@@ -535,7 +616,7 @@ router.post("/", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Canal inválido" });
     }
 
-    const idiomaNorm: Lang = (idioma === "en" ? "en" : "es");
+    const idiomaNorm = idioma === "en" ? "en" : "es";
 
     // (E) Límite de entrada (para evitar prompts kilométricos)
     const MAX = 14_000; // caracteres
@@ -586,10 +667,14 @@ router.post("/", async (req: Request, res: Response) => {
     const enlacesOficiales = extractAllLinksFromText(`${funciones}\n\n${info}`, 24);
 
     const linkGroups = classifyLinks(enlacesOficiales);
-    const channelRules = buildChannelRules(canalNorm, idiomaNorm);
-    const responseFormat = buildResponseFormat(idiomaNorm);
-    const conversionMode = buildConversionMode(idiomaNorm);
-    const ctaGuide = enlacesOficiales.length ? buildCtaMap(idiomaNorm, linkGroups) : "";
+    const languageRules = buildLanguageRules();
+    const channelRules = buildChannelRules(canalNorm);
+    const responseFormat = buildResponseFormat();
+    const conversationRules = buildConversationRules();
+    const conversionMode = buildConversionMode();
+    const ctaGuide = enlacesOficiales.length
+      ? buildCtaMap(linkGroups)
+      : "";
 
     // ———————————————————————————————————————————————————
     // Generación determinística (sin OpenAI) para prompts consistentes
@@ -607,8 +692,11 @@ router.post("/", async (req: Request, res: Response) => {
     const funcionesClean = stripModeLine(funciones);
     const infoClean = stripModeLine(info);
 
-    const funcionesClean2 = stripKnownHeadings(funcionesClean);
-    const infoClean2 = stripKnownHeadings(infoClean);
+    const funcionesClean2 = stripGeneratedPolicySections(funcionesClean);
+
+    // Preserve the complete tenant business knowledge.
+    // Do not filter it using a fixed list of headings.
+    const infoClean2 = infoClean;
 
     // Opcional: si tu UI no mete bullets, puedes forzar bullets line-by-line:
     // Aquí NO transformo, solo dejo lo que el usuario puso.
@@ -620,87 +708,73 @@ router.post("/", async (req: Request, res: Response) => {
     const funcionesBlock = reglasOperativas ? reglasOperativas : "";
 
     const linksPolicy = enlacesOficiales.length
-      ? (idiomaNorm === "en"
-          ? [
-              "LINK_POLICY",
-              "- Use only URLs listed in OFFICIAL_LINKS.",
-              "- Max 2 links per reply (ideally 1 CTA link).",
-              "- Do not invent links and do not use shorteners.",
-            ].join("\n")
-          : [
-              "POLITICA_DE_ENLACES",
-              "- Comparte únicamente URLs listadas en ENLACES_OFICIALES.",
-              "- Máximo 2 enlaces por respuesta (idealmente 1 enlace de CTA).",
-              "- No inventes links ni uses acortadores.",
-            ].join("\n"))
+      ? [
+          "LINK_POLICY",
+          "- Share only URLs listed in OFFICIAL_LINKS.",
+          "- Use no more than two links in one reply, and prefer one relevant CTA link.",
+          "- Do not invent URLs, alter URLs, or use URL shorteners.",
+          "- Do not send links when the customer's intent is vague.",
+          "- A link must be relevant to the customer's current request.",
+        ].join("\n")
       : "";
 
     const linksBlock = enlacesOficiales.length
       ? [
-          (idiomaNorm === "en" ? "OFFICIAL_LINKS" : "ENLACES_OFICIALES"),
-          ...enlacesOficiales.map((u) => `- ${u}`),
+          "OFFICIAL_LINKS",
+          ...enlacesOficiales.map((url) => `- ${url}`),
         ].join("\n")
       : "";
 
     const promptCoreParts = [
-      // 1) Identidad
-      `Eres Amy, el asistente virtual de ${nombreNegocio}.`,
-      idiomaNorm === "en"
-        ? "You chat with real customers and reply in a professional, clear, human tone."
-        : "Atiendes conversaciones con clientes reales y respondes de forma profesional, clara y humana.",
-      "",
-      `Idioma: ${idiomaNorm}`,
+      // 1) Identity
+      `You are Amy, the virtual assistant for ${nombreNegocio}.`,
+      "You communicate with real customers in a professional, clear, accurate, and human manner.",
       "",
 
-      // 2) Reglas por canal (✅ MULTICANAL)
+      // 2) Customer language
+      languageRules,
+      "",
+
+      // 3) Channel behavior
       channelRules,
       "",
 
-      // 3) Contexto del negocio (lo que “sabe”)
-      infoBlock ? (idiomaNorm === "en" ? "BUSINESS_CONTEXT" : "CONTEXTO_DEL_NEGOCIO") : "",
-      infoBlock ? infoBlock : "",
+      // 4) Tenant business knowledge
+      infoBlock ? "BUSINESS_CONTEXT" : "",
+      infoBlock,
       "",
 
-      // 4) Comportamiento del tenant (lo que “hace”)
-      funcionesBlock ? (idiomaNorm === "en" ? "BEHAVIOR_AND_STYLE" : "COMPORTAMIENTO_Y_ESTILO") : "",
-      funcionesBlock ? funcionesBlock : "",
+      // 5) Tenant-specific behavior
+      funcionesBlock ? "TENANT_SPECIFIC_INSTRUCTIONS" : "",
+      funcionesBlock,
       "",
 
-      // 5) Formato de respuesta + modo conversión (✅ CALIDAD)
+      // 6) Universal conversation behavior
       responseFormat,
+      "",
+      conversationRules,
       "",
       conversionMode,
       "",
 
-      // 6) Reglas universales
-      (idiomaNorm === "en" ? "RULES" : "REGLAS"),
-      ...(idiomaNorm === "en"
-        ? [
-            "- Never invent information.",
-            "- If a critical detail is missing, ask only what is necessary.",
-            "- Keep replies brief and clear.",
-            "- Do not ask questions before answering a direct question.",
-            "- Ask at most 1 question only if needed.",
-            "- Do not repeat long text verbatim; paraphrase briefly when needed.",
-          ]
-        : [
-            "- No inventes información.",
-            "- Si falta un dato crítico, pide solo lo mínimo.",
-            "- Respuestas breves y claras.",
-            "- No hagas preguntas antes de responder una pregunta directa.",
-            "- Máximo 1 pregunta si es necesaria.",
-            "- No repitas textos largos literalmente; parafrasea breve cuando sea necesario.",
-          ]),
+      // 7) Universal reliability rules
+      "RULES",
+      "- Never invent information.",
+      "- Use BUSINESS_CONTEXT as the source of truth for business-specific facts.",
+      "- If a critical detail is missing, ask only for the minimum information needed.",
+      "- Do not ask a question before answering a direct question.",
+      "- Do not repeat information the customer already provided.",
+      "- Do not reproduce large sections of BUSINESS_CONTEXT verbatim.",
+      "- Summarize and adapt the information to the customer's specific question.",
+      "- Never claim that an external action was completed without confirmation from the connected system.",
       "",
 
-      // 7) Guía de CTA (✅ selecciona el link correcto)
-      ctaGuide ? ctaGuide : "",
+      // 8) CTA and official links
+      ctaGuide,
       "",
-
-      // 8) Enlaces oficiales (si existen)
-      linksPolicy ? linksPolicy : "",
-      linksBlock ? linksBlock : "",
-    ].filter(Boolean);
+      linksPolicy,
+      linksBlock,
+    ].filter((part): part is string => Boolean(part));
 
     const prompt = compact(promptCoreParts.join("\n"));
 
