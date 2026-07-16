@@ -438,8 +438,8 @@ function buildIntentRoutingHints(args: {
     isCatalogTargetedScope
       ? "targeted"
       : asksPrices || isCatalogOverviewIntent
-      ? "overview"
-      : "none";
+        ? "overview"
+        : "none";
 
   const hasOnlyScheduleFacet =
     asksSchedules && !asksPrices && !asksLocation && !asksAvailability;
@@ -450,29 +450,38 @@ function buildIntentRoutingHints(args: {
   const hasOnlyAvailabilityFacet =
     asksAvailability && !asksPrices && !asksSchedules && !asksLocation;
 
+  /*
+   * Las consultas mixtas deben pasar por el compositor estructurado
+   * de información del negocio. Ese compositor puede combinar precios
+   * con horarios, ubicación o disponibilidad sin depender de texto libre.
+   */
+  const hasMixedBusinessInfoFacets =
+    asksPrices &&
+    (asksSchedules || asksLocation || asksAvailability);
+
   const isGeneralScope = scope === "general";
   const isCatalogScoped =
     scope === "entity" || scope === "family" || scope === "variant";
 
   const businessInfoScope: IntentRoutingHints["businessInfoScope"] =
-    intent === "info_general" && (isGeneralScope || scope === "none")
+    hasMixedBusinessInfoFacets && !isCatalogScoped
       ? "overview"
-      : intent === "horario" &&
-        hasOnlyScheduleFacet &&
-        !asksPrices &&
-        !isCatalogScoped
-      ? "schedule"
-      : intent === "ubicacion" &&
-        hasOnlyLocationFacet &&
-        !asksPrices &&
-        !isCatalogScoped
-      ? "location"
-      : intent === "disponibilidad" &&
-        hasOnlyAvailabilityFacet &&
-        !asksPrices &&
-        !isCatalogScoped
-      ? "availability"
-      : "none";
+      : intent === "info_general" &&
+          (isGeneralScope || scope === "none")
+        ? "overview"
+        : intent === "horario" &&
+            hasOnlyScheduleFacet &&
+            !isCatalogScoped
+          ? "schedule"
+          : intent === "ubicacion" &&
+              hasOnlyLocationFacet &&
+              !isCatalogScoped
+            ? "location"
+            : intent === "disponibilidad" &&
+                hasOnlyAvailabilityFacet &&
+                !isCatalogScoped
+              ? "availability"
+              : "none";
 
   return {
     catalogScope,
