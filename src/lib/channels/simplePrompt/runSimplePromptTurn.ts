@@ -11,6 +11,7 @@ import {
 
 import { answerWithPromptBase } from "../../answers/answerWithPromptBase";
 import { getRecentHistoryForModel } from "../engine/messages/getRecentHistoryForModel";
+import { getBusinessHours } from "../../appointments/booking/db";
 
 export type RunSimplePromptTurnArgs = {
   tenantId: string;
@@ -62,9 +63,95 @@ function normalizeOptionalUrl(value: unknown): string | null {
   }
 }
 
+type BusinessDayHours = {
+  start?: string | null;
+  end?: string | null;
+  open?: boolean | null;
+};
+
+type BusinessHoursMap = Partial<
+  Record<
+    "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun",
+    BusinessDayHours | null
+  >
+>;
+
+function normalizeTimeForPrompt(value: unknown): string | null {
+  const raw = String(value || "").trim();
+  return raw || null;
+}
+
+function renderBusinessHoursForPrompt(
+  hours: BusinessHoursMap | null | undefined
+): string {
+  if (!hours || typeof hours !== "object") {
+    return "";
+  }
+
+  const dayOrder: Array<keyof BusinessHoursMap> = [
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri",
+    "sat",
+    "sun",
+  ];
+
+  const rows = dayOrder
+    .map((day) => {
+      const item = hours[day];
+
+      if (!item || item.open === false) {
+        return null;
+      }
+
+      const start = normalizeTimeForPrompt(item.start);
+      const end = normalizeTimeForPrompt(item.end);
+
+      if (!start || !end) {
+        return null;
+      }
+
+      return {
+        day,
+        open: true,
+        start,
+        end,
+      };
+    })
+    .filter(
+      (
+        row
+      ): row is {
+        day: keyof BusinessHoursMap;
+        open: true;
+        start: string;
+        end: string;
+      } => Boolean(row)
+    );
+
+  if (!rows.length) {
+    return "";
+  }
+
+  return [
+    "BUSINESS_HOURS_DATA:",
+    JSON.stringify(rows, null, 2),
+    "",
+    "BUSINESS_HOURS_USAGE_RULES:",
+    "- This data represents the general operating hours of the business.",
+    "- It is different from class schedules, service schedules, or appointment availability.",
+    "- When the customer asks when the business or location opens, closes, or operates, answer using BUSINESS_HOURS_DATA.",
+    "- Render day names and times naturally in the customer's current language.",
+    "- Do not invent hours that are not present in BUSINESS_HOURS_DATA.",
+  ].join("\n");
+}
+
 function buildSimpleHybridPrompt(input: {
   promptBaseMem: string;
   bookingLink: string | null;
+  businessHoursSection: string;
   idiomaDestino: LangCode;
 }): string {
   const responseLanguageCode =
@@ -93,6 +180,8 @@ function buildSimpleHybridPrompt(input: {
   return [
     input.promptBaseMem,
     "",
+    input.businessHoursSection,
+    input.businessHoursSection ? "" : null,
     "SIMPLE_HYBRID_MODE:",
     "- Act as the tenant's conversational business assistant.",
     "- Answer the user's actual question directly.",
@@ -163,10 +252,35 @@ export async function runSimplePromptTurn(
     });
   }
 
+  let businessHoursSection = "";
+
+  try {
+    const businessHours = await getBusinessHours(tenantId);
+
+    businessHoursSection = renderBusinessHoursForPrompt(
+      businessHours as BusinessHoursMap | null
+    );
+
+    console.log("[SIMPLE_PROMPT][BUSINESS_HOURS_LOADED]", {
+      tenantId,
+      hasBusinessHours: Boolean(businessHoursSection),
+      businessHours,
+    });
+  } catch (error) {
+    console.warn("[SIMPLE_PROMPT][BUSINESS_HOURS_LOAD_FAILED]", {
+      tenantId,
+      error:
+        error instanceof Error
+          ? error.message
+          : String(error || "unknown_error"),
+    });
+  }
+
   const promptBase = buildSimpleHybridPrompt({
     promptBaseMem,
     bookingLink,
     idiomaDestino,
+    businessHoursSection,
   });
 
   /*
