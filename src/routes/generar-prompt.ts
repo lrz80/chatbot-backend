@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v18"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v19"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -37,46 +37,6 @@ const compact = (s: string) =>
 // (A+) Helpers para extraer TODAS las URLs de descripcion/informacion
 const MD_LINK = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi;
 const BARE_URL = /\bhttps?:\/\/[^\s)>\]]+/gi;
-
-function stripKnownHeadings(text: string) {
-  const t = splitLinesSmart(text);
-  const kill = new Set([
-    "COMPORTAMIENTO_Y_ESTILO",
-    "REGLAS Y COMPORTAMIENTO",
-    "COMPORTAMIENTO Y ESTILO",
-    "REGLAS PRINCIPALES",
-    "REGLAS DE CALIDAD",
-    "REGLA PARA PREGUNTAS DE PRECIOS",
-    "REGLAS DE COMUNICACIÓN SOBRE PRECIOS",
-    "ESTRUCTURA_DE_RESPUESTA",
-    "ESTRUCTURA GENERAL DE RESPUESTA",
-    "MODO_CONVERSION",
-    "MODO DE CONVERSIÓN",
-    "REGLAS_DEL_CANAL",
-    "CHANNEL_RULES",
-    "RULES",
-    "REGLAS",
-    "ENLACES_OFICIALES",
-    "OFFICIAL_LINKS",
-    "GUIA_DE_CTA",
-    "CTA_GUIDE",
-    "POLITICA_DE_ENLACES",
-    "LINK_POLICY",
-  ]);
-
-  const out: string[] = [];
-  for (const line of t) {
-    const s = String(line || "").trim();
-    if (!s) continue;
-
-    // heading puro (sin bullets) que coincide con nuestros bloques
-    const normalized = s.replace(/:$/, "").toUpperCase();
-    if (kill.has(normalized)) continue;
-
-    out.push(line);
-  }
-  return compact(out.join("\n"));
-}
 
 function stripGeneratedPolicySections(text: string): string {
   const generatedHeadings = new Set([
@@ -209,6 +169,27 @@ function stripGeneratedPolicySections(text: string): string {
   }
 
   return compact(output.join("\n"));
+}
+
+function stripGenericAssistantIdentity(text: string): string {
+  const genericIdentityPatterns = [
+    /^Eres (?:Aamy, )?(?:la |el )?asistente virtual de .+?\.\s*/i,
+    /^Respondes siempre con claridad, precisión y tono humano, sin inventar información\.\s*/i,
+
+    /^You are (?:Aamy, )?the virtual assistant for .+?\.\s*/i,
+    /^You always respond clearly, accurately, and in a human tone without inventing information\.\s*/i,
+
+    /^Você é (?:Aamy, )?a assistente virtual (?:da|do|de) .+?\.\s*/i,
+    /^Você sempre responde com clareza, precisão e um tom humano, sem inventar informações\.\s*/i,
+  ];
+
+  let cleaned = compact(text || "");
+
+  for (const pattern of genericIdentityPatterns) {
+    cleaned = cleaned.replace(pattern, "").trim();
+  }
+
+  return compact(cleaned);
 }
 
 function normalizeUrl(u: string) {
@@ -777,155 +758,11 @@ function extractAllLinksFromText(text: string, max = 24): string[] {
   return Array.from(uniq.values());
 }
 
-function toBullets(lines: string[], prefix = "- ") {
-  return lines
-    .map(l => l.trim())
-    .filter(Boolean)
-    .map(l => (l.startsWith("-") ? l : `${prefix}${l}`));
-}
-
 function splitLinesSmart(text: string) {
   return (text || "")
     .replace(/\r/g, "")
     .split("\n")
     .map(l => l.trimEnd());
-}
-
-// Parsea plantillas estilo:
-// "Nombre del negocio: X", "Servicios principales:", "- a", "- b", etc.
-function parseKeyValueTemplate(text: string) {
-  const lines = splitLinesSmart(text);
-
-  const kv: Record<string, string[]> = {};
-  let currentKey: string | null = null;
-
-  const push = (key: string, value: string) => {
-    const k = key.trim();
-    if (!kv[k]) kv[k] = [];
-    const v = (value || "").trim();
-    if (v) kv[k].push(v);
-  };
-
-  // ✅ Solo permitimos headings conocidos (multi-negocio)
-  const normalizeKey = (raw: string) => raw.trim().toLowerCase();
-
-  const allowedKeys = new Map<string, string>([
-    ["nombre del negocio", "Nombre del negocio"],
-    ["tipo de negocio", "Tipo de negocio"],
-    ["ubicación", "Ubicación"],
-    ["ubicacion", "Ubicación"],
-    ["teléfono", "Teléfono"],
-    ["telefono", "Teléfono"],
-
-    ["servicios", "Servicios"],
-    ["servicios principales", "Servicios principales"],
-
-    ["horarios", "Horarios"],
-    ["horario", "Horarios"],
-
-    ["precios", "Precios"],
-    ["precios o cómo consultar precios", "Precios"],
-    ["precios o como consultar precios", "Precios"],
-
-        // ✅ LINKS / CONTACTO
-    ["reserva", "Reserva"],
-    ["reservar", "Reserva"],
-    ["reservas", "Reserva"],
-
-    ["contacto", "Contacto"],
-    ["soporte", "Soporte"],
-    ["support", "Soporte"],
-
-    // (compat con el campo viejo)
-    ["reservas / contacto", "Reservas / contacto"],
-    ["reservas / contacto:", "Reservas / contacto"],
-
-    ["políticas", "Políticas"],
-    ["politicas", "Políticas"],
-    ["política", "Políticas"],
-    ["politica", "Políticas"],
-  ]);
-
-  const isUrlLine = (s: string) => /^https?:\/\//i.test(s) || /^mailto:/i.test(s) || /^tel:/i.test(s);
-
-  // ✅ Une URLs que quedaron solas en la siguiente línea:
-  // Ej:
-  // "Clase Funcional Gratis:"
-  // "https://...."
-  const mergedLines: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const cur = (lines[i] || "").trim();
-    const next = (lines[i + 1] || "").trim();
-
-    if (cur && cur.endsWith(":") && /^https?:\/\//i.test(next)) {
-      mergedLines.push(`${cur} ${next}`);
-      i++; // saltar next
-      continue;
-    }
-    mergedLines.push(lines[i]);
-  }
-
-  for (const raw of mergedLines) {
-    const line = (raw || "").trim();
-    if (!line) continue;
-
-    // ✅ Si es URL, nunca la tomes como key: value
-    if (isUrlLine(line)) {
-      if (currentKey) push(currentKey, line);
-      continue;
-    }
-
-    // ✅ Heading tipo "Horarios:" o "Precios:" (SIN necesidad de value)
-    const heading = line.match(/^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 \/]+):\s*$/);
-    if (heading) {
-      const keyNorm = normalizeKey(heading[1]);
-      const canonical = allowedKeys.get(keyNorm);
-      if (canonical) {
-        currentKey = canonical;
-        continue;
-      }
-      // si no es heading permitido, lo ignoramos (para evitar llaves basura)
-      currentKey = null;
-      continue;
-    }
-
-    // ✅ Formato "Key: Value" solo si Key es permitida y NO es URL
-    const kvLine = line.match(/^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 \/]{2,60}):\s*(.+)$/);
-    if (kvLine) {
-      const keyNorm = normalizeKey(kvLine[1]);
-      const canonical = allowedKeys.get(keyNorm);
-      if (canonical) {
-        currentKey = canonical;
-        push(currentKey, kvLine[2]);
-        continue;
-      }
-      // key no permitida -> no la uses
-      currentKey = null;
-      continue;
-    }
-
-    // ✅ Item bajo key actual: "- item" o "• item"
-    if (currentKey) {
-      const item = line.replace(/^[-•]\s*/, "").trim();
-      if (item) push(currentKey, item);
-    }
-  }
-
-  return kv;
-}
-
-// Si el texto parece prosa (párrafo largo), lo convierte a bullets por oraciones (sin inventar nada)
-function proseToBullets(text: string, maxItems = 10) {
-  const t = compact(text);
-  if (!t) return [];
-  // split básico por ". " y también por saltos
-  const parts = t
-    .replace(/\n+/g, " ")
-    .split(/(?<=[\.\!\?])\s+/)
-    .map(s => s.trim())
-    .filter(Boolean);
-
-  return parts.slice(0, maxItems).map(s => s.replace(/\s+/g, " "));
 }
 
 function buildOperationalBusinessContext(
@@ -1073,7 +910,9 @@ router.post("/", async (req: Request, res: Response) => {
     const funcionesClean = stripModeLine(funciones);
     const infoClean = stripModeLine(info);
 
-    const funcionesClean2 = stripGeneratedPolicySections(funcionesClean);
+    const funcionesClean2 = stripGenericAssistantIdentity(
+      stripGeneratedPolicySections(funcionesClean)
+    );
 
     // Preserve the complete tenant business knowledge.
     // Do not filter it using a fixed list of headings.
