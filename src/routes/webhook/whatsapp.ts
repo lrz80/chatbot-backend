@@ -87,9 +87,11 @@ export type MessagingProcessorContext = {
   origen?: "twilio" | "meta";
 
   /**
-   * Adaptador de salida del canal.
-   * Debe devolver true cuando el proveedor aceptó el envío.
+   * Identificador exacto usado por el proveedor para responder.
+   * En Meta es el PSID/IGSID sin normalización.
    */
+  transportRecipientId?: string;
+
   sendText?: (
     to: string,
     text: string,
@@ -287,6 +289,10 @@ export async function procesarMensajeWhatsApp(
 
   const fromNumber = turn.fromNumber;
   const contactoNorm = turn.contactoNorm;
+
+  const outboundRecipient =
+    String(context?.transportRecipientId || "").trim() ||
+    contactoNorm;
 
   if (messageId) {
 
@@ -609,13 +615,19 @@ export async function procesarMensajeWhatsApp(
     if (intent !== undefined) lastIntent = intent;
   }
 
-  const safeSend = (tenantId: string, canal: string, messageId: string | null, toNumber: string, text: string) =>
+  const safeSend = (
+    tenantId: string,
+    canal: string,
+    messageId: string | null,
+    _toNumber: string,
+    text: string
+  ) =>
     safeSendText({
       pool,
       tenantId,
       canal,
       messageId,
-      to: toNumber,
+      to: outboundRecipient,
       text,
       send: context?.sendText ?? enviarWhatsApp,
       incrementUsage: incrementarUsoPorCanal,

@@ -210,6 +210,7 @@ async function processMetaInbound(
     tenant,
     canal,
     origen: "meta",
+    transportRecipientId: event.senderId,
     sendText: createMetaSender({
       canal,
       accessToken,
