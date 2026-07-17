@@ -76,11 +76,31 @@ import { applyStaleSelectionContextReset } from "../../lib/channels/engine/state
 import { runSimplePromptTurn } from "../../lib/channels/simplePrompt/runSimplePromptTurn";
 
 // Puedes ponerlo debajo de los imports
-export type WhatsAppContext = {
+export type MessagingChannel =
+  | "whatsapp"
+  | "facebook"
+  | "instagram";
+
+export type MessagingProcessorContext = {
   tenant?: any;
-  canal?: string;
+  canal?: MessagingChannel;
   origen?: "twilio" | "meta";
+
+  /**
+   * Adaptador de salida del canal.
+   * Debe devolver true cuando el proveedor aceptó el envío.
+   */
+  sendText?: (
+    to: string,
+    text: string,
+    tenantId: string
+  ) => Promise<boolean>;
 };
+
+/**
+ * Alias temporal para no romper imports existentes.
+ */
+export type WhatsAppContext = MessagingProcessorContext;
 
 const MAX_WHATSAPP_LINES = 9999; // 14–16 es el sweet spot
 
@@ -189,7 +209,7 @@ export default router;
 
 export async function procesarMensajeWhatsApp(
   body: any,
-  context?: WhatsAppContext
+  context?: MessagingProcessorContext
 ): Promise<void> {
 
   const decisionFlags = {
@@ -216,7 +236,8 @@ export async function procesarMensajeWhatsApp(
   const turn = await buildTurnContext({ pool, body, context });
 
   // canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
-  const canal: Canal = (context?.canal as Canal) || "whatsapp";
+  const canal: MessagingChannel =
+    context?.canal ?? "whatsapp";
 
   const userInput = turn.userInputRaw;
   const messageId = turn.messageId;
@@ -253,9 +274,6 @@ export async function procesarMensajeWhatsApp(
     console.log("⛔ No se encontró tenant para este inbound (buildTurnContext).");
     return;
   }
-
-  // ⚡ No hacemos 2 queries a DB: cache local del turno
-  const waModePromise = getWhatsAppModeStatus(tenant.id);
 
   // 👉 idioma base del tenant (fallback)
   const tenantBase: LangCode = normalizeLangCode(tenant?.idioma) ?? "es";
@@ -296,7 +314,7 @@ export async function procesarMensajeWhatsApp(
   await capiLeadFirstInbound({
     pool,
     tenantId: tenant.id,
-    canal: "whatsapp",
+    canal,
     contactoNorm,
     fromNumber,
     messageId: messageId || null,
@@ -599,7 +617,7 @@ export async function procesarMensajeWhatsApp(
       messageId,
       to: toNumber,
       text,
-      send: enviarWhatsApp,               // ✅ Twilio WhatsApp sender
+      send: context?.sendText ?? enviarWhatsApp,
       incrementUsage: incrementarUsoPorCanal,
     });
 
@@ -652,7 +670,7 @@ export async function procesarMensajeWhatsApp(
 
           return rememberAfterReply({
             ...args,
-            canal: "whatsapp",
+            canal,
             replySource: normalizedReplySource,
           });
         },
@@ -837,19 +855,23 @@ export async function procesarMensajeWhatsApp(
     decisionFlags.channelSelected = true;
   }
 
-  const { mode, status } = await waModePromise;
+  if (canal === "whatsapp") {
+    const { mode, status } =
+      await getWhatsAppModeStatus(tenant.id);
 
-  const guard = await whatsappModeMembershipGuard({
-    tenant,
-    tenantId: tenant.id,
-    canal,
-    origen,
-    mode,
-    status,
-    // requireMembershipActive: true, // (default)
-  });
+    const guard = await whatsappModeMembershipGuard({
+      tenant,
+      tenantId: tenant.id,
+      canal,
+      origen,
+      mode,
+      status,
+    });
 
-  if (!guard.ok) return;
+    if (!guard.ok) {
+      return;
+    }
+  }
 
   // ===============================
   // 🛡️ USER EXTERNAL LINK GUARD
@@ -982,7 +1004,7 @@ export async function procesarMensajeWhatsApp(
     const handledPhishing = await antiPhishingGuard({
       pool,
       tenantId: tenant.id,
-      channel: "whatsapp",
+      channel: canal,
       senderId: contactoNorm,
       messageId,
       userInput,
@@ -1350,7 +1372,11 @@ export async function procesarMensajeWhatsApp(
     saludoPuroRegex.test(userInput) &&
     !looksLikeBookingPayload(userInput) // ✅ evita “Hola soy Amy” cuando mandan nombre/email/fecha
   ) {
-    const bienvenida = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+    const bienvenida = await getBienvenidaPorCanal(
+      canal,
+      tenant,
+      idiomaDestino
+    );
 
     transition({
       flow: activeFlow,
