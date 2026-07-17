@@ -53,12 +53,20 @@ async function resolveMetaTenant(pageId: string): Promise<{
   accessToken: string;
 } | null> {
   const { rows } = await pool.query(
-    `SELECT t.*
-       FROM tenants t
-      WHERE t.facebook_page_id = $1
-         OR t.instagram_page_id = $1
-      LIMIT 1`,
-    [pageId],
+    `
+      SELECT
+        t.*,
+        m.prompt_meta,
+        m.bienvenida_meta
+      FROM tenants t
+      LEFT JOIN meta_configs m
+        ON m.tenant_id = t.id
+      WHERE
+        t.facebook_page_id = $1
+        OR t.instagram_page_id = $1
+      LIMIT 1
+    `,
+    [pageId]
   );
 
   const tenant = rows[0];
