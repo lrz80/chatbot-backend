@@ -1,9 +1,30 @@
-// backend/src/lib/channels/engine/booking/handleBookingTurn.ts
+// src/lib/channels/engine/booking/handleBookingTurn.ts
 
-import { Pool } from "pg";
+import type { Pool } from "pg";
+
 import type { Canal } from "../../../detectarIntencion";
 import type { LangCode } from "../../../i18n/lang";
-import { runBookingPipeline } from "../../../appointments/booking/bookingPipeline";
+import type {
+  CallState,
+  VoiceLocale,
+} from "../../../voice/types";
+
+import {
+  startSharedBookingFlow,
+} from "../../../appointments/booking/runtime/startSharedBookingFlow";
+
+import {
+  submitSharedBookingStep,
+} from "../../../appointments/booking/runtime/submitSharedBookingStep";
+
+import {
+  createSharedAppointment,
+} from "../../../appointments/booking/runtime/createSharedAppointment";
+
+import {
+  buildMessagingBookingRuntimePatch,
+  readMessagingBookingRuntime,
+} from "../../../appointments/booking/runtime/messagingBookingState";
 
 type TransitionFn = (params: {
   flow?: string;
@@ -11,53 +32,72 @@ type TransitionFn = (params: {
   patchCtx?: any;
 }) => void;
 
-// 👇 canal que entiende el booking pipeline
-type BookingCanal = "whatsapp" | "facebook" | "instagram";
+type BookingCanal =
+  | "whatsapp"
+  | "facebook"
+  | "instagram";
 
-// 👇 aquí normalizamos lo que venga ("meta", etc.) a un BookingCanal válido
-function toBookingCanal(canal: Canal | string): BookingCanal {
-  if (canal === "whatsapp") return "whatsapp";
-  if (canal === "facebook" || canal === "instagram") return canal;
+function toBookingCanal(
+  canal: Canal | string
+): BookingCanal {
+  if (canal === "whatsapp") {
+    return "whatsapp";
+  }
 
-  // En tu arquitectura usas "meta" para el webhook unificado.
-  // A nivel de booking, tratamos "meta" como "facebook" por defecto.
-  if (canal === "meta") return "facebook";
+  if (
+    canal === "facebook" ||
+    canal === "instagram"
+  ) {
+    return canal;
+  }
 
-  // Fallback defensivo: si llega algo raro, asumimos whatsapp
+  if (canal === "meta") {
+    return "facebook";
+  }
+
   return "whatsapp";
 }
 
+function clean(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
 export type HandleBookingTurnArgs = {
+  /**
+   * Se conserva temporalmente en el contrato exterior.
+   * El runtime nuevo usa los repositorios canónicos.
+   */
   pool: Pool;
+
   tenantId: string;
-  canal: Canal | string;         // puede venir "whatsapp", "meta", etc.
+  canal: Canal | string;
   contactoNorm: string;
   idiomaDestino: LangCode;
   userInput: string;
   messageId: string | null;
 
-  // estado de conversación actual
   ctx: any;
 
-  // flag real de si el tenant tiene booking activo
   bookingEnabled: boolean;
-
-  // prompt base SIN memoria
   promptBase: string;
-
   bookingLink?: string | null;
 
-  // señal de intención detectada / fallback
   detectedIntent: string | null;
   intentFallback: string | null;
 
-  // modo de uso
+  /**
+   * Señal estructurada proveniente del router comercial.
+   * No se vuelve a interpretar el texto aquí.
+   */
+  bookingRequested: boolean;
+
   mode: "gate" | "guardrail";
   sourceTag: string;
 
-  // helpers que dependen del canal / webhook
   transition: TransitionFn;
-  persistState: (nextCtx: any) => Promise<void>;
+  persistState: (
+    nextCtx: any
+  ) => Promise<void>;
 };
 
 export type HandleBookingTurnResult = {
@@ -72,70 +112,291 @@ export async function handleBookingTurn(
   args: HandleBookingTurnArgs
 ): Promise<HandleBookingTurnResult> {
   const {
-    pool,
     tenantId,
     canal,
     contactoNorm,
     idiomaDestino,
     userInput,
-    messageId,
     bookingEnabled,
-    promptBase,
-    bookingLink,
-    detectedIntent,
-    intentFallback,
-    mode,
+    bookingRequested,
     sourceTag,
     transition,
     persistState,
   } = args;
 
-  // Copia local de contexto que podremos actualizar
-  let ctxLocal = args.ctx;
+  let ctxLocal =
+    args.ctx &&
+    typeof args.ctx === "object"
+      ? args.ctx
+      : {};
 
-  const bookingCanal = toBookingCanal(canal);   // 👈 aquí se resuelve "meta" → "facebook"
+  const bookingCanal =
+    toBookingCanal(canal);
 
-  const bk = await runBookingPipeline({
-    pool,
+  const locale =
+    idiomaDestino as VoiceLocale;
+
+  const contactPhone =
+    bookingCanal === "whatsapp"
+      ? clean(contactoNorm) || null
+      : null;
+
+  const sessionId = [
+    bookingCanal,
     tenantId,
-    canal: bookingCanal,          // 👈 ya es "whatsapp" | "facebook" | "instagram"
-    contacto: contactoNorm,
-    idioma: idiomaDestino,
-    userText: userInput,
-    messageId,
+    clean(contactoNorm),
+  ].join(":");
 
-    ctx: ctxLocal,
-    transition,
+  const persistRuntimeState =
+    async (
+      state: CallState,
+      active: boolean
+    ): Promise<void> => {
+      const runtimePatch =
+        buildMessagingBookingRuntimePatch({
+          previousContext: ctxLocal,
+          state,
+          active,
+        });
 
-    bookingEnabled,
-    promptBase,
-    bookingLink,
+      const nextCtx = {
+        ...ctxLocal,
+        ...runtimePatch,
+      };
 
-    // si no hay intent explícito, usamos fallback canónico
-    detectedIntent: detectedIntent || intentFallback || null,
-
-    mode,
-    sourceTag,
-
-    // persistencia + sync de ctx local
-    persistState: async (nextCtx: any) => {
       await persistState(nextCtx);
       ctxLocal = nextCtx;
-    },
-  });
+    };
 
-  if (!bk.handled) {
+  const runtime =
+    readMessagingBookingRuntime(
+      ctxLocal
+    );
+
+  /*
+   * Un booking ya activo siempre tiene prioridad.
+   * La respuesta actual pertenece al step pendiente,
+   * aunque el router general no vuelva a marcar
+   * wantsBooking en cada mensaje.
+   */
+  if (runtime.active) {
+    const submitted =
+      await submitSharedBookingStep({
+        tenantId,
+        sessionId,
+        locale,
+        contactPhone,
+        userInput,
+        state: runtime.state,
+
+        persistState: async (
+          nextState
+        ) => {
+          await persistRuntimeState(
+            nextState,
+            true
+          );
+        },
+      });
+
+    /*
+     * La confirmación final ya fue aceptada.
+     * Ahora se crea realmente la cita con el canal
+     * correcto.
+     */
+    if (
+      submitted.ok &&
+      submitted.action_required ===
+        "create_appointment"
+    ) {
+      const created =
+        await createSharedAppointment({
+          tenantId,
+          channel: bookingCanal,
+          sessionId,
+          locale,
+          contactPhone,
+          state: submitted.state,
+        });
+
+      await persistRuntimeState(
+        created.state,
+        !created.flow_complete
+      );
+
+      transition({
+        flow: created.flow_complete
+          ? "generic_sales"
+          : "booking",
+        step:
+          created.next_required_step
+            ?.step_key ||
+          (created.flow_complete
+            ? "complete"
+            : "active"),
+        patchCtx: ctxLocal,
+      });
+
+      const reply = clean(
+        created.assistant_prompt
+      );
+
+      if (reply) {
+        return {
+          handled: true,
+          reply,
+          source:
+            `${sourceTag}:shared_booking_create`,
+          intent: "booking",
+          ctx: ctxLocal,
+        };
+      }
+
+      /*
+       * La cita puede quedar creada sin un step
+       * informativo posterior. En ese caso permitimos
+       * que el pipeline general redacte el cierre usando
+       * el resultado persistido, en vez de inventar aquí
+       * un mensaje fijo.
+       */
+      return {
+        handled: false,
+        source:
+          `${sourceTag}:shared_booking_created`,
+        intent: "booking",
+        ctx: ctxLocal,
+      };
+    }
+
+    await persistRuntimeState(
+      submitted.state,
+      !submitted.flow_complete
+    );
+
+    transition({
+      flow: submitted.flow_complete
+        ? "generic_sales"
+        : "booking",
+      step:
+        submitted.next_required_step
+          ?.step_key ||
+        (submitted.flow_complete
+          ? "complete"
+          : "active"),
+      patchCtx: ctxLocal,
+    });
+
+    const reply = clean(
+      submitted.assistant_prompt
+    );
+
+    if (reply) {
+      return {
+        handled: true,
+        reply,
+        source:
+          `${sourceTag}:shared_booking_submit`,
+        intent: "booking",
+        ctx: ctxLocal,
+      };
+    }
+
+    return {
+      handled: submitted.ok,
+      source:
+        `${sourceTag}:shared_booking_submit_no_prompt`,
+      intent: "booking",
+      ctx: ctxLocal,
+    };
+  }
+
+  /*
+   * No inicia un flujo nuevo si booking está apagado
+   * o el router no produjo una intención estructurada
+   * de reserva.
+   */
+  if (
+    !bookingEnabled ||
+    !bookingRequested
+  ) {
     return {
       handled: false,
       ctx: ctxLocal,
     };
   }
 
+  const started =
+    await startSharedBookingFlow({
+      tenantId,
+      locale,
+      contactPhone,
+      state: {
+        lang: locale,
+        bookingData: {},
+        bookingTurnStatus:
+          "waiting_assistant_prompt",
+      },
+    });
+
+  if (!started.ok) {
+    console.error(
+      "[SHARED_BOOKING][START_FAILED]",
+      {
+        tenantId,
+        channel: bookingCanal,
+        sessionId,
+        error: started.error,
+        details: started.details,
+      }
+    );
+
+    return {
+      handled: false,
+      source:
+        `${sourceTag}:shared_booking_start_failed`,
+      intent: "booking",
+      ctx: ctxLocal,
+    };
+  }
+
+  await persistRuntimeState(
+    started.state,
+    !started.flow_complete
+  );
+
+  transition({
+    flow: started.flow_complete
+      ? "generic_sales"
+      : "booking",
+    step:
+      started.next_required_step
+        ?.step_key ||
+      (started.flow_complete
+        ? "complete"
+        : "active"),
+    patchCtx: ctxLocal,
+  });
+
+  const reply = clean(
+    started.assistant_prompt
+  );
+
+  if (!reply) {
+    return {
+      handled: false,
+      source:
+        `${sourceTag}:shared_booking_start_no_prompt`,
+      intent: "booking",
+      ctx: ctxLocal,
+    };
+  }
+
   return {
     handled: true,
-    reply: bk.reply,
-    source: bk.source,
-    intent: bk.intent ?? null,
+    reply,
+    source:
+      `${sourceTag}:shared_booking_start`,
+    intent: "booking",
     ctx: ctxLocal,
   };
 }

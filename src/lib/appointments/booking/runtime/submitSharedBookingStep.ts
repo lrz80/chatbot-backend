@@ -100,7 +100,10 @@ export type SubmitSharedBookingStepResult =
       booking_state: BookingState | null;
       next_required_step: RealtimeMappedStep | null;
       assistant_prompt: string;
+
+      flow_complete: boolean;
       retryable: boolean;
+
       details?: Record<string, unknown>;
     };
 
@@ -371,6 +374,7 @@ export async function submitSharedBookingStep(
       booking_state: null,
       next_required_step: null,
       assistant_prompt: "",
+      flow_complete: true,
       retryable: false,
     };
   }
@@ -389,6 +393,7 @@ export async function submitSharedBookingStep(
       booking_state: null,
       next_required_step: null,
       assistant_prompt: "",
+      flow_complete: true,
       retryable: false,
     };
   }
@@ -470,8 +475,8 @@ export async function submitSharedBookingStep(
             nextRequiredStep?.prompt
         ),
 
+      flow_complete: false,
       retryable: true,
-
       details: result,
     };
   }
@@ -654,6 +659,8 @@ export async function submitSharedBookingStep(
 
       assistant_prompt: "",
 
+      flow_complete: true,
+      
       retryable: false,
 
       details: {
