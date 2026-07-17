@@ -15,11 +15,12 @@ import {
 } from "../../../voice/speechFormatting";
 
 type BookingFlowStep = {
-  step_key: string;
+  step_key?: string;
   prompt?: string | null;
-  prompt_translations?: Record<string, string> | null;
+  prompt_translations?: Record<string, unknown> | null;
+  retry_prompt_translations?: Record<string, unknown> | null;
   retry_prompt?: string | null;
-  retry_prompt_translations?: Record<string, string> | null;
+  expected_type?: string | null;
   validation_config?: Record<string, any> | null;
 };
 
@@ -275,8 +276,8 @@ export function buildBookingSlotBusyRecovery(
 
     pendingBookingStepExpectedType:
       clean(
-        (datetimeStep as any)
-          .expected_type || "datetime"
+        datetimeStep.expected_type ||
+        "datetime"
       ),
 
     pendingBookingStepValidationConfig:
