@@ -19,6 +19,15 @@ export type CallState = {
   pendingBookingStepRequired?: boolean;
   pendingBookingStepPrompt?: string;
 
+  pendingBookingStepSlot?: string;
+  pendingBookingStepExpectedType?: string;
+  pendingBookingStepValidationConfig?: Record<string, unknown>;
+
+  bookingTurnStatus?:
+    | "waiting_assistant_prompt"
+    | "waiting_user_answer"
+    | "flow_complete";
+
   pendingBookingStepPromptAnchorTranscript?: string;
   lastSubmittedBookingStepKey?: string;
   lastSubmittedBookingTranscript?: string;
@@ -34,23 +43,10 @@ export type CallState = {
   awaitingPostBookingClosure?: boolean;
   postBookingClosureTranscript?: string;
 
-  /**
-   * Locks the language used by the booking flow.
-   *
-   * Important:
-   * - Conversation outside booking may continue detecting/switching language.
-   * - Once booking starts, booking prompts should use this locked language
-   *   until the booking flow finishes or is cancelled.
-   * - This is intentionally generic for any language, not hardcoded to ES/EN/PT.
-   */
   bookingLanguageLocked?: boolean;
   bookingLockedLocale?: VoiceLocale | null;
   bookingLockedLanguageSample?: string | null;
 
-  /**
-   * Contexto CRM de la llamada actual.
-   * No inicia reservas automáticamente.
-   */
   returningCustomer?: boolean;
   returningCustomerContactId?: number | null;
   returningCustomerName?: string | null;
