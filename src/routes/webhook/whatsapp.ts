@@ -94,21 +94,34 @@ type IntentFacets = {
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
-type WhatsAppEngineMode = "orchestrated" | "simple_hybrid";
+type WhatsAppEngineMode = "simple_hybrid" | "orchestrated";
 
 function resolveWhatsAppEngineMode(tenant: any): WhatsAppEngineMode {
-  const raw = String(
-    tenant?.settings?.whatsapp?.engine_mode ||
-    tenant?.settings?.channels?.whatsapp?.engine_mode ||
-    tenant?.whatsapp_engine_mode ||
+  const configuredMode = String(
+    tenant?.settings?.whatsapp?.engine_mode ??
+    tenant?.settings?.channels?.whatsapp?.engine_mode ??
+    tenant?.whatsapp_engine_mode ??
     ""
   )
     .trim()
     .toLowerCase();
 
-  return raw === "simple_hybrid"
-    ? "simple_hybrid"
-    : "orchestrated";
+  /**
+   * El motor complejo es opt-in.
+   * Solo se activa cuando el tenant lo tiene configurado explícitamente.
+   */
+  if (configuredMode === "orchestrated") {
+    return "orchestrated";
+  }
+
+  /**
+   * Valor predeterminado para:
+   * - tenants nuevos;
+   * - tenants sin engine_mode;
+   * - tenants configurados anteriormente como simple_hybrid;
+   * - valores desconocidos o vacíos.
+   */
+  return "simple_hybrid";
 }
 
 function resolveTenantBookingLink(tenant: any): string | null {
