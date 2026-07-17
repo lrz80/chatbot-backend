@@ -1,4 +1,4 @@
-//src/lib/appointments/createAppointmentFromVoice.ts
+// src/lib/appointments/createAppointment.ts
 import pool from "../db";
 import { resolveVoiceScheduleValidation } from "./resolveVoiceScheduleValidation";
 import { BookingProviderOrchestrator } from "./booking/providers/orchestrator";
