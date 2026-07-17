@@ -1,4 +1,4 @@
-//src/lib/appointments/getBookingFlow.ts
+// src/lib/appointments/getBookingFlow.ts
 import pool from "../db";
 
 export type BookingStep = {
@@ -19,27 +19,84 @@ type BookingFlowCacheEntry = {
   steps: BookingStep[];
 };
 
+/**
+ * Nombre histórico usado actualmente por la tabla
+ * appointment_booking_flows.
+ *
+ * No representa el canal desde el que habla el cliente.
+ * Representa el único flujo de booking configurado en el dashboard.
+ *
+ * Voice, WhatsApp, Facebook e Instagram consumen este mismo flujo.
+ */
+export const SHARED_BOOKING_FLOW_PROFILE = "voice";
+
 const BOOKING_FLOW_TTL_MS = 30_000;
 const bookingFlowCache = new Map<string, BookingFlowCacheEntry>();
 
-function buildBookingFlowCacheKey(tenantId: string, channel: string) {
-  return `${tenantId}:${channel}`;
+function buildBookingFlowCacheKey(
+  tenantId: string,
+  flowProfile: string
+): string {
+  return `${tenantId}:${flowProfile}`;
 }
 
-export function clearBookingFlowCache(tenantId?: string, channel = "voice") {
+export function clearBookingFlowCache(
+  tenantId?: string,
+  flowProfile = SHARED_BOOKING_FLOW_PROFILE
+): void {
   if (!tenantId) {
     bookingFlowCache.clear();
     return;
   }
 
-  bookingFlowCache.delete(buildBookingFlowCacheKey(tenantId, channel));
+  bookingFlowCache.delete(
+    buildBookingFlowCacheKey(tenantId, flowProfile)
+  );
 }
 
+/**
+ * Acceso canónico al flujo único configurado en el dashboard.
+ *
+ * Todos los canales deben usar esta función.
+ */
+export async function getSharedBookingFlow(
+  tenantId: string
+): Promise<BookingStep[]> {
+  return getBookingFlow(
+    tenantId,
+    SHARED_BOOKING_FLOW_PROFILE
+  );
+}
+
+/**
+ * Lectura de bajo nivel por perfil.
+ *
+ * Se conserva exportada para migraciones, administración y
+ * compatibilidad, pero el runtime conversacional debe usar
+ * getSharedBookingFlow().
+ */
 export async function getBookingFlow(
   tenantId: string,
-  channel = "voice"
+  flowProfile = SHARED_BOOKING_FLOW_PROFILE
 ): Promise<BookingStep[]> {
-  const cacheKey = buildBookingFlowCacheKey(tenantId, channel);
+  const normalizedTenantId = String(tenantId || "").trim();
+  const normalizedFlowProfile = String(
+    flowProfile || SHARED_BOOKING_FLOW_PROFILE
+  ).trim();
+
+  if (!normalizedTenantId) {
+    throw new Error("BOOKING_FLOW_TENANT_ID_REQUIRED");
+  }
+
+  if (!normalizedFlowProfile) {
+    throw new Error("BOOKING_FLOW_PROFILE_REQUIRED");
+  }
+
+  const cacheKey = buildBookingFlowCacheKey(
+    normalizedTenantId,
+    normalizedFlowProfile
+  );
+
   const now = Date.now();
   const cached = bookingFlowCache.get(cacheKey);
 
@@ -49,23 +106,26 @@ export async function getBookingFlow(
 
   const { rows } = await pool.query(
     `
-    SELECT
-      step_key,
-      step_order,
-      prompt,
-      expected_type,
-      required,
-      enabled,
-      retry_prompt,
-      validation_config,
-      prompt_translations,
-      retry_prompt_translations
-    FROM appointment_booking_flows
-    WHERE tenant_id = $1
-      AND channel = $2
-    ORDER BY step_order ASC
+      SELECT
+        step_key,
+        step_order,
+        prompt,
+        expected_type,
+        required,
+        enabled,
+        retry_prompt,
+        validation_config,
+        prompt_translations,
+        retry_prompt_translations
+      FROM appointment_booking_flows
+      WHERE tenant_id = $1
+        AND channel = $2
+      ORDER BY step_order ASC
     `,
-    [tenantId, channel]
+    [
+      normalizedTenantId,
+      normalizedFlowProfile,
+    ]
   );
 
   const steps = rows as BookingStep[];

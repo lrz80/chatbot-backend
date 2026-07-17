@@ -1,5 +1,7 @@
 //src/lib/voice/realtime/realtimeToolExecutor.ts
-import { getBookingFlow } from "../../appointments/getBookingFlow";
+import {
+  getSharedBookingFlow,
+} from "../../appointments/getBookingFlow";
 import { upsertVoiceCallState } from "../upsertVoiceCallState";
 import type { CallState, VoiceLocale } from "../types";
 import {
@@ -209,7 +211,7 @@ export async function executeRealtimeTool(
       }
 
       const steps = sortFlowSteps(
-        (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
+        (await getSharedBookingFlow(tenantId)) as BookingFlowStepLike[]
       );
 
       const answersBySlot = normalizeAnswersToCanonicalSlots({
@@ -270,7 +272,7 @@ export async function executeRealtimeTool(
       }
 
       const steps = sortFlowSteps(
-        (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
+        (await getSharedBookingFlow(tenantId)) as BookingFlowStepLike[]
       );
 
       return handleRealtimeSubmitBookingStep({
@@ -290,7 +292,7 @@ export async function executeRealtimeTool(
       }
 
       const steps = sortFlowSteps(
-        (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
+        (await getSharedBookingFlow(tenantId)) as BookingFlowStepLike[]
       );
 
       return handleRealtimeCreateAppointment({
@@ -366,7 +368,7 @@ export async function executeRealtimeTool(
           "Tell the caller whether the booking SMS was sent, then ask if they need anything else.",
         booking_state: buildRealtimeBookingState({
           steps: sortFlowSteps(
-            (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
+            (await getSharedBookingFlow(tenantId)) as BookingFlowStepLike[]
           ),
           state: smsResult.updatedState,
           explicitCurrentIndex: null,
@@ -428,7 +430,7 @@ export async function executeRealtimeTool(
         link_name: smsResult.link?.nombre || null,
         booking_state: buildRealtimeBookingState({
           steps: sortFlowSteps(
-            (await getBookingFlow(tenantId, "voice")) as BookingFlowStepLike[]
+            (await getSharedBookingFlow(tenantId)) as BookingFlowStepLike[]
           ),
           state: updatedState,
           explicitCurrentIndex: null,
