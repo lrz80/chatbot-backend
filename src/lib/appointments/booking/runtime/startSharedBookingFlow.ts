@@ -150,7 +150,7 @@ function buildPendingStepState(params: {
     pendingBookingStepExpectedType:
       nextStep.expected_type,
     pendingBookingStepValidationConfig:
-      nextStep.validation_config || {},
+      nextStep.validation_config,
 
     bookingTurnStatus: "waiting_user_answer",
   };

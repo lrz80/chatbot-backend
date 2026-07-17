@@ -293,8 +293,7 @@ function applyPendingStepToState(params: {
       nextRequiredStep.expected_type,
 
     pendingBookingStepValidationConfig:
-      nextRequiredStep.validation_config ||
-      {},
+      nextRequiredStep.validation_config,
 
     bookingTurnStatus:
       "waiting_user_answer",

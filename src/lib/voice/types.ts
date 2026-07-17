@@ -21,9 +21,10 @@ export type CallState = {
 
   pendingBookingStepSlot?: string;
   pendingBookingStepExpectedType?: string;
-  pendingBookingStepValidationConfig?: Record<string, unknown>;
+  pendingBookingStepValidationConfig?: Record<string, unknown> | null;
 
   bookingTurnStatus?:
+    | "idle"
     | "waiting_assistant_prompt"
     | "waiting_user_answer"
     | "flow_complete";
