@@ -139,20 +139,49 @@ function createMetaSender(params: {
   };
 }
 
-async function processMetaInbound(event: MetaInboundEvent): Promise<void> {
+async function processMetaInbound(
+  event: MetaInboundEvent
+): Promise<void> {
+  console.log("[META][PROCESSING_STARTED]", {
+    pageId: event.pageId,
+    senderId: event.senderId,
+    messageId: event.messageId,
+  });
+
   const resolved = await resolveMetaTenant(event.pageId);
-  if (!resolved) return;
 
-  const { tenant, canal, accessToken } = resolved;
-
-  if (!(await canProcessMetaInbound(tenant, canal))) {
+  if (!resolved) {
+    console.warn("[META][TENANT_NOT_RESOLVED]", {
+      pageId: event.pageId,
+      senderId: event.senderId,
+      messageId: event.messageId,
+    });
     return;
   }
 
-  /*
-   * Adaptamos el evento de Meta al contrato de entrada que ya consume
-   * buildTurnContext dentro del procesador compartido.
-   */
+  const { tenant, canal, accessToken } = resolved;
+
+  console.log("[META][TENANT_RESOLVED]", {
+    tenantId: tenant.id,
+    canal,
+    pageId: event.pageId,
+    hasAccessToken: Boolean(accessToken),
+  });
+
+  const canProcess = await canProcessMetaInbound(
+    tenant,
+    canal
+  );
+
+  if (!canProcess) {
+    console.warn("[META][CHANNEL_GATE_BLOCKED]", {
+      tenantId: tenant.id,
+      canal,
+      membershipActive: tenant?.membresia_activa ?? null,
+    });
+    return;
+  }
+
   const compatibleBody = {
     Body: event.userInput,
     From: event.senderId,
@@ -161,6 +190,13 @@ async function processMetaInbound(event: MetaInboundEvent): Promise<void> {
     SmsMessageSid: event.messageId,
     NumMedia: "0",
   };
+
+  console.log("[META][SHARED_PIPELINE_DISPATCH]", {
+    tenantId: tenant.id,
+    canal,
+    senderId: event.senderId,
+    messageId: event.messageId,
+  });
 
   await procesarMensajeWhatsApp(compatibleBody, {
     tenant,
@@ -197,28 +233,121 @@ router.get(
 );
 
 router.post("/api/facebook/webhook", (req: Request, res: Response) => {
-  // Meta exige una respuesta inmediata.
+  console.log("[META][WEBHOOK_RECEIVED]", {
+    method: req.method,
+    originalUrl: req.originalUrl,
+    contentType: req.headers["content-type"] ?? null,
+    object: req.body?.object ?? null,
+    entryCount: Array.isArray(req.body?.entry)
+      ? req.body.entry.length
+      : 0,
+  });
+
+  // Meta exige respuesta inmediata.
   res.sendStatus(200);
 
   const body = req.body;
+
   if (body?.object !== "page" && body?.object !== "instagram") {
+    console.warn("[META][UNSUPPORTED_OBJECT]", {
+      object: body?.object ?? null,
+    });
     return;
   }
 
   for (const entry of body.entry || []) {
     const pageId = String(entry?.id || "").trim();
-    if (!pageId) continue;
+
+    console.log("[META][ENTRY_RECEIVED]", {
+      pageId: pageId || null,
+      messagingCount: Array.isArray(entry?.messaging)
+        ? entry.messaging.length
+        : 0,
+    });
+
+    if (!pageId) {
+      console.warn("[META][ENTRY_WITHOUT_PAGE_ID]");
+      continue;
+    }
 
     for (const messagingEvent of entry?.messaging || []) {
       const message = messagingEvent?.message;
-      const senderId = String(messagingEvent?.sender?.id || "").trim();
-      const messageId = String(message?.mid || "").trim();
-      const userInput =
-        typeof message?.text === "string" ? message.text.trim() : "";
+      const senderId = String(
+        messagingEvent?.sender?.id || ""
+      ).trim();
 
-      if (!senderId || !messageId || !userInput) continue;
-      if (message?.is_echo === true) continue;
-      if (senderId === pageId) continue;
+      const messageId = String(
+        message?.mid || ""
+      ).trim();
+
+      const userInput =
+        typeof message?.text === "string"
+          ? message.text.trim()
+          : "";
+
+      console.log("[META][MESSAGING_EVENT_RECEIVED]", {
+        pageId,
+        senderId: senderId || null,
+        messageId: messageId || null,
+        hasMessage: Boolean(message),
+        hasText: Boolean(userInput),
+        isEcho: message?.is_echo === true,
+        hasPostback: Boolean(messagingEvent?.postback),
+        eventKeys:
+          messagingEvent &&
+          typeof messagingEvent === "object"
+            ? Object.keys(messagingEvent)
+            : [],
+      });
+
+      if (!senderId) {
+        console.warn("[META][EVENT_WITHOUT_SENDER]", {
+          pageId,
+        });
+        continue;
+      }
+
+      if (!messageId) {
+        console.warn("[META][EVENT_WITHOUT_MESSAGE_ID]", {
+          pageId,
+          senderId,
+        });
+        continue;
+      }
+
+      if (!userInput) {
+        console.warn("[META][EVENT_WITHOUT_TEXT]", {
+          pageId,
+          senderId,
+          messageId,
+        });
+        continue;
+      }
+
+      if (message?.is_echo === true) {
+        console.log("[META][ECHO_IGNORED]", {
+          pageId,
+          senderId,
+          messageId,
+        });
+        continue;
+      }
+
+      if (senderId === pageId) {
+        console.log("[META][SELF_MESSAGE_IGNORED]", {
+          pageId,
+          senderId,
+          messageId,
+        });
+        continue;
+      }
+
+      console.log("[META][DISPATCHING_INBOUND]", {
+        pageId,
+        senderId,
+        messageId,
+        userInput,
+      });
 
       void processMetaInbound({
         pageId,
@@ -226,11 +355,18 @@ router.post("/api/facebook/webhook", (req: Request, res: Response) => {
         messageId,
         userInput,
       }).catch((error) => {
-        console.error("❌ [META] processMetaInbound failed", {
+        console.error("[META][PROCESS_INBOUND_FAILED]", {
           pageId,
           senderId,
           messageId,
-          error,
+          error:
+            error instanceof Error
+              ? {
+                  name: error.name,
+                  message: error.message,
+                  stack: error.stack,
+                }
+              : error,
         });
       });
     }
