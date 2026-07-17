@@ -74,6 +74,12 @@ import { userExternalLinkGuard } from "../../lib/guards/userExternalLinkGuard";
 import { executeDomainRouterTurn } from "../../lib/channels/engine/domain/executeDomainRouterTurn";
 import { applyStaleSelectionContextReset } from "../../lib/channels/engine/state/applyStaleSelectionContextReset";
 import { runSimplePromptTurn } from "../../lib/channels/simplePrompt/runSimplePromptTurn";
+import {
+  isMessagingBookingActive,
+} from "../../lib/appointments/booking/runtime/messagingBookingState";
+import {
+  resolveTenantBookingProvider,
+} from "../../lib/appointments/booking/providers/resolveTenantBookingProvider";
 
 // Puedes ponerlo debajo de los imports
 export type MessagingChannel =
@@ -589,22 +595,56 @@ export async function procesarMensajeWhatsApp(
     return tokenCount <= 3;
   }
 
-  // ✅ google_calendar_enabled flag (source of truth)
   let bookingEnabled = false;
+
   try {
+    const activeProvider =
+      await resolveTenantBookingProvider(
+        tenant.id
+      );
 
-  const { rows } = await queryWithTimeout(
-    `SELECT google_calendar_enabled
-    FROM channel_settings
-    WHERE tenant_id = $1
-    LIMIT 1`,
-    [tenant.id],
-    12000
-  );
+    const settingsResult =
+      await queryWithTimeout(
+        `
+          SELECT enabled
+          FROM appointment_settings
+          WHERE tenant_id = $1
+          LIMIT 1
+        `,
+        [tenant.id],
+        12000
+      );
 
-    bookingEnabled = rows[0]?.google_calendar_enabled === true;
+    const settingsRow =
+      settingsResult.rows[0];
+
+    bookingEnabled =
+      activeProvider !== null &&
+      Boolean(settingsRow) &&
+      settingsRow.enabled !== false;
+
+    console.log(
+      "[WHATSAPP][BOOKING_AVAILABILITY_RESOLVED]",
+      {
+        tenantId: tenant.id,
+        activeProvider,
+        hasAppointmentSettings:
+          Boolean(settingsRow),
+        appointmentsEnabled:
+          settingsRow?.enabled ?? null,
+        bookingEnabled,
+      }
+    );
   } catch (e: any) {
-    console.warn("⚠️ No se pudo leer google_calendar_enabled:", e?.message);
+    bookingEnabled = false;
+
+    console.warn(
+      "[WHATSAPP][BOOKING_AVAILABILITY_RESOLUTION_FAILED]",
+      {
+        tenantId: tenant.id,
+        error: e?.message || e,
+      }
+    );
   }
 
   function setReply(text: string, source: string, intent?: string | null) {
@@ -782,7 +822,7 @@ export async function procesarMensajeWhatsApp(
     const bookingRes = await handleBookingTurn({
       pool,
       tenantId: tenant.id,
-      canal,                 // "whatsapp" aquí, pero genérico para otros canales
+      canal,
       contactoNorm,
       idiomaDestino,
       userInput,
@@ -795,20 +835,29 @@ export async function procesarMensajeWhatsApp(
       bookingLink: resolveTenantBookingLink(tenant),
 
       detectedIntent,
-      intentFallback: INTENCION_FINAL_CANONICA,
+      intentFallback:
+        INTENCION_FINAL_CANONICA,
+
+      bookingRequested:
+        detectedCommercial?.wantsBooking === true,
 
       mode,
       sourceTag: tag,
 
       transition,
 
-      // cómo se persiste conversation_state en WhatsApp
       persistState: async (nextCtx) => {
-        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-          activeFlow,
-          activeStep,
-          context: nextCtx,
-        });
+        await setConversationStateCompat(
+          tenant.id,
+          canal,
+          contactoNorm,
+          {
+            activeFlow,
+            activeStep,
+            context: nextCtx,
+          }
+        );
+
         convoCtx = nextCtx;
       },
     });
@@ -830,8 +879,10 @@ export async function procesarMensajeWhatsApp(
 
   if (await tryBooking("gate", "pre_sm")) return;
 
-  const bookingStep0 = (convoCtx as any)?.booking?.step;
-  let inBooking0 = !!(bookingStep0 && bookingStep0 !== "idle");
+  let inBooking0 =
+    isMessagingBookingActive(
+      convoCtx
+    );
 
   const awaiting = (convoCtx as any)?.awaiting || activeStep || null;
 
@@ -1137,6 +1188,25 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
+  /*
+  * En pre_sm solo se continuó un runtime activo.
+  * Aquí ya tenemos detectedCommercial y podemos
+  * iniciar una reserva nueva.
+  */
+  if (
+    await tryBooking(
+      "gate",
+      "post_signals"
+    )
+  ) {
+    return;
+  }
+
+  inBooking0 =
+    isMessagingBookingActive(
+      convoCtx
+    );
+
   let hasPendingCta = hasPendingCtaAwaitingConfirmation(convoCtx);
 
   if (hasPendingCta) {
@@ -1212,55 +1282,6 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
-  // ===============================
-  // 🎯 Booking vs Info General de Horarios
-  // ===============================
-  const intentNow = INTENCION_FINAL_CANONICA || detectedIntent || null;
-
-  // Intenciones que consideramos **propias de booking**
-  const BOOKING_INTENTS = new Set<string>([
-    "booking_start",
-    "booking_date",
-    "booking_time",
-    "booking_confirm",
-    "booking_change",
-    "booking_horarios",        // horarios ligados a la cita puntual
-  ]);
-
-  // Intención para info general de horarios/precios del negocio
-  const INFO_HORARIOS_INTENTS = new Set<string>([
-    "info_horarios_generales",
-  ]);
-
-  if (inBooking0) {
-    if (intentNow && INFO_HORARIOS_INTENTS.has(intentNow)) {
-      // ✅ El usuario está en booking, pero la intención actual
-      // es ver HORARIOS/PRECIOS GENERALES del negocio.
-      // Dejamos que el fastpath de catálogo responda.
-      console.log("🔓 booking: se permite fastpath para info_horarios_generales", {
-        bookingStep0,
-        intentNow,
-      });
-      inBooking0 = false;
-    } else if (intentNow && !BOOKING_INTENTS.has(intentNow)) {
-      // Si el booking está activo pero la intención ya no es de booking,
-      // puedes optar por soltar el lock para que la conversación siga normal.
-      console.log("🔓 booking: lock liberado porque intent no es de booking", {
-        bookingStep0,
-        intentNow,
-      });
-      inBooking0 = false;
-
-      // Opcional: resetear el flag en contexto
-      if ((convoCtx as any)?.booking) {
-        (convoCtx as any).booking = {
-          ...(convoCtx as any).booking,
-          step: "idle",
-        };
-      }
-    }
-  }
-
   // Si el helper ya manejó el turno (p.ej. human override explícito), salimos aquí
   if (signals.handled && signals.humanOverrideReply) {
     return await replyAndExit(
@@ -1289,15 +1310,10 @@ export async function procesarMensajeWhatsApp(
         tenant?.whatsapp_engine_mode ?? null,
     });
 
-    const activeBookingStep = String(
-      (convoCtx as any)?.booking?.step || "idle"
-    )
-      .trim()
-      .toLowerCase();
-
     const hasActiveBooking =
-      activeBookingStep.length > 0 &&
-      activeBookingStep !== "idle";
+      isMessagingBookingActive(
+        convoCtx
+      );
 
     if (
       engineMode === "simple_hybrid" &&
@@ -1644,7 +1660,17 @@ export async function procesarMensajeWhatsApp(
       return;
     }
   } else {
-    console.log("🔒 SM SKIPPED: booking activo", { bookingStep0 });
+    console.log(
+      "🔒 SM SKIPPED: booking runtime activo",
+      {
+        pendingBookingStepKey:
+          (convoCtx as any)
+            ?.booking_runtime
+            ?.state
+            ?.pendingBookingStepKey ||
+          null,
+      }
+    );
   }
 
   // ===============================
