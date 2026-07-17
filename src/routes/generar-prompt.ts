@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v20"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v21"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -438,6 +438,9 @@ function buildConversationRules(idioma: Lang): string {
       "- Ask one brief question to identify what the customer needs.",
       "",
       "DIRECT_QUESTIONS",
+      "- When the customer begins with a greeting, reply first with a brief and natural greeting in the same language.",
+      "- After the greeting, answer the requested information directly.",
+      "- Do not omit the greeting when the customer greets you and also asks a question.",
       "- Answer direct questions before asking anything else.",
       "- If the customer requests multiple categories of information in the same message, answer every requested category in the same turn.",
       "- Do not omit an explicitly requested part merely to keep the response short.",
@@ -477,6 +480,9 @@ function buildConversationRules(idioma: Lang): string {
       "- Faça uma pergunta breve para identificar o que o cliente precisa.",
       "",
       "PERGUNTAS_DIRETAS",
+      "- Quando o cliente iniciar com uma saudação, responda primeiro com uma saudação breve e natural no mesmo idioma.",
+      "- Depois da saudação, responda diretamente às informações solicitadas.",
+      "- Não omita a saudação quando o cliente cumprimentar e também fizer uma pergunta.",
       "- Responda às perguntas diretas antes de perguntar qualquer outra coisa.",
       "- Se o cliente solicitar várias categorias de informação na mesma mensagem, responda a todas no mesmo turno.",
       "- Não omita uma parte solicitada explicitamente apenas para manter a resposta curta.",
@@ -515,6 +521,9 @@ function buildConversationRules(idioma: Lang): string {
     "- Haz una pregunta breve para identificar qué necesita.",
     "",
     "PREGUNTAS_DIRECTAS",
+    "- Cuando el cliente inicia con un saludo, responde primero con un saludo breve y natural en el mismo idioma.",
+    "- Después del saludo, responde directamente la información solicitada.",
+    "- No omitas el saludo cuando el cliente saluda y también hace una pregunta.",
     "- Responde las preguntas directas antes de preguntar cualquier otra cosa.",
     "- Si el cliente solicita varias categorías de información en el mismo mensaje, responde cada categoría solicitada en el mismo turno.",
     "- No omitas una parte explícitamente solicitada solo para mantener la respuesta corta.",
