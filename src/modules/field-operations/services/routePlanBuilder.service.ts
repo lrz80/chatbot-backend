@@ -236,7 +236,7 @@ export async function buildRoutePlan(
   const { rows } =
     await pool.query<RouteAppointmentRow>(
       `
-      SELECT DISTINCT ON (a.id)
+      SELECT
         a.id::text AS appointment_id,
 
         a.service_id::text AS service_id,
@@ -291,7 +291,6 @@ export async function buildRoutePlan(
         AND a.status <> 'cancelled'
 
       ORDER BY
-        a.id,
         a.start_time ASC,
         ara.created_at ASC
       `,

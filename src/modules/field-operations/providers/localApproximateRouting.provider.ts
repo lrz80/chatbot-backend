@@ -287,13 +287,29 @@ export class LocalApproximateRoutingProvider
     }
 
     const preserveScheduledOrder =
-      request.options?.preserveScheduledOrder ?? false;
+    request.options?.preserveScheduledOrder ?? false;
 
-    const orderedInputStops = preserveScheduledOrder
-      ? [...stops].sort(compareScheduledStops)
-      : orderByNearestNeighbor({
-          stops,
-          startLocation: request.startLocation ?? null,
+    /**
+     * Appointments with scheduled times are fixed commitments.
+     * The approximate provider must not reorder them in a way
+     * that causes a later appointment to run before an earlier one.
+     *
+     * Nearest-neighbor ordering is only safe for stops without
+     * scheduled time constraints.
+     */
+    const hasScheduledTimeConstraints = stops.some(
+    (stop) => Boolean(stop.scheduledStartAt)
+    );
+
+    const useScheduledOrder =
+    preserveScheduledOrder ||
+    hasScheduledTimeConstraints;
+
+    const orderedInputStops = useScheduledOrder
+    ? [...stops].sort(compareScheduledStops)
+    : orderByNearestNeighbor({
+        stops,
+        startLocation: request.startLocation ?? null,
         });
 
     const orderedStops: RoutingStopOutput[] = [];
@@ -448,7 +464,7 @@ export class LocalApproximateRoutingProvider
       totalServiceSeconds,
       providerMetadata: {
         calculationType: "approximate",
-        algorithm: preserveScheduledOrder
+        algorithm: useScheduledOrder
           ? "scheduled_order"
           : "nearest_neighbor",
         usesRoadNetwork: false,
