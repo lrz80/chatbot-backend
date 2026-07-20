@@ -18,6 +18,8 @@ type AppointmentSettings = {
   min_lead_minutes: number;
   timezone: string;
   enabled: boolean;
+
+  field_service_area_enabled: boolean;
 };
 
 export type AppointmentBookingChannel =

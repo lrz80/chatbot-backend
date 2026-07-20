@@ -1,6 +1,8 @@
 // src/lib/appointments/booking/runtime/createSharedAppointment.ts
 
-import pool from "../../../db";
+import {
+  getAppointmentSettings,
+} from "../../getAppointmentSettings";
 
 import {
   createAppointment,
@@ -266,24 +268,10 @@ export async function createSharedAppointment(
         }),
     });
 
-  const settingsResult =
-    await pool.query(
-      `
-        SELECT
-          default_duration_min,
-          buffer_min,
-          min_lead_minutes,
-          timezone,
-          enabled
-        FROM appointment_settings
-        WHERE tenant_id = $1
-        LIMIT 1
-      `,
-      [params.tenantId]
-    );
-
   const settings =
-    settingsResult.rows[0];
+    await getAppointmentSettings(
+      params.tenantId
+    );
 
   if (!settings) {
     return {
@@ -339,6 +327,8 @@ export async function createSharedAppointment(
             "America/New_York",
           enabled:
             settings.enabled !== false,
+          field_service_area_enabled:
+            settings.field_service_area_enabled === true,
         },
       });
 
