@@ -21,6 +21,7 @@ export type RealtimeSubmittedStepValueError =
   | "EMPTY_SUBMITTED_VALUE"
   | "INCOMPATIBLE_NUMBER_VALUE"
   | "INCOMPATIBLE_DATETIME_VALUE"
+  | "INCOMPATIBLE_ADDRESS_VALUE"
   | "INCOMPATIBLE_CHOICE_VALUE"
   | "INCOMPATIBLE_TEXT_VALUE"
   | "PHONE_REQUIRED"
@@ -84,6 +85,86 @@ function isDatetimeStep(step: BookingFlowStepLike): boolean {
   const slot = getValidationSlot(step).toLowerCase();
 
   return stepKey === "datetime" || slot === "datetime";
+}
+
+function isAddressStep(step: BookingFlowStepLike): boolean {
+  const stepKey = clean(step.step_key).toLowerCase();
+  const slot = getStepSlot(step).toLowerCase();
+  const expectedType = resolveExpectedType(step);
+
+  const addressSlots = new Set([
+    "address",
+    "service_address",
+    "property_address",
+    "customer_address",
+  ]);
+
+  return (
+    addressSlots.has(stepKey) ||
+    addressSlots.has(slot) ||
+    expectedType === "address"
+  );
+}
+
+function resolveStructuredAddressProtocolValue(params: {
+  value: string;
+  rawTranscriptValue: string;
+  modelValue: string;
+}): RealtimeSubmittedStepValueResult {
+  const candidates = [params.modelValue, params.value]
+    .map((candidate) => clean(candidate))
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (!candidate.startsWith("{")) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(candidate);
+
+      if (!parsed || typeof parsed !== "object") {
+        continue;
+      }
+
+      const status = clean((parsed as any).status).toLowerCase();
+      const normalized = clean((parsed as any).normalized);
+
+      if (status === "unknown") {
+        return {
+          ok: false,
+          error: "INCOMPATIBLE_ADDRESS_VALUE",
+          value: "",
+          rawTranscriptValue: params.rawTranscriptValue,
+          modelValue: params.modelValue,
+          source: "none",
+        };
+      }
+
+      if (status !== "resolved" || !normalized) {
+        continue;
+      }
+
+      return {
+        ok: true,
+        value: normalized,
+        rawTranscriptValue: params.rawTranscriptValue,
+        modelValue: params.modelValue,
+        source: "model",
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  return {
+    ok: false,
+    error: "INCOMPATIBLE_ADDRESS_VALUE",
+    value: "",
+    rawTranscriptValue: params.rawTranscriptValue,
+    modelValue: params.modelValue,
+    source: "none",
+  };
 }
 
 function buildIncompatibleTextResult(params: {
@@ -376,6 +457,14 @@ export function resolveRealtimeSubmittedStepValue(params: {
       rawTranscriptValue,
       modelValue,
       timeZone,
+    });
+  }
+
+  if (isAddressStep(step)) {
+    return resolveStructuredAddressProtocolValue({
+      value,
+      rawTranscriptValue,
+      modelValue,
     });
   }
 

@@ -123,6 +123,33 @@ function isStructuredDatetimeProtocolValue(value: string): boolean {
   }
 }
 
+function isStructuredAddressProtocolValue(value: string): boolean {
+  const trimmed = clean(value);
+
+  if (!trimmed.startsWith("{")) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+
+    return (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof parsed.status === "string" &&
+      (
+        clean(parsed.status).toLowerCase() === "unknown" ||
+        (
+          clean(parsed.status).toLowerCase() === "resolved" &&
+          Boolean(clean(parsed.normalized))
+        )
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function applySubmitBookingStepEffectiveArgs(
   params: ApplySubmitBookingStepEffectiveArgsParams
 ): Record<string, any> {
@@ -152,6 +179,17 @@ export function applySubmitBookingStepEffectiveArgs(
   const slot = clean(
     (realtimeState as any).pendingBookingStepSlot
   ).toLowerCase();
+
+  const addressSlots = new Set([
+    "address",
+    "service_address",
+    "property_address",
+    "customer_address",
+  ]);
+
+  const addressStep =
+    addressSlots.has(slot) ||
+    expectedType === "address";
 
   const phoneConfirmOrReplaceStep = isPhoneConfirmOrReplaceStep({
     realtimeState,
@@ -230,6 +268,30 @@ export function applySubmitBookingStepEffectiveArgs(
     };
   }
 
+  if (addressStep) {
+    const forwardedAddressValue = isStructuredAddressProtocolValue(modelValue)
+      ? modelValue
+      : JSON.stringify({
+          status: "unknown",
+          raw: transcriptValue,
+        });
+
+    const valueCandidates: ValueCandidate[] = [
+      {
+        source: "model",
+        value: forwardedAddressValue,
+      },
+    ];
+
+    return {
+      ...effectiveToolArgs,
+      value: forwardedAddressValue,
+      model_value: modelValue,
+      transcript_value: transcriptValue,
+      value_candidates: valueCandidates,
+    };
+  }
+
   const forwardedValue = resolveSubmitBookingStepForwardedValue({
     stepKey,
     expectedType,
@@ -239,13 +301,6 @@ export function applySubmitBookingStepEffectiveArgs(
     currentTranscriptSeq,
     promptAnchorSeq,
   });
-
-  const addressSlots = new Set([
-    "address",
-    "service_address",
-    "property_address",
-    "customer_address",
-  ]);
 
   const prefersModelCandidate =
     stepKey === "service" ||
