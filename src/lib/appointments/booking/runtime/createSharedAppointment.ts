@@ -506,12 +506,18 @@ export async function createSharedAppointment(
     const err = error as Error & {
       code?: string;
       error?: string;
+
       suggestedStarts?: string[];
+
       paymentUrl?: string | null;
       policyText?: string | null;
       amountCents?: number | null;
       currency?: string;
       serviceName?: string;
+
+      distanceMiles?: number | null;
+      radiusMiles?: number | null;
+      formattedAddress?: string | null;
     };
 
     if (
@@ -584,6 +590,83 @@ export async function createSharedAppointment(
         customer_action_required: true,
         deposit_payment_url:
           clean(err.paymentUrl) || null,
+      };
+    }
+
+    if (
+      err.message ===
+        "FIELD_SERVICE_ADDRESS_REQUIRED" ||
+      err.code ===
+        "FIELD_SERVICE_ADDRESS_REQUIRED"
+    ) {
+      return {
+        ok: false,
+        error:
+          "FIELD_SERVICE_ADDRESS_REQUIRED",
+
+        state: params.state,
+
+        booking_state:
+          buildBookingState({
+            steps,
+            state: params.state,
+            currentIndex: null,
+            confirmed: true,
+          }),
+
+        next_required_step: null,
+        assistant_prompt: "",
+
+        flow_complete: false,
+        customer_action_required: true,
+
+        details: {
+          reason:
+            "FIELD_SERVICE_ADDRESS_REQUIRED",
+        },
+      };
+    }
+
+    if (
+      err.message ===
+        "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS" ||
+      err.code ===
+        "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS"
+    ) {
+      return {
+        ok: false,
+        error:
+          "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS",
+
+        state: params.state,
+
+        booking_state:
+          buildBookingState({
+            steps,
+            state: params.state,
+            currentIndex: null,
+            confirmed: true,
+          }),
+
+        next_required_step: null,
+        assistant_prompt: "",
+
+        flow_complete: false,
+        customer_action_required: true,
+
+        details: {
+          reason:
+            "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS",
+
+          distanceMiles:
+            err.distanceMiles ?? null,
+
+          radiusMiles:
+            err.radiusMiles ?? null,
+
+          formattedAddress:
+            err.formattedAddress ?? null,
+        },
       };
     }
 

@@ -12,6 +12,11 @@ import {
   syncAppointmentToFieldOperations,
 } from "../../modules/field-operations/services/fieldOperationsSync.service";
 
+import {
+  geocodeFieldServiceBaseAddress,
+  validateFieldServiceArea,
+} from "../../modules/field-operations/services/fieldServiceArea.service";
+
 type AppointmentSettings = {
   default_duration_min: number;
   buffer_min: number;
@@ -128,6 +133,16 @@ export async function createAppointment(
 ) {
   const serviceName = cleanString(args.answersBySlot.service);
   const datetimeText = cleanString(args.answersBySlot.datetime);
+
+  const serviceAddress =
+    cleanString(args.answersBySlot.address) ||
+    cleanString(args.answersBySlot.service_address) ||
+    cleanString(args.answersBySlot.location) ||
+    cleanString(args.answersBySlot.property_address);
+
+  const isFieldServiceBooking =
+    args.settings.field_service_area_enabled === true;
+
   const datetimeIsoText = cleanString(args.answersBySlot.datetime_iso);
   const customerPhone = args.answersBySlot.customer_phone || null;
   const customerName = cleanString(args.answersBySlot.customer_name);
@@ -168,6 +183,73 @@ export async function createAppointment(
     }
 
     start = scheduleValidation.requestedAt;
+  }
+
+  let normalizedFieldServiceAddress:
+    string | null = null;
+
+  let fieldServiceLatitude:
+    number | null = null;
+
+  let fieldServiceLongitude:
+    number | null = null;
+
+  if (isFieldServiceBooking) {
+    if (!serviceAddress) {
+      throw new Error(
+        "FIELD_SERVICE_ADDRESS_REQUIRED"
+      );
+    }
+
+    const geocodedAddress =
+      await geocodeFieldServiceBaseAddress({
+        address: serviceAddress,
+        language: "en",
+        region: "us",
+      });
+
+    normalizedFieldServiceAddress =
+      geocodedAddress.formattedAddress;
+
+    fieldServiceLatitude =
+      geocodedAddress.latitude;
+
+    fieldServiceLongitude =
+      geocodedAddress.longitude;
+
+    const areaValidation =
+      await validateFieldServiceArea({
+        tenantId: args.tenantId,
+        latitude: fieldServiceLatitude,
+        longitude: fieldServiceLongitude,
+      });
+
+    if (!areaValidation.allowed) {
+      const areaError = new Error(
+        areaValidation.reason ||
+          "FIELD_SERVICE_LOCATION_NOT_ALLOWED"
+      ) as Error & {
+        code?: string;
+        distanceMiles?: number | null;
+        radiusMiles?: number | null;
+        formattedAddress?: string | null;
+      };
+
+      areaError.code =
+        areaValidation.reason ||
+        "FIELD_SERVICE_LOCATION_NOT_ALLOWED";
+
+      areaError.distanceMiles =
+        areaValidation.distanceMiles;
+
+      areaError.radiusMiles =
+        areaValidation.radiusMiles;
+
+      areaError.formattedAddress =
+        normalizedFieldServiceAddress;
+
+      throw areaError;
+    }
   }
 
   const activeProvider = await resolveTenantBookingProvider(args.tenantId);
@@ -485,17 +567,29 @@ export async function createAppointment(
 
     const appointment = rows[0];
 
-    try {
+    if (isFieldServiceBooking) {
       await syncAppointmentToFieldOperations({
         tenantId: args.tenantId,
         appointmentId: appointment.id,
-        answersBySlot: args.answersBySlot,
+
+        answersBySlot: {
+          ...args.answersBySlot,
+
+          address:
+            normalizedFieldServiceAddress ||
+            serviceAddress,
+
+          field_service_latitude:
+            fieldServiceLatitude !== null
+              ? String(fieldServiceLatitude)
+              : null,
+
+          field_service_longitude:
+            fieldServiceLongitude !== null
+              ? String(fieldServiceLongitude)
+              : null,
+        },
       });
-    } catch (error) {
-      console.error(
-        "[FIELD_OPERATIONS][SYNC_FAILED]",
-        error
-      );
     }
 
     return appointment;
