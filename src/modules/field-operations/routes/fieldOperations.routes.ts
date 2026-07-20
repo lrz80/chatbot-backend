@@ -1257,41 +1257,97 @@ router.get(
 
 router.post(
   "/route-plans/build",
-  async (
-    req: AuthenticatedRequest,
-    res: Response
-  ) => {
+  async (req: AuthenticatedRequest, res: Response) => {
     try {
       const tenantId = getTenantId(req);
       const body = req.body ?? {};
 
-      const result =
-        await buildRoutePlan({
-          tenantId,
+      const buildResult = await buildRoutePlan({
+        tenantId,
+        resourceId: requiredString(
+          body.resourceId,
+          "resourceId"
+        ),
+        serviceDate: requiredString(
+          body.serviceDate,
+          "serviceDate"
+        ),
+        mode: "view_only",
+      });
 
-          resourceId: requiredString(
-            body.resourceId,
-            "resourceId"
-          ),
+      const shouldOptimize =
+        optionalBoolean(body.optimize, "optimize") ?? false;
 
-          serviceDate: requiredString(
-            body.serviceDate,
-            "serviceDate"
-          ),
-
-          mode:
-            optionalString(body.mode) === undefined
-              ? undefined
-              : (optionalString(body.mode) as any),
+      if (!shouldOptimize) {
+        return res.status(201).json({
+          ok: true,
+          optimized: false,
+          routePlan: buildResult.routePlan,
+          stops: buildResult.stops,
+          skippedAppointments:
+            buildResult.skippedAppointments,
         });
+      }
+
+      if (buildResult.stops.length === 0) {
+        return res.status(201).json({
+          ok: true,
+          optimized: false,
+          routePlan: buildResult.routePlan,
+          stops: [],
+          skippedAppointments:
+            buildResult.skippedAppointments,
+          warning: "FIELD_OPERATIONS_NO_ROUTABLE_STOPS",
+        });
+      }
+
+      const optimizedRoutePlan = await optimizeRoutePlan({
+        tenantId,
+        routePlanId: buildResult.routePlan.id,
+        providerName: optionalString(body.providerName),
+        routeStartAt:
+          body.routeStartAt === null ||
+          body.routeStartAt === undefined
+            ? null
+            : String(body.routeStartAt),
+        stops: buildResult.stops,
+        options: {
+          preserveScheduledOrder:
+            optionalBoolean(
+              body.options?.preserveScheduledOrder,
+              "options.preserveScheduledOrder"
+            ) ?? false,
+          returnToStart:
+            optionalBoolean(
+              body.options?.returnToStart,
+              "options.returnToStart"
+            ) ?? false,
+          averageSpeedKph:
+            optionalNumber(
+              body.options?.averageSpeedKph,
+              "options.averageSpeedKph"
+            ) ?? undefined,
+        },
+        metadata: {
+          source: "automatic_builder",
+          skippedAppointments:
+            buildResult.skippedAppointments,
+          ...(optionalObject(body.metadata, "metadata") ?? {}),
+        },
+      });
+
+      const persistedStops = await listRoutePlanStops({
+        tenantId,
+        routePlanId: optimizedRoutePlan.id,
+      });
 
       return res.status(201).json({
         ok: true,
-
-        routePlan: result.routePlan,
-        stops: result.stops,
+        optimized: true,
+        routePlan: optimizedRoutePlan,
+        stops: persistedStops,
         skippedAppointments:
-          result.skippedAppointments,
+          buildResult.skippedAppointments,
       });
     } catch (error) {
       return handleError(res, error);
