@@ -135,6 +135,7 @@ export type RouteStopResult = {
   plannedArrivalAt: string | null;
   plannedDepartureAt: string | null;
 
+  serviceDurationSeconds: number;
   driveSecondsFromPrevious: number;
   distanceMetersFromPrevious: number;
 
@@ -162,12 +163,13 @@ export type RouteOptimizationInput = {
 };
 
 export type RouteOptimizationResult = {
+  provider: string;
+
   orderedStops: RouteStopResult[];
 
   totalDistanceMeters: number;
   totalDriveSeconds: number;
   totalServiceSeconds: number;
 
-  provider: string;
   providerMetadata: Record<string, unknown>;
 };
