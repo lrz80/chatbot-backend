@@ -30,6 +30,7 @@ import {
 } from "../repositories/routePlans.repo";
 
 import { optimizeRoutePlan } from "../services/routeOptimization.service";
+import { buildRoutePlan } from "../services/routePlanBuilder.service";
 
 import type { FieldOperationResourceType } from "../domain/fieldOperations.types";
 import type { RoutingStopInput } from "../providers/routingProvider.types";
@@ -1247,6 +1248,50 @@ router.get(
         ok: true,
         routePlan,
         stops,
+      });
+    } catch (error) {
+      return handleError(res, error);
+    }
+  }
+);
+
+router.post(
+  "/route-plans/build",
+  async (
+    req: AuthenticatedRequest,
+    res: Response
+  ) => {
+    try {
+      const tenantId = getTenantId(req);
+      const body = req.body ?? {};
+
+      const result =
+        await buildRoutePlan({
+          tenantId,
+
+          resourceId: requiredString(
+            body.resourceId,
+            "resourceId"
+          ),
+
+          serviceDate: requiredString(
+            body.serviceDate,
+            "serviceDate"
+          ),
+
+          mode:
+            optionalString(body.mode) === undefined
+              ? undefined
+              : (optionalString(body.mode) as any),
+        });
+
+      return res.status(201).json({
+        ok: true,
+
+        routePlan: result.routePlan,
+        stops: result.stops,
+        skippedAppointments:
+          result.skippedAppointments,
       });
     } catch (error) {
       return handleError(res, error);

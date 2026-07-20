@@ -1,0 +1,427 @@
+// src/modules/field-operations/services/routePlanBuilder.service.ts
+
+import pool from "../../../lib/db";
+
+import {
+  getFieldOperationResourceById,
+} from "../repositories/fieldResources.repo";
+
+import {
+  saveRoutePlan,
+} from "../repositories/routePlans.repo";
+
+import type {
+  RoutePlan,
+  RoutePlanMode,
+} from "../domain/fieldOperations.types";
+
+import type {
+  RoutingStopInput,
+} from "../providers/routingProvider.types";
+
+type RouteAppointmentRow = {
+  appointment_id: string;
+
+  service_id: string | null;
+  service_name: string | null;
+
+  customer_name: string | null;
+  customer_phone: string | null;
+
+  start_time: Date | string;
+  end_time: Date | string;
+
+  appointment_status: string;
+
+  location_id: string;
+  formatted_address: string;
+
+  latitude: number | string | null;
+  longitude: number | string | null;
+
+  geocoding_status: string;
+
+  assignment_role: string;
+  assignment_status: string;
+};
+
+export type SkippedRouteAppointment = {
+  appointmentId: string;
+  reason:
+    | "LOCATION_NOT_FOUND"
+    | "LOCATION_NOT_GEOCODED"
+    | "INVALID_COORDINATES"
+    | "INVALID_APPOINTMENT_TIME";
+  formattedAddress: string | null;
+};
+
+export type BuildRoutePlanInput = {
+  tenantId: string;
+  resourceId: string;
+  serviceDate: string;
+
+  mode?: RoutePlanMode;
+};
+
+export type BuildRoutePlanResult = {
+  routePlan: RoutePlan;
+  stops: RoutingStopInput[];
+  skippedAppointments: SkippedRouteAppointment[];
+};
+
+function requiredString(
+  value: unknown,
+  fieldName: string
+): string {
+  const result = String(value ?? "").trim();
+
+  if (!result) {
+    throw new Error(
+      `FIELD_OPERATIONS_REQUIRED_FIELD:${fieldName}`
+    );
+  }
+
+  return result;
+}
+
+function normalizeServiceDate(
+  value: unknown
+): string {
+  const serviceDate = requiredString(
+    value,
+    "serviceDate"
+  );
+
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})$/.exec(serviceDate);
+
+  if (!match) {
+    throw new Error(
+      "FIELD_OPERATIONS_INVALID_SERVICE_DATE"
+    );
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  const parsed = new Date(
+    Date.UTC(year, month - 1, day)
+  );
+
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    throw new Error(
+      "FIELD_OPERATIONS_INVALID_SERVICE_DATE"
+    );
+  }
+
+  return serviceDate;
+}
+
+function toIsoString(
+  value: Date | string
+): string | null {
+  const parsed =
+    value instanceof Date
+      ? value
+      : new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString();
+}
+
+function parseCoordinate(
+  value: number | string | null,
+  minimum: number,
+  maximum: number
+): number | null {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
+
+  const parsed = Number(value);
+
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < minimum ||
+    parsed > maximum
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function calculateServiceDurationSeconds(
+  startISO: string,
+  endISO: string
+): number {
+  const start = new Date(startISO);
+  const end = new Date(endISO);
+
+  const durationMilliseconds =
+    end.getTime() - start.getTime();
+
+  if (
+    !Number.isFinite(durationMilliseconds) ||
+    durationMilliseconds < 0
+  ) {
+    return 0;
+  }
+
+  return Math.round(
+    durationMilliseconds / 1000
+  );
+}
+
+export async function buildRoutePlan(
+  input: BuildRoutePlanInput
+): Promise<BuildRoutePlanResult> {
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
+  const resourceId = requiredString(
+    input.resourceId,
+    "resourceId"
+  );
+
+  const serviceDate = normalizeServiceDate(
+    input.serviceDate
+  );
+
+  const resource =
+    await getFieldOperationResourceById({
+      tenantId,
+      resourceId,
+    });
+
+  if (!resource) {
+    throw new Error(
+      "FIELD_OPERATIONS_RESOURCE_NOT_FOUND"
+    );
+  }
+
+  if (!resource.active) {
+    throw new Error(
+      "FIELD_OPERATIONS_RESOURCE_INACTIVE"
+    );
+  }
+
+  const timezone =
+    String(resource.timezone ?? "").trim() ||
+    "America/New_York";
+
+  const { rows } =
+    await pool.query<RouteAppointmentRow>(
+      `
+      SELECT DISTINCT ON (a.id)
+        a.id::text AS appointment_id,
+
+        a.service_id::text AS service_id,
+        s.name AS service_name,
+
+        a.customer_name,
+        a.customer_phone,
+
+        a.start_time,
+        a.end_time,
+
+        a.status AS appointment_status,
+
+        al.id AS location_id,
+        al.formatted_address,
+
+        al.latitude,
+        al.longitude,
+
+        al.geocoding_status,
+
+        ara.assignment_role,
+        ara.assignment_status
+
+      FROM appointment_resource_assignments ara
+
+      INNER JOIN appointments a
+        ON a.id::text = ara.appointment_id
+       AND a.tenant_id = ara.tenant_id
+
+      LEFT JOIN services s
+        ON s.id = a.service_id
+
+      LEFT JOIN appointment_locations al
+        ON al.tenant_id = ara.tenant_id
+       AND al.appointment_id = ara.appointment_id
+       AND al.location_type = 'service'
+
+      WHERE ara.tenant_id = $1
+        AND ara.resource_id = $2
+
+        AND a.start_time >= (
+          $3::date::timestamp
+          AT TIME ZONE $4
+        )
+
+        AND a.start_time < (
+          ($3::date + 1)::timestamp
+          AT TIME ZONE $4
+        )
+
+        AND a.status <> 'cancelled'
+
+      ORDER BY
+        a.id,
+        a.start_time ASC,
+        ara.created_at ASC
+      `,
+      [
+        tenantId,
+        resourceId,
+        serviceDate,
+        timezone,
+      ]
+    );
+
+  const stops: RoutingStopInput[] = [];
+  const skippedAppointments:
+    SkippedRouteAppointment[] = [];
+
+  for (const row of rows) {
+    if (!row.location_id) {
+      skippedAppointments.push({
+        appointmentId: row.appointment_id,
+        reason: "LOCATION_NOT_FOUND",
+        formattedAddress:
+          row.formatted_address ?? null,
+      });
+
+      continue;
+    }
+
+    const latitude = parseCoordinate(
+      row.latitude,
+      -90,
+      90
+    );
+
+    const longitude = parseCoordinate(
+      row.longitude,
+      -180,
+      180
+    );
+
+    if (
+      latitude === null ||
+      longitude === null
+    ) {
+      skippedAppointments.push({
+        appointmentId: row.appointment_id,
+        reason:
+          row.geocoding_status === "pending"
+            ? "LOCATION_NOT_GEOCODED"
+            : "INVALID_COORDINATES",
+        formattedAddress:
+          row.formatted_address ?? null,
+      });
+
+      continue;
+    }
+
+    const scheduledStartAt = toIsoString(
+      row.start_time
+    );
+
+    const scheduledEndAt = toIsoString(
+      row.end_time
+    );
+
+    if (
+      !scheduledStartAt ||
+      !scheduledEndAt
+    ) {
+      skippedAppointments.push({
+        appointmentId: row.appointment_id,
+        reason: "INVALID_APPOINTMENT_TIME",
+        formattedAddress:
+          row.formatted_address ?? null,
+      });
+
+      continue;
+    }
+
+    stops.push({
+      appointmentId: row.appointment_id,
+      locationId: row.location_id,
+
+      latitude,
+      longitude,
+
+      scheduledStartAt,
+      scheduledEndAt,
+
+      serviceDurationSeconds:
+        calculateServiceDurationSeconds(
+          scheduledStartAt,
+          scheduledEndAt
+        ),
+
+      isLocked: false,
+
+      metadata: {
+        serviceId: row.service_id,
+        serviceName: row.service_name,
+
+        customerName: row.customer_name,
+        customerPhone: row.customer_phone,
+
+        formattedAddress:
+          row.formatted_address,
+
+        appointmentStatus:
+          row.appointment_status,
+
+        assignmentRole:
+          row.assignment_role,
+
+        assignmentStatus:
+          row.assignment_status,
+      },
+    });
+  }
+
+  const routePlan = await saveRoutePlan({
+    tenantId,
+    resourceId,
+    serviceDate,
+
+    mode: input.mode ?? "view_only",
+    status: "draft",
+
+    optimizationRequest: {
+      source: "automatic_builder",
+      timezone,
+      totalAppointments: rows.length,
+      routableAppointments: stops.length,
+      skippedAppointments:
+        skippedAppointments.length,
+    },
+  });
+
+  return {
+    routePlan,
+    stops,
+    skippedAppointments,
+  };
+}
