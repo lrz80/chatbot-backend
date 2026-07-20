@@ -85,49 +85,49 @@ export async function geocodeAppointmentLocation(
     "appointmentId"
   );
 
-  const location = await getAppointmentLocation({
-    tenantId,
-    appointmentId,
-    locationType: "service",
-  });
-
-  if (!location) {
-    throw new Error(
-      "FIELD_OPERATIONS_APPOINTMENT_LOCATION_NOT_FOUND"
-    );
-  }
-
-  if (
-    !input.force &&
-    hasValidCoordinates(
-      location.latitude,
-      location.longitude
-    )
-  ) {
-    return {
-      appointmentId,
-      status: "already_geocoded",
-      geocoding: {
-        formattedAddress:
-          location.formattedAddress,
-        latitude: Number(location.latitude),
-        longitude: Number(location.longitude),
-        placeId:
-          location.providerPlaceId ?? null,
-        partialMatch: false,
-        locationType: null,
-        addressComponents: [],
-        providerMetadata: {},
-      },
-      error: null,
-    };
-  }
-
   const provider =
     input.provider ??
     googleMapsGeocodingProvider;
 
   try {
+    const location = await getAppointmentLocation({
+      tenantId,
+      appointmentId,
+      locationType: "service",
+    });
+
+    if (!location) {
+      throw new Error(
+        "FIELD_OPERATIONS_APPOINTMENT_LOCATION_NOT_FOUND"
+      );
+    }
+
+    if (
+      !input.force &&
+      hasValidCoordinates(
+        location.latitude,
+        location.longitude
+      )
+    ) {
+      return {
+        appointmentId,
+        status: "already_geocoded",
+        geocoding: {
+          formattedAddress:
+            location.formattedAddress,
+          latitude: Number(location.latitude),
+          longitude: Number(location.longitude),
+          placeId:
+            location.providerPlaceId ?? null,
+          partialMatch: false,
+          locationType: null,
+          addressComponents: [],
+          providerMetadata: {},
+        },
+        error: null,
+      };
+    }
+
     const geocoding = await provider.geocode({
       address: location.formattedAddress,
       language: input.language,
@@ -190,17 +190,29 @@ export async function geocodeAppointmentLocation(
   } catch (error) {
     const message = normalizeError(error);
 
-    await updateAppointmentLocationGeocoding({
-      tenantId,
-      appointmentId,
-      locationType: "service",
-      latitude: null,
-      longitude: null,
-      geocodingProvider: provider.name,
-      providerPlaceId: null,
-      geocodingStatus: "failed",
-      geocodingError: message,
-    });
+    try {
+      await updateAppointmentLocationGeocoding({
+        tenantId,
+        appointmentId,
+        locationType: "service",
+        latitude: null,
+        longitude: null,
+        geocodingProvider: provider.name,
+        providerPlaceId: null,
+        geocodingStatus: "failed",
+        geocodingError: message,
+      });
+    } catch (updateError) {
+      console.error(
+        "[FIELD_OPERATIONS][GEOCODING_STATUS_UPDATE_FAILED]",
+        {
+          tenantId,
+          appointmentId,
+          originalError: message,
+          updateError: normalizeError(updateError),
+        }
+      );
+    }
 
     return {
       appointmentId,

@@ -23,6 +23,12 @@ function clean(value: unknown): string | null {
   return result || null;
 }
 
+function normalizeError(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : String(error);
+}
+
 export async function syncAppointmentToFieldOperations(
   input: SyncAppointmentToFieldOperationsInput
 ): Promise<void> {
@@ -46,18 +52,33 @@ export async function syncAppointmentToFieldOperations(
     geocodingStatus: "pending",
   });
 
-  const result = await geocodeAppointmentLocation({
-    tenantId: input.tenantId,
-    appointmentId: input.appointmentId,
-  });
+  try {
+    const result = await geocodeAppointmentLocation({
+      tenantId: input.tenantId,
+      appointmentId: input.appointmentId,
+    });
 
-  if (result.status === "failed") {
+    if (
+      result.status === "failed" ||
+      result.status === "not_found"
+    ) {
+      console.error(
+        "[FIELD_OPERATIONS][AUTOMATIC_GEOCODING_NOT_COMPLETED]",
+        {
+          tenantId: input.tenantId,
+          appointmentId: input.appointmentId,
+          status: result.status,
+          error: result.error,
+        }
+      );
+    }
+  } catch (error) {
     console.error(
-      "[FIELD_OPERATIONS][GEOCODING_FAILED]",
+      "[FIELD_OPERATIONS][AUTOMATIC_GEOCODING_UNEXPECTED_ERROR]",
       {
         tenantId: input.tenantId,
         appointmentId: input.appointmentId,
-        error: result.error,
+        error: normalizeError(error),
       }
     );
   }
