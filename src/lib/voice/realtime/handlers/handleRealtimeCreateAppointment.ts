@@ -518,46 +518,91 @@ export async function handleRealtimeCreateAppointment(
       err.code ===
         "FIELD_SERVICE_ADDRESS_REQUIRED"
     ) {
+      console.warn(
+        "[VOICE_REALTIME][FIELD_SERVICE_ADDRESS_REQUIRED]",
+        {
+          tenantId,
+          callSid:
+            bookingContext.callSid,
+        }
+      );
+
       const bookingState =
         buildRealtimeBookingState({
           steps,
-          state: bookingContext.state,
-          explicitCurrentIndex: null,
-          finalConfirmationGranted: true,
-          readyToCreate: false,
+          state:
+            bookingContext.state,
+          explicitCurrentIndex:
+            null,
+          finalConfirmationGranted:
+            true,
+          readyToCreate:
+            false,
         });
 
       await upsertVoiceSalesIntelligence({
         tenantId,
-        callSid: bookingContext.callSid,
-        phone: callerPhone,
+        callSid:
+          bookingContext.callSid,
+        phone:
+          callerPhone,
         bookingData:
-          bookingContext.state.bookingData || {},
-        transcript: bookingContext.userInput,
+          bookingContext.state.bookingData ||
+          {},
+        transcript:
+          bookingContext.userInput,
         outcome:
           "field_service_address_required",
       });
 
       return {
         ok: false,
+
         error:
           "FIELD_SERVICE_ADDRESS_REQUIRED",
 
         booking_outcome:
           "requires_customer_action",
 
-        customer_action_required: true,
+        customer_action_required:
+          true,
 
-        message: "",
-        assistant_prompt: "",
+        instructions:
+          JSON.stringify({
+            event:
+              "FIELD_SERVICE_ADDRESS_REQUIRED",
+
+            customer_action:
+              "PROVIDE_SERVICE_ADDRESS",
+
+            response_behavior: {
+              inform_customer:
+                true,
+
+              request_another_address:
+                true,
+
+              use_active_conversation_language:
+                true,
+
+              do_not_confirm_booking:
+                true,
+
+              do_not_mention_internal_error:
+                true,
+            },
+          }),
 
         details: {
           reason:
             "FIELD_SERVICE_ADDRESS_REQUIRED",
         },
 
-        booking_state: bookingState,
-        next_required_step: null,
+        booking_state:
+          bookingState,
+
+        next_required_step:
+          null,
       };
     }
 
@@ -567,55 +612,133 @@ export async function handleRealtimeCreateAppointment(
       err.code ===
         "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS"
     ) {
+      console.warn(
+        "[VOICE_REALTIME][FIELD_SERVICE_OUTSIDE_RADIUS]",
+        {
+          tenantId,
+
+          callSid:
+            bookingContext.callSid,
+
+          distanceMiles:
+            err.distanceMiles ??
+            null,
+
+          radiusMiles:
+            err.radiusMiles ??
+            null,
+
+          formattedAddress:
+            err.formattedAddress ??
+            null,
+        }
+      );
+
       const bookingState =
         buildRealtimeBookingState({
           steps,
-          state: bookingContext.state,
-          explicitCurrentIndex: null,
-          finalConfirmationGranted: true,
-          readyToCreate: false,
+          state:
+            bookingContext.state,
+          explicitCurrentIndex:
+            null,
+          finalConfirmationGranted:
+            true,
+          readyToCreate:
+            false,
         });
 
       await upsertVoiceSalesIntelligence({
         tenantId,
-        callSid: bookingContext.callSid,
-        phone: callerPhone,
+        callSid:
+          bookingContext.callSid,
+        phone:
+          callerPhone,
         bookingData:
-          bookingContext.state.bookingData || {},
-        transcript: bookingContext.userInput,
+          bookingContext.state.bookingData ||
+          {},
+        transcript:
+          bookingContext.userInput,
         outcome:
           "field_service_outside_radius",
       });
 
       return {
         ok: false,
+
         error:
           "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS",
 
         booking_outcome:
           "requires_customer_action",
 
-        customer_action_required: true,
+        customer_action_required:
+          true,
 
-        message: "",
-        assistant_prompt: "",
+        instructions:
+          JSON.stringify({
+            event:
+              "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS",
+
+            customer_action:
+              "PROVIDE_ANOTHER_SERVICE_ADDRESS",
+
+            service_area: {
+              distance_miles:
+                err.distanceMiles ??
+                null,
+
+              radius_miles:
+                err.radiusMiles ??
+                null,
+
+              formatted_address:
+                err.formattedAddress ??
+                null,
+            },
+
+            response_behavior: {
+              inform_customer_address_is_outside_service_area:
+                true,
+
+              ask_for_another_service_address:
+                true,
+
+              use_active_conversation_language:
+                true,
+
+              do_not_confirm_booking:
+                true,
+
+              do_not_mention_internal_error:
+                true,
+
+              mention_radius_only_if_useful:
+                true,
+            },
+          }),
 
         details: {
           reason:
             "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS",
 
           distanceMiles:
-            err.distanceMiles ?? null,
+            err.distanceMiles ??
+            null,
 
           radiusMiles:
-            err.radiusMiles ?? null,
+            err.radiusMiles ??
+            null,
 
           formattedAddress:
-            err.formattedAddress ?? null,
+            err.formattedAddress ??
+            null,
         },
 
-        booking_state: bookingState,
-        next_required_step: null,
+        booking_state:
+          bookingState,
+
+        next_required_step:
+          null,
       };
     }
 
