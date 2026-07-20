@@ -27,6 +27,10 @@ import {
   getAppointmentSettings,
 } from "../../../lib/appointments/getAppointmentSettings";
 
+import {
+  validateFieldServiceArea,
+} from "./fieldServiceArea.service";
+
 type RouteAppointmentRow = {
   appointment_id: string;
 
@@ -55,15 +59,22 @@ type RouteAppointmentRow = {
 
 export type SkippedRouteAppointment = {
   appointmentId: string;
+
   reason:
     | "LOCATION_NOT_FOUND"
     | "LOCATION_NOT_GEOCODED"
     | "GEOCODING_NOT_FOUND"
     | "GEOCODING_FAILED"
     | "INVALID_COORDINATES"
-    | "INVALID_APPOINTMENT_TIME";
+    | "INVALID_APPOINTMENT_TIME"
+    | "FIELD_SERVICE_AREA_NOT_CONFIGURED"
+    | "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS";
+
   formattedAddress: string | null;
   error?: string | null;
+
+  distanceMiles?: number | null;
+  allowedRadiusMiles?: number | null;
 };
 
 export type BuildRoutePlanInput = {
@@ -406,6 +417,37 @@ export async function buildRoutePlan(
       continue;
     }
 
+    const serviceAreaValidation =
+      await validateFieldServiceArea({
+        tenantId,
+        latitude,
+        longitude,
+      });
+
+    if (!serviceAreaValidation.allowed) {
+      skippedAppointments.push({
+        appointmentId:
+          row.appointment_id,
+
+        reason:
+          serviceAreaValidation.reason ===
+          "FIELD_SERVICE_AREA_NOT_CONFIGURED"
+            ? "FIELD_SERVICE_AREA_NOT_CONFIGURED"
+            : "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS",
+
+        formattedAddress:
+          row.formatted_address ?? null,
+
+        distanceMiles:
+          serviceAreaValidation.distanceMiles,
+
+        allowedRadiusMiles:
+          serviceAreaValidation.radiusMiles,
+      });
+
+      continue;
+    }
+
     const scheduledStartAt = toIsoString(
       row.start_time
     );
@@ -458,6 +500,14 @@ export async function buildRoutePlan(
         bufferAfterSeconds,
         bufferAfterMinutes:
           Math.round(bufferAfterSeconds / 60),
+        fieldServiceAreaValidationApplied:
+          serviceAreaValidation.validationApplied,
+
+        fieldServiceDistanceMiles:
+          serviceAreaValidation.distanceMiles,
+
+        fieldServiceRadiusMiles:
+          serviceAreaValidation.radiusMiles,
       },
     });
   }
