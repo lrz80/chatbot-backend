@@ -265,14 +265,14 @@ export async function buildRoutePlan(
 
       INNER JOIN appointments a
         ON a.id::text = ara.appointment_id
-       AND a.tenant_id = ara.tenant_id
+       AND a.tenant_id::text = ara.tenant_id
 
       LEFT JOIN services s
         ON s.id = a.service_id
 
       LEFT JOIN appointment_locations al
-        ON al.tenant_id = ara.tenant_id
-       AND al.appointment_id = ara.appointment_id
+        ON al.tenant_id::text = ara.tenant_id
+       AND al.appointment_id::text = ara.appointment_id
        AND al.location_type = 'service'
 
       WHERE ara.tenant_id = $1
