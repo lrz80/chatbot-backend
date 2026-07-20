@@ -138,16 +138,27 @@ function shouldRequestNormalizedModelResolution(params: {
 
   const expectedType = getPendingBookingStepExpectedType(params.realtimeState);
   const slot = getPendingBookingStepSlot(params.realtimeState);
-  const validationMode = getPendingBookingStepValidationMode(params.realtimeState);
+  const validationMode = getPendingBookingStepValidationMode(
+    params.realtimeState
+  );
+
+  const addressSlots = new Set([
+    "address",
+    "service_address",
+    "property_address",
+    "customer_address",
+  ]);
 
   return (
-    slot === "service_address" ||
+    addressSlots.has(slot) ||
     slot === "customer_phone" ||
     slot === "customer_email" ||
     slot === "datetime" ||
+    expectedType === "address" ||
     expectedType === "phone" ||
     expectedType === "email" ||
     expectedType === "datetime" ||
+    validationMode === "address" ||
     validationMode === "confirm_or_replace"
   );
 }

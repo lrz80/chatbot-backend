@@ -70,6 +70,32 @@ function isDatetimeStep(params: {
   );
 }
 
+function isAddressStep(params: {
+  pendingBookingStepKey: string;
+  pendingSlot: string;
+  expectedType: string;
+  validationMode: string;
+}): boolean {
+  const pendingBookingStepKey = normalizeKey(params.pendingBookingStepKey);
+  const pendingSlot = normalizeKey(params.pendingSlot);
+  const expectedType = normalizeKey(params.expectedType);
+  const validationMode = normalizeKey(params.validationMode);
+
+  const addressIdentifiers = new Set([
+    "address",
+    "service_address",
+    "property_address",
+    "customer_address",
+  ]);
+
+  return (
+    addressIdentifiers.has(pendingSlot) ||
+    addressIdentifiers.has(pendingBookingStepKey) ||
+    expectedType === "address" ||
+    validationMode === "address"
+  );
+}
+
 function buildInternalSilenceRules(): string[] {
   return [
     "Internal tool-routing task. Do not speak to the caller.",
@@ -236,6 +262,61 @@ function buildDatetimeNormalizationInstructions(params: {
   ].join("\n");
 }
 
+function buildAddressNormalizationInstructions(params: {
+  pendingBookingStepKey: string;
+  pendingSlot: string;
+  expectedType: string;
+  validationMode: string;
+  lastUserTranscript: string;
+}): string {
+  return [
+    ...buildInternalSilenceRules(),
+
+    "The caller answered a booking address step.",
+    `Current booking step key: ${params.pendingBookingStepKey}`,
+    `Current booking slot: ${params.pendingSlot}`,
+    `Current expected type: ${params.expectedType}`,
+    `Current validation mode: ${params.validationMode}`,
+    `Caller latest answer: ${params.lastUserTranscript}`,
+    "",
+
+    "Normalize the caller's latest answer into a written postal address.",
+    "Use only the caller's latest answer.",
+    "Do not use an address from an earlier turn.",
+    "Do not invent missing address components.",
+    "Do not invent a city, state, region, postal code, country, unit, building number, or street name.",
+    "Preserve the street name and all address components provided by the caller.",
+    "",
+
+    "Address normalization rules:",
+    "- Convert clearly spoken house, building, apartment, suite, unit, floor, route, highway, and postal-code numbers into digits.",
+    "- Understand spoken numbers in any language.",
+    "- A sequence of individually spoken digits must remain a digit sequence.",
+    "- Example: three three eight three seven becomes 33837.",
+    "- Example: tres tres ocho tres siete becomes 33837.",
+    "- Example: dos sesenta Hampton Loop becomes 260 Hampton Loop when 260 is clearly the street number.",
+    "- Keep directional and street suffix information when provided.",
+    "- Preserve apartment, suite, unit, building, floor, and gate details.",
+    "- Do not translate proper street names.",
+    "- Do not add abbreviations that the caller did not clearly provide unless the change is only formatting.",
+    "- Return a single clean address string.",
+    "- Do not return JSON.",
+    "- Do not include explanations, labels, markdown, or quotation marks.",
+    "",
+
+    "Unclear-answer rule:",
+    "- If the caller's answer is incomplete, unrelated, or too unclear to normalize safely, submit the caller's latest answer exactly as heard so the backend can validate or reject it.",
+    "",
+
+    "Tool call requirements:",
+    "- tool: submit_booking_step",
+    `- step_key: ${params.pendingBookingStepKey}`,
+    "- value: the normalized address string",
+    "Never use any previous step_key.",
+    "Never use a previous address or old answer.",
+  ].join("\n");
+}
+
 function buildDefaultNormalizationInstructions(params: {
   pendingBookingStepKey: string;
   pendingSlot: string;
@@ -324,6 +405,13 @@ export function requestNormalizedStepModelResolution(params: {
     expectedType,
   });
 
+  const addressStep = isAddressStep({
+    pendingBookingStepKey,
+    pendingSlot,
+    expectedType,
+    validationMode,
+  });
+
   console.warn("[VOICE_REALTIME][NORMALIZED_STEP_MODEL_RESOLUTION_REQUESTED]", {
     callSid: params.callSid,
     source: params.source,
@@ -335,6 +423,7 @@ export function requestNormalizedStepModelResolution(params: {
     isConfirmationStep: confirmationStep,
     isPhoneConfirmOrReplaceStep: phoneConfirmOrReplaceStep,
     isDatetimeStep: datetimeStep,
+    isAddressStep: addressStep,
     lastUserTranscript,
     lastUserTranscriptSeq: params.lastUserTranscriptSeq,
     pendingBookingStepPromptAnchorSeq: params.pendingBookingStepPromptAnchorSeq,
@@ -365,13 +454,21 @@ export function requestNormalizedStepModelResolution(params: {
             validationMode,
             lastUserTranscript,
           })
-        : buildDefaultNormalizationInstructions({
-            pendingBookingStepKey,
-            pendingSlot,
-            expectedType,
-            validationMode,
-            lastUserTranscript,
-          });
+        : addressStep
+          ? buildAddressNormalizationInstructions({
+              pendingBookingStepKey,
+              pendingSlot,
+              expectedType,
+              validationMode,
+              lastUserTranscript,
+            })
+          : buildDefaultNormalizationInstructions({
+              pendingBookingStepKey,
+              pendingSlot,
+              expectedType,
+              validationMode,
+              lastUserTranscript,
+            });
 
   const responseSource = confirmationStep
     ? "booking_step_confirmation_model_resolution"
@@ -379,7 +476,9 @@ export function requestNormalizedStepModelResolution(params: {
       ? "booking_step_phone_confirm_or_replace_model_resolution"
       : datetimeStep
         ? "booking_step_datetime_model_resolution"
-        : "booking_step_normalized_model_resolution";
+        : addressStep
+          ? "booking_step_address_model_resolution"
+          : "booking_step_normalized_model_resolution";
 
   params.requestRealtimeResponse(
     {

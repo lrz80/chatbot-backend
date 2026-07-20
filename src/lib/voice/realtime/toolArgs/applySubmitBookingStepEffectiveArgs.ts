@@ -149,7 +149,9 @@ export function applySubmitBookingStepEffectiveArgs(
     (realtimeState as any).pendingBookingStepExpectedType
   ).toLowerCase();
 
-  const slot = clean((realtimeState as any).pendingBookingStepSlot);
+  const slot = clean(
+    (realtimeState as any).pendingBookingStepSlot
+  ).toLowerCase();
 
   const phoneConfirmOrReplaceStep = isPhoneConfirmOrReplaceStep({
     realtimeState,
@@ -238,14 +240,22 @@ export function applySubmitBookingStepEffectiveArgs(
     promptAnchorSeq,
   });
 
+  const addressSlots = new Set([
+    "address",
+    "service_address",
+    "property_address",
+    "customer_address",
+  ]);
+
   const prefersModelCandidate =
     stepKey === "service" ||
     stepKey === "datetime" ||
     expectedType === "datetime" ||
     expectedType === "number" ||
+    expectedType === "address" ||
     expectedType === "phone" ||
     expectedType === "email" ||
-    slot === "service_address" ||
+    addressSlots.has(slot.toLowerCase()) ||
     slot === "customer_phone" ||
     slot === "customer_email";
 

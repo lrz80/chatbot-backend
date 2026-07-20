@@ -29,14 +29,22 @@ export function resolveSubmitBookingStepForwardedValue(
     return "";
   }
 
+  const addressSlots = new Set([
+    "address",
+    "service_address",
+    "property_address",
+    "customer_address",
+  ]);
+
   const shouldPreferModelValue =
     stepKey === "service" ||
     stepKey === "datetime" ||
     expectedType === "datetime" ||
     expectedType === "number" ||
+    expectedType === "address" ||
     expectedType === "phone" ||
     expectedType === "email" ||
-    slot === "service_address" ||
+    addressSlots.has(slot) ||
     slot === "customer_phone" ||
     slot === "customer_email";
 
