@@ -31,8 +31,14 @@ import {
 
 import { optimizeRoutePlan } from "../services/routeOptimization.service";
 import { buildRoutePlan } from "../services/routePlanBuilder.service";
+import {
+  geocodeAppointmentLocation,
+} from "../services/appointmentGeocoding.service";
 
-import type { FieldOperationResourceType } from "../domain/fieldOperations.types";
+import type {
+  FieldOperationResourceType,
+  RoutePlanMode,
+} from "../domain/fieldOperations.types";
 import type { RoutingStopInput } from "../providers/routingProvider.types";
 
 import {
@@ -876,6 +882,36 @@ router.delete(
   }
 );
 
+router.post(
+  "/appointments/:appointmentId/location/geocode",
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const tenantId = getTenantId(req);
+      const body = req.body ?? {};
+
+      const result = await geocodeAppointmentLocation({
+        tenantId,
+        appointmentId: requiredString(
+          req.params.appointmentId,
+          "appointmentId"
+        ),
+        language: optionalString(body.language),
+        region: optionalString(body.region),
+        force:
+          optionalBoolean(body.force, "force") ??
+          false,
+      });
+
+      return res.json({
+        ok: true,
+        result,
+      });
+    } catch (error) {
+      return handleError(res, error);
+    }
+  }
+);
+
 /**
  * ============================================================
  * APPOINTMENT FIELD OPERATIONS SUMMARY
@@ -1272,7 +1308,24 @@ router.post(
           body.serviceDate,
           "serviceDate"
         ),
-        mode: "view_only",
+        mode:
+          optionalString(body.mode) as
+            | RoutePlanMode
+            | undefined,
+
+        geocodeMissingLocations:
+          optionalBoolean(
+            body.geocodeMissingLocations,
+            "geocodeMissingLocations"
+          ) ?? true,
+
+        geocodingLanguage: optionalString(
+          body.geocodingLanguage
+        ),
+
+        geocodingRegion: optionalString(
+          body.geocodingRegion
+        ),
       });
 
       const shouldOptimize =

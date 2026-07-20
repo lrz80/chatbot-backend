@@ -10,6 +10,10 @@ import {
   saveRoutePlan,
 } from "../repositories/routePlans.repo";
 
+import {
+  geocodeAppointmentLocation,
+} from "./appointmentGeocoding.service";
+
 import type {
   RoutePlan,
   RoutePlanMode,
@@ -33,13 +37,13 @@ type RouteAppointmentRow = {
 
   appointment_status: string;
 
-  location_id: string;
-  formatted_address: string;
+  location_id: string | null;
+  formatted_address: string | null;
 
   latitude: number | string | null;
   longitude: number | string | null;
 
-  geocoding_status: string;
+  geocoding_status: string | null;
 
   assignment_role: string;
   assignment_status: string;
@@ -50,17 +54,22 @@ export type SkippedRouteAppointment = {
   reason:
     | "LOCATION_NOT_FOUND"
     | "LOCATION_NOT_GEOCODED"
+    | "GEOCODING_NOT_FOUND"
+    | "GEOCODING_FAILED"
     | "INVALID_COORDINATES"
     | "INVALID_APPOINTMENT_TIME";
   formattedAddress: string | null;
+  error?: string | null;
 };
 
 export type BuildRoutePlanInput = {
   tenantId: string;
   resourceId: string;
   serviceDate: string;
-
   mode?: RoutePlanMode;
+  geocodeMissingLocations?: boolean;
+  geocodingLanguage?: string;
+  geocodingRegion?: string;
 };
 
 export type BuildRoutePlanResult = {
@@ -310,17 +319,59 @@ export async function buildRoutePlan(
       continue;
     }
 
-    const latitude = parseCoordinate(
+    let latitude = parseCoordinate(
       row.latitude,
       -90,
       90
     );
 
-    const longitude = parseCoordinate(
+    let longitude = parseCoordinate(
       row.longitude,
       -180,
       180
     );
+
+    if (
+      (latitude === null || longitude === null) &&
+      input.geocodeMissingLocations !== false &&
+      row.formatted_address
+    ) {
+      const geocoding =
+        await geocodeAppointmentLocation({
+          tenantId,
+          appointmentId: row.appointment_id,
+          language: input.geocodingLanguage,
+          region: input.geocodingRegion,
+        });
+
+      if (
+        geocoding.status === "geocoded" ||
+        geocoding.status === "already_geocoded"
+      ) {
+        latitude =
+          geocoding.geocoding?.latitude ?? null;
+        longitude =
+          geocoding.geocoding?.longitude ?? null;
+
+        if (geocoding.geocoding) {
+          row.formatted_address =
+            geocoding.geocoding.formattedAddress;
+        }
+      } else {
+        skippedAppointments.push({
+          appointmentId: row.appointment_id,
+          reason:
+            geocoding.status === "not_found"
+              ? "GEOCODING_NOT_FOUND"
+              : "GEOCODING_FAILED",
+          formattedAddress:
+            row.formatted_address,
+          error: geocoding.error,
+        });
+
+        continue;
+      }
+    }
 
     if (
       latitude === null ||
@@ -364,37 +415,27 @@ export async function buildRoutePlan(
     stops.push({
       appointmentId: row.appointment_id,
       locationId: row.location_id,
-
       latitude,
       longitude,
-
       scheduledStartAt,
       scheduledEndAt,
-
       serviceDurationSeconds:
         calculateServiceDurationSeconds(
           scheduledStartAt,
           scheduledEndAt
         ),
-
       isLocked: false,
-
       metadata: {
         serviceId: row.service_id,
         serviceName: row.service_name,
-
         customerName: row.customer_name,
         customerPhone: row.customer_phone,
-
         formattedAddress:
           row.formatted_address,
-
         appointmentStatus:
           row.appointment_status,
-
         assignmentRole:
           row.assignment_role,
-
         assignmentStatus:
           row.assignment_status,
       },
@@ -405,13 +446,13 @@ export async function buildRoutePlan(
     tenantId,
     resourceId,
     serviceDate,
-
     mode: input.mode ?? "view_only",
     status: "draft",
-
     optimizationRequest: {
       source: "automatic_builder",
       timezone,
+      geocodeMissingLocations:
+        input.geocodeMissingLocations !== false,
       totalAppointments: rows.length,
       routableAppointments: stops.length,
       skippedAppointments:

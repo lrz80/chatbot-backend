@@ -1,8 +1,12 @@
-//src/modules/field-operations/services/fieldOperationsSync.service.ts
+// src/modules/field-operations/services/fieldOperationsSync.service.ts
 
 import {
   setAppointmentFieldLocation,
 } from "./appointmentFieldOperations.service";
+
+import {
+  geocodeAppointmentLocation,
+} from "./appointmentGeocoding.service";
 
 export type SyncAppointmentToFieldOperationsInput = {
   tenantId: string;
@@ -15,8 +19,8 @@ export type SyncAppointmentToFieldOperationsInput = {
 };
 
 function clean(value: unknown): string | null {
-  const v = String(value ?? "").trim();
-  return v || null;
+  const result = String(value ?? "").trim();
+  return result || null;
 }
 
 export async function syncAppointmentToFieldOperations(
@@ -35,14 +39,26 @@ export async function syncAppointmentToFieldOperations(
   await setAppointmentFieldLocation({
     tenantId: input.tenantId,
     appointmentId: input.appointmentId,
-
     locationType: "service",
-
     formattedAddress: address,
-
     latitude: null,
     longitude: null,
-
     geocodingStatus: "pending",
   });
+
+  const result = await geocodeAppointmentLocation({
+    tenantId: input.tenantId,
+    appointmentId: input.appointmentId,
+  });
+
+  if (result.status === "failed") {
+    console.error(
+      "[FIELD_OPERATIONS][GEOCODING_FAILED]",
+      {
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+        error: result.error,
+      }
+    );
+  }
 }
