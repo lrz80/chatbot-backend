@@ -11,7 +11,6 @@ import {
 export type SyncAppointmentToFieldOperationsInput = {
   tenantId: string;
   appointmentId: string;
-
   answersBySlot: Record<
     string,
     string | null | undefined
@@ -39,8 +38,25 @@ export async function syncAppointmentToFieldOperations(
     clean(input.answersBySlot.property_address);
 
   if (!address) {
+    console.warn(
+      "[FIELD_OPERATIONS][AUTO_GEOCODING_SKIPPED_NO_ADDRESS]",
+      {
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+      }
+    );
+
     return;
   }
+
+  console.log(
+    "[FIELD_OPERATIONS][AUTO_GEOCODING_SYNC_STARTED]",
+    {
+      tenantId: input.tenantId,
+      appointmentId: input.appointmentId,
+      address,
+    }
+  );
 
   await setAppointmentFieldLocation({
     tenantId: input.tenantId,
@@ -52,29 +68,43 @@ export async function syncAppointmentToFieldOperations(
     geocodingStatus: "pending",
   });
 
+  console.log(
+    "[FIELD_OPERATIONS][AUTO_GEOCODING_LOCATION_SAVED]",
+    {
+      tenantId: input.tenantId,
+      appointmentId: input.appointmentId,
+      address,
+    }
+  );
+
   try {
+    console.log(
+      "[FIELD_OPERATIONS][AUTO_GEOCODING_REQUEST_STARTED]",
+      {
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+      }
+    );
+
     const result = await geocodeAppointmentLocation({
       tenantId: input.tenantId,
       appointmentId: input.appointmentId,
     });
 
-    if (
-      result.status === "failed" ||
-      result.status === "not_found"
-    ) {
-      console.error(
-        "[FIELD_OPERATIONS][AUTOMATIC_GEOCODING_NOT_COMPLETED]",
-        {
-          tenantId: input.tenantId,
-          appointmentId: input.appointmentId,
-          status: result.status,
-          error: result.error,
-        }
-      );
-    }
+    console.log(
+      "[FIELD_OPERATIONS][AUTO_GEOCODING_REQUEST_COMPLETED]",
+      {
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+        status: result.status,
+        error: result.error,
+        latitude: result.geocoding?.latitude ?? null,
+        longitude: result.geocoding?.longitude ?? null,
+      }
+    );
   } catch (error) {
     console.error(
-      "[FIELD_OPERATIONS][AUTOMATIC_GEOCODING_UNEXPECTED_ERROR]",
+      "[FIELD_OPERATIONS][AUTO_GEOCODING_UNEXPECTED_ERROR]",
       {
         tenantId: input.tenantId,
         appointmentId: input.appointmentId,
