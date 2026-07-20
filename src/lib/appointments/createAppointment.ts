@@ -8,6 +8,9 @@ import { resolveSquareServiceMappingFromDbForTenant } from "../integrations/squa
 import type { CreateExternalBookingInput } from "./booking/providers/types";
 import { resolveBookingDepositPolicyFromExternalMetadata } from "./resolveBookingDepositPolicy";
 import { createPendingDepositPaymentRequest } from "./deposits/createPendingDepositPaymentRequest";
+import {
+  syncAppointmentToFieldOperations,
+} from "../../modules/field-operations/services/fieldOperationsSync.service";
 
 type AppointmentSettings = {
   default_duration_min: number;
@@ -478,5 +481,20 @@ export async function createAppointment(
     ]
   );
 
-  return rows[0];
-}
+    const appointment = rows[0];
+
+    try {
+      await syncAppointmentToFieldOperations({
+        tenantId: args.tenantId,
+        appointmentId: appointment.id,
+        answersBySlot: args.answersBySlot,
+      });
+    } catch (error) {
+      console.error(
+        "[FIELD_OPERATIONS][SYNC_FAILED]",
+        error
+      );
+    }
+
+    return appointment;
+  }

@@ -38,6 +38,7 @@ import {
   assignResourceToAppointment,
   changeAppointmentResourceStatus,
   getAppointmentFieldLocation,
+  getAppointmentFieldOperations,
   getAppointmentResourceAssignment,
   removeAppointmentFieldLocation,
   removeResourceFromAppointment,
@@ -867,6 +868,39 @@ router.delete(
       return res.json({
         ok: true,
         deleted: true,
+      });
+    } catch (error) {
+      return handleError(res, error);
+    }
+  }
+);
+
+/**
+ * ============================================================
+ * APPOINTMENT FIELD OPERATIONS SUMMARY
+ * ============================================================
+ */
+
+router.get(
+  "/appointments/:appointmentId",
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const tenantId = getTenantId(req);
+
+      const appointmentId = requiredString(
+        req.params.appointmentId,
+        "appointmentId"
+      );
+
+      const fieldOperations =
+        await getAppointmentFieldOperations({
+          tenantId,
+          appointmentId,
+        });
+
+      return res.json({
+        ok: true,
+        fieldOperations,
       });
     } catch (error) {
       return handleError(res, error);
