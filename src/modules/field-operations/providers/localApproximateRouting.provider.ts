@@ -230,6 +230,10 @@ function validateAndNormalizeStops(
         stop.serviceDurationSeconds,
         `stops[${index}].serviceDurationSeconds`
       ),
+      bufferAfterSeconds: nonNegativeInteger(
+        stop.bufferAfterSeconds ?? 0,
+        `stops[${index}].bufferAfterSeconds`
+      ),
       scheduledStartAt: parseIsoTimestampOrNull(
         stop.scheduledStartAt,
         `stops[${index}].scheduledStartAt`
@@ -364,9 +368,14 @@ export class LocalApproximateRoutingProvider
         stop.scheduledStartAt ?? null
       );
 
-      const plannedDepartureAt = addSeconds(
+      const serviceCompletedAt = addSeconds(
         plannedArrivalAt,
         stop.serviceDurationSeconds
+      );
+
+      const plannedDepartureAt = addSeconds(
+        serviceCompletedAt,
+        stop.bufferAfterSeconds ?? 0
       );
 
       orderedStops.push({
@@ -392,6 +401,9 @@ export class LocalApproximateRoutingProvider
           sourceOrder: stop.originalIndex,
 
           physicalArrivalAt,
+          serviceCompletedAt,
+            bufferAfterSeconds:
+            stop.bufferAfterSeconds ?? 0,
 
           waitingSeconds:
             physicalArrivalAt &&

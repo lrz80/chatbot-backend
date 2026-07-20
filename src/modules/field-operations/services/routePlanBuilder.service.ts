@@ -23,6 +23,10 @@ import type {
   RoutingStopInput,
 } from "../providers/routingProvider.types";
 
+import {
+  getAppointmentSettings,
+} from "../../../lib/appointments/getAppointmentSettings";
+
 type RouteAppointmentRow = {
   appointment_id: string;
 
@@ -229,9 +233,22 @@ export async function buildRoutePlan(
     );
   }
 
+  const appointmentSettings =
+    await getAppointmentSettings(tenantId);
+
   const timezone =
-    String(resource.timezone ?? "").trim() ||
-    "America/New_York";
+    String(
+      resource.timezone ??
+        appointmentSettings.timezone ??
+        ""
+    ).trim() || "America/New_York";
+
+  const bufferAfterSeconds = Math.max(
+    0,
+    Math.round(
+      Number(appointmentSettings.buffer_min || 0) * 60
+    )
+  );
 
   const { rows } =
     await pool.query<RouteAppointmentRow>(
@@ -423,6 +440,7 @@ export async function buildRoutePlan(
           scheduledStartAt,
           scheduledEndAt
         ),
+      bufferAfterSeconds,
       isLocked: false,
       metadata: {
         serviceId: row.service_id,
@@ -437,6 +455,9 @@ export async function buildRoutePlan(
           row.assignment_role,
         assignmentStatus:
           row.assignment_status,
+        bufferAfterSeconds,
+        bufferAfterMinutes:
+          Math.round(bufferAfterSeconds / 60),
       },
     });
   }

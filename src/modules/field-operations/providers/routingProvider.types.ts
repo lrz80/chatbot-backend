@@ -13,6 +13,7 @@ export type RoutingStopInput = {
   longitude: number;
 
   serviceDurationSeconds: number;
+  bufferAfterSeconds?: number;
 
   scheduledStartAt?: string | null;
   scheduledEndAt?: string | null;
