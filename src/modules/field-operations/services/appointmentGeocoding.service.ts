@@ -53,8 +53,24 @@ function hasValidCoordinates(
   latitude: unknown,
   longitude: unknown
 ): boolean {
-  const lat = Number(latitude);
-  const lng = Number(longitude);
+  if (
+    latitude === null ||
+    latitude === undefined ||
+    longitude === null ||
+    longitude === undefined
+  ) {
+    return false;
+  }
+
+  const latitudeText = String(latitude).trim();
+  const longitudeText = String(longitude).trim();
+
+  if (!latitudeText || !longitudeText) {
+    return false;
+  }
+
+  const lat = Number(latitudeText);
+  const lng = Number(longitudeText);
 
   return (
     Number.isFinite(lat) &&
