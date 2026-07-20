@@ -82,6 +82,28 @@ function addSeconds(
   ).toISOString();
 }
 
+function maxTimestamp(
+  first: string | null,
+  second: string | null
+): string | null {
+  if (!first) return second;
+  if (!second) return first;
+
+  const firstTime = new Date(first).getTime();
+  const secondTime = new Date(second).getTime();
+
+  if (
+    Number.isNaN(firstTime) ||
+    Number.isNaN(secondTime)
+  ) {
+    return first;
+  }
+
+  return firstTime >= secondTime
+    ? first
+    : second;
+}
+
 function coordinateFromStop(
   stop: RoutingStopInput
 ): RoutingCoordinate {
@@ -316,12 +338,15 @@ export class LocalApproximateRoutingProvider
               averageSpeedKph,
             });
 
-      currentTimestamp = addSeconds(
+      const physicalArrivalAt = addSeconds(
         currentTimestamp,
         driveSecondsFromPrevious
       );
 
-      const plannedArrivalAt = currentTimestamp;
+      const plannedArrivalAt = maxTimestamp(
+        physicalArrivalAt,
+        stop.scheduledStartAt ?? null
+      );
 
       const plannedDepartureAt = addSeconds(
         plannedArrivalAt,
@@ -349,7 +374,23 @@ export class LocalApproximateRoutingProvider
           scheduledEndAt: stop.scheduledEndAt ?? null,
           isLocked: stop.isLocked ?? false,
           sourceOrder: stop.originalIndex,
-        },
+
+          physicalArrivalAt,
+
+          waitingSeconds:
+            physicalArrivalAt &&
+            plannedArrivalAt
+              ? Math.max(
+                  0,
+                  Math.round(
+                    (
+                      new Date(plannedArrivalAt).getTime() -
+                      new Date(physicalArrivalAt).getTime()
+                    ) / 1000
+                  )
+                )
+              : 0,
+          },
       });
 
       totalDistanceMeters += distanceMetersFromPrevious;
