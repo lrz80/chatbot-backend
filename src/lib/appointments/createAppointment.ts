@@ -204,8 +204,6 @@ export async function createAppointment(
     const geocodedAddress =
       await geocodeFieldServiceBaseAddress({
         address: serviceAddress,
-        language: "en",
-        region: "us",
       });
 
     normalizedFieldServiceAddress =
@@ -572,23 +570,18 @@ export async function createAppointment(
         tenantId: args.tenantId,
         appointmentId: appointment.id,
 
-        answersBySlot: {
-          ...args.answersBySlot,
+        address:
+          normalizedFieldServiceAddress ||
+          serviceAddress,
 
-          address:
-            normalizedFieldServiceAddress ||
-            serviceAddress,
+        latitude:
+          fieldServiceLatitude,
 
-          field_service_latitude:
-            fieldServiceLatitude !== null
-              ? String(fieldServiceLatitude)
-              : null,
+        longitude:
+          fieldServiceLongitude,
 
-          field_service_longitude:
-            fieldServiceLongitude !== null
-              ? String(fieldServiceLongitude)
-              : null,
-        },
+        answersBySlot:
+          args.answersBySlot,
       });
     }
 

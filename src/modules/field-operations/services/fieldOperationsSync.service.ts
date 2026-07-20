@@ -11,6 +11,11 @@ import {
 export type SyncAppointmentToFieldOperationsInput = {
   tenantId: string;
   appointmentId: string;
+
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+
   answersBySlot: Record<
     string,
     string | null | undefined
@@ -32,10 +37,27 @@ export async function syncAppointmentToFieldOperations(
   input: SyncAppointmentToFieldOperationsInput
 ): Promise<void> {
   const address =
+    clean(input.address) ??
     clean(input.answersBySlot.address) ??
     clean(input.answersBySlot.service_address) ??
     clean(input.answersBySlot.location) ??
     clean(input.answersBySlot.property_address);
+
+    const latitude =
+    typeof input.latitude === "number" &&
+    Number.isFinite(input.latitude)
+        ? input.latitude
+        : null;
+
+    const longitude =
+    typeof input.longitude === "number" &&
+    Number.isFinite(input.longitude)
+        ? input.longitude
+        : null;
+
+    const hasResolvedCoordinates =
+    latitude !== null &&
+    longitude !== null;
 
   if (!address) {
     console.warn(
@@ -63,10 +85,29 @@ export async function syncAppointmentToFieldOperations(
     appointmentId: input.appointmentId,
     locationType: "service",
     formattedAddress: address,
-    latitude: null,
-    longitude: null,
-    geocodingStatus: "pending",
-  });
+    latitude,
+    longitude,
+    geocodingStatus:
+        hasResolvedCoordinates
+        ? "geocoded"
+        : "pending",
+    });
+
+  if (hasResolvedCoordinates) {
+    console.log(
+        "[FIELD_OPERATIONS][LOCATION_SYNC_COMPLETED]",
+        {
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+        address,
+        latitude,
+        longitude,
+        geocodingReused: true,
+        }
+    );
+
+    return;
+    }
 
   console.log(
     "[FIELD_OPERATIONS][AUTO_GEOCODING_LOCATION_SAVED]",
