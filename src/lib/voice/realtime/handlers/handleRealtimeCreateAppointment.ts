@@ -184,7 +184,8 @@ export async function handleRealtimeCreateAppointment(
       buffer_min,
       min_lead_minutes,
       timezone,
-      enabled
+      enabled,
+      field_service_area_enabled
     FROM appointment_settings
     WHERE tenant_id = $1
     LIMIT 1
@@ -248,11 +249,24 @@ export async function handleRealtimeCreateAppointment(
       answersBySlot,
       stepKeyToSlot,
       settings: {
-        default_duration_min: Number(settingsRow.default_duration_min || 0),
-        buffer_min: Number(settingsRow.buffer_min || 0),
-        min_lead_minutes: Number(settingsRow.min_lead_minutes || 0),
-        timezone: clean(settingsRow.timezone) || "America/New_York",
-        enabled: settingsRow.enabled !== false,
+        default_duration_min:
+          Number(settingsRow.default_duration_min || 0),
+
+        buffer_min:
+          Number(settingsRow.buffer_min || 0),
+
+        min_lead_minutes:
+          Number(settingsRow.min_lead_minutes || 0),
+
+        timezone:
+          clean(settingsRow.timezone) ||
+          "America/New_York",
+
+        enabled:
+          settingsRow.enabled !== false,
+
+        field_service_area_enabled:
+          settingsRow.field_service_area_enabled === true,
       },
     });
 
@@ -400,8 +414,14 @@ export async function handleRealtimeCreateAppointment(
     };
   } catch (error) {
     const err = error as Error & {
+      code?: string;
       error?: string;
+
       suggestedStarts?: string[];
+
+      distanceMiles?: number | null;
+      radiusMiles?: number | null;
+      formattedAddress?: string | null;
     };
 
     if (
@@ -486,6 +506,113 @@ export async function handleRealtimeCreateAppointment(
 
         message: depositPolicyText,
         assistant_prompt: depositPolicyText,
+
+        booking_state: bookingState,
+        next_required_step: null,
+      };
+    }
+
+    if (
+      err.message ===
+        "FIELD_SERVICE_ADDRESS_REQUIRED" ||
+      err.code ===
+        "FIELD_SERVICE_ADDRESS_REQUIRED"
+    ) {
+      const bookingState =
+        buildRealtimeBookingState({
+          steps,
+          state: bookingContext.state,
+          explicitCurrentIndex: null,
+          finalConfirmationGranted: true,
+          readyToCreate: false,
+        });
+
+      await upsertVoiceSalesIntelligence({
+        tenantId,
+        callSid: bookingContext.callSid,
+        phone: callerPhone,
+        bookingData:
+          bookingContext.state.bookingData || {},
+        transcript: bookingContext.userInput,
+        outcome:
+          "field_service_address_required",
+      });
+
+      return {
+        ok: false,
+        error:
+          "FIELD_SERVICE_ADDRESS_REQUIRED",
+
+        booking_outcome:
+          "requires_customer_action",
+
+        customer_action_required: true,
+
+        message: "",
+        assistant_prompt: "",
+
+        details: {
+          reason:
+            "FIELD_SERVICE_ADDRESS_REQUIRED",
+        },
+
+        booking_state: bookingState,
+        next_required_step: null,
+      };
+    }
+
+    if (
+      err.message ===
+        "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS" ||
+      err.code ===
+        "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS"
+    ) {
+      const bookingState =
+        buildRealtimeBookingState({
+          steps,
+          state: bookingContext.state,
+          explicitCurrentIndex: null,
+          finalConfirmationGranted: true,
+          readyToCreate: false,
+        });
+
+      await upsertVoiceSalesIntelligence({
+        tenantId,
+        callSid: bookingContext.callSid,
+        phone: callerPhone,
+        bookingData:
+          bookingContext.state.bookingData || {},
+        transcript: bookingContext.userInput,
+        outcome:
+          "field_service_outside_radius",
+      });
+
+      return {
+        ok: false,
+        error:
+          "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS",
+
+        booking_outcome:
+          "requires_customer_action",
+
+        customer_action_required: true,
+
+        message: "",
+        assistant_prompt: "",
+
+        details: {
+          reason:
+            "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS",
+
+          distanceMiles:
+            err.distanceMiles ?? null,
+
+          radiusMiles:
+            err.radiusMiles ?? null,
+
+          formattedAddress:
+            err.formattedAddress ?? null,
+        },
 
         booking_state: bookingState,
         next_required_step: null,
