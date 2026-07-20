@@ -12,6 +12,9 @@ import { executeRealtimeStepRoute } from "../bookingStep/executeRealtimeStepRout
 import { validateSubmitBookingStepFreshness } from "../toolGuards/validateSubmitBookingStepFreshness";
 import { resolveConfiguredServiceOptionCandidate } from "../bookingStep/resolveConfiguredServiceOptionCandidate";
 import { resolveGlobalConfirmationIntent } from "../bookingStep/resolveGlobalConfirmationIntent";
+import {
+  validateFieldServiceAddressStep,
+} from "../bookingStep/validateFieldServiceAddressStep";
 
 type RealtimeBookingContext = {
   tenant: any;
@@ -622,6 +625,51 @@ export async function handleRealtimeSubmitBookingStep(
       });
     }
 
+    const fieldServiceValidation =
+      await validateFieldServiceAddressStep({
+        tenantId,
+        callSid:
+          bookingContext.callSid,
+        currentLocale:
+          bookingContext.currentLocale,
+
+        currentStep:
+          prepared.currentStep,
+        currentIndex:
+          prepared.currentIndex,
+        stepKey:
+          prepared.stepKey,
+        targetSlot:
+          prepared.targetSlot,
+        resolvedInputValue:
+          isCurrentConfirmationStep
+            ? effectiveConfirmationProtocolValue
+            : prepared.resolvedInputValue,
+
+        state:
+          bookingContext.state,
+        steps,
+
+        buildRealtimeBookingState,
+        persistVoiceState,
+      });
+
+    if (fieldServiceValidation.handled) {
+      if (
+        fieldServiceValidation.cancelledState
+      ) {
+        Object.assign(
+          bookingContext.state,
+          fieldServiceValidation.cancelledState
+        );
+      }
+
+      return fieldServiceValidation.result;
+    }
+
+    const resolvedInputValue =
+      fieldServiceValidation.normalizedValue;
+
     const routeResult = await executeRealtimeStepRoute({
       tenantId,
       callerPhone,
@@ -631,9 +679,7 @@ export async function handleRealtimeSubmitBookingStep(
       currentIndex: prepared.currentIndex,
       targetSlot: prepared.targetSlot,
       stepKey: prepared.stepKey,
-      resolvedInputValue: isCurrentConfirmationStep
-        ? effectiveConfirmationProtocolValue
-        : prepared.resolvedInputValue,
+      resolvedInputValue,
       rawTranscriptValue: prepared.rawTranscriptValue,
       modelValue: prepared.modelValue,
       sanitizedArgs: {
