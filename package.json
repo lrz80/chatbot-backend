@@ -4,7 +4,7 @@
   "main": "dist/app.js",
   "type": "commonjs",
   "scripts": {
-    "dev": "ts-node -r tsconfig-paths/register src/index.ts",
+    "dev": "ts-node -r tsconfig-paths/register src/app.ts",
     "build": "npx tsc",
     "start": "node dist/app.js",
     "scheduler:campaigns": "ts-node src/scripts/scheduler-campaigns.ts",
