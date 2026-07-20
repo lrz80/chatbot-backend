@@ -13,19 +13,12 @@ import {
 } from "../repositories/fieldResources.repo";
 
 import {
-  deleteAppointmentLocation,
-  getAppointmentLocation,
   listAppointmentLocations,
-  saveAppointmentLocation,
   updateAppointmentLocationGeocoding,
 } from "../repositories/appointmentLocations.repo";
 
 import {
-  deleteResourceAssignment,
-  getResourceAssignment,
   listResourceAssignments,
-  saveResourceAssignment,
-  updateResourceAssignmentStatus,
 } from "../repositories/resourceAssignments.repo";
 
 import {
@@ -40,6 +33,16 @@ import { optimizeRoutePlan } from "../services/routeOptimization.service";
 
 import type { FieldOperationResourceType } from "../domain/fieldOperations.types";
 import type { RoutingStopInput } from "../providers/routingProvider.types";
+
+import {
+  assignResourceToAppointment,
+  changeAppointmentResourceStatus,
+  getAppointmentFieldLocation,
+  getAppointmentResourceAssignment,
+  removeAppointmentFieldLocation,
+  removeResourceFromAppointment,
+  setAppointmentFieldLocation,
+} from "../services/appointmentFieldOperations.service";
 
 const router = Router();
 
@@ -617,7 +620,7 @@ router.put(
       const tenantId = getTenantId(req);
       const body = req.body ?? {};
 
-      const location = await saveAppointmentLocation({
+      const location = await setAppointmentFieldLocation({
         tenantId,
 
         appointmentId: requiredString(
@@ -692,13 +695,12 @@ router.get(
     try {
       const tenantId = getTenantId(req);
 
-      const location = await getAppointmentLocation({
+      const location = await getAppointmentFieldLocation({
         tenantId,
         appointmentId: requiredString(
           req.params.appointmentId,
           "appointmentId"
         ),
-        locationType: "service",
       });
 
       if (!location) {
@@ -846,13 +848,12 @@ router.delete(
     try {
       const tenantId = getTenantId(req);
 
-      const deleted = await deleteAppointmentLocation({
+      const deleted = await removeAppointmentFieldLocation({
         tenantId,
         appointmentId: requiredString(
           req.params.appointmentId,
           "appointmentId"
         ),
-        locationType: "service",
       });
 
       if (!deleted) {
@@ -886,7 +887,7 @@ router.put(
       const tenantId = getTenantId(req);
       const body = req.body ?? {};
 
-      const assignment = await saveResourceAssignment({
+      const assignment = await assignResourceToAppointment({
         tenantId,
 
         appointmentId: requiredString(
@@ -959,20 +960,21 @@ router.get(
     try {
       const tenantId = getTenantId(req);
 
-      const assignment = await getResourceAssignment({
-        tenantId,
-        appointmentId: requiredString(
-          req.params.appointmentId,
-          "appointmentId"
-        ),
-        resourceId: requiredString(
-          req.params.resourceId,
-          "resourceId"
-        ),
-        assignmentRole: optionalString(
-          req.query.assignmentRole
-        ),
-      });
+      const assignment =
+        await getAppointmentResourceAssignment({
+          tenantId,
+          appointmentId: requiredString(
+            req.params.appointmentId,
+            "appointmentId"
+          ),
+          resourceId: requiredString(
+            req.params.resourceId,
+            "resourceId"
+          ),
+          assignmentRole: optionalString(
+            req.query.assignmentRole
+          ),
+        });
 
       if (!assignment) {
         return res.status(404).json({
@@ -1000,32 +1002,28 @@ router.patch(
       const body = req.body ?? {};
 
       const assignment =
-        await updateResourceAssignmentStatus({
+        await changeAppointmentResourceStatus({
           tenantId,
+
           appointmentId: requiredString(
             req.params.appointmentId,
             "appointmentId"
           ),
+
           resourceId: requiredString(
             req.params.resourceId,
             "resourceId"
           ),
+
           assignmentRole: optionalString(
             body.assignmentRole
           ),
+
           assignmentStatus: requiredString(
             body.assignmentStatus,
             "assignmentStatus"
           ),
         });
-
-      if (!assignment) {
-        return res.status(404).json({
-          ok: false,
-          error:
-            "FIELD_OPERATIONS_ASSIGNMENT_NOT_FOUND",
-        });
-      }
 
       return res.json({
         ok: true,
@@ -1043,7 +1041,7 @@ router.delete(
     try {
       const tenantId = getTenantId(req);
 
-      const deleted = await deleteResourceAssignment({
+      const deleted = await removeResourceFromAppointment({
         tenantId,
         appointmentId: requiredString(
           req.params.appointmentId,
