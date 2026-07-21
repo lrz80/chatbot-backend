@@ -515,29 +515,48 @@ export async function buildRoutePlan(
       longitude,
       scheduledStartAt,
       scheduledEndAt,
+
       serviceDurationSeconds:
         calculateServiceDurationSeconds(
           scheduledStartAt,
           scheduledEndAt
         ),
+
       bufferAfterSeconds,
       isLocked: false,
+
       metadata: {
         serviceId: row.service_id,
         serviceName: row.service_name,
+
         customerName: row.customer_name,
         customerPhone: row.customer_phone,
+
         formattedAddress:
           row.formatted_address,
+
+        latitude,
+        longitude,
+
+        scheduledStartAt,
+        scheduledEndAt,
+
         appointmentStatus:
           row.appointment_status,
+
         assignmentRole:
           row.assignment_role,
+
         assignmentStatus:
           row.assignment_status,
+
         bufferAfterSeconds,
+
         bufferAfterMinutes:
-          Math.round(bufferAfterSeconds / 60),
+          Math.round(
+            bufferAfterSeconds / 60
+          ),
+
         fieldServiceAreaValidationApplied:
           serviceAreaValidation.validationApplied,
 
