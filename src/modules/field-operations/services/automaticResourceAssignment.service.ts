@@ -444,8 +444,8 @@ async function getPreviousRouteNeighbor(input: {
        AND a.id::text = ara.appointment_id
 
       LEFT JOIN appointment_locations al
-        ON al.tenant_id = a.tenant_id
-       AND al.appointment_id = a.id
+        ON al.tenant_id = a.tenant_id::text
+       AND al.appointment_id = a.id::text
        AND al.location_type = 'service'
 
       WHERE ara.tenant_id = $1
@@ -515,8 +515,8 @@ async function getNextRouteNeighbor(input: {
        AND a.id::text = ara.appointment_id
 
       LEFT JOIN appointment_locations al
-        ON al.tenant_id = a.tenant_id
-       AND al.appointment_id = a.id
+        ON al.tenant_id = a.tenant_id::text
+       AND al.appointment_id = a.id::text
        AND al.location_type = 'service'
 
       WHERE ara.tenant_id = $1
