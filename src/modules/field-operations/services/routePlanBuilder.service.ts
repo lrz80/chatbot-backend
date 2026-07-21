@@ -346,6 +346,28 @@ export async function buildRoutePlan(
       ]
     );
 
+  console.log(
+    "[FIELD_OPERATIONS][ROUTE_BUILDER_APPOINTMENTS_LOADED]",
+    {
+      version: "route_builder_v2",
+      tenantId,
+      resourceId,
+      serviceDate,
+      timezone,
+      appointmentsFound: rows.length,
+      appointments: rows.map((row) => ({
+        appointmentId: row.appointment_id,
+        startTime: row.start_time,
+        endTime: row.end_time,
+        assignmentStatus: row.assignment_status,
+        formattedAddress: row.formatted_address,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        geocodingStatus: row.geocoding_status,
+      })),
+    }
+  );
+
   const stops: RoutingStopInput[] = [];
   const skippedAppointments:
     SkippedRouteAppointment[] = [];
