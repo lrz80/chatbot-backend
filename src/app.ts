@@ -98,6 +98,7 @@ import voiceRealtimeRouter from "./routes/webhook/voice-realtime";
 import twilioVoiceSetupRouter from "./routes/twilioVoiceSetup";
 import monthlySummaryReportRouter from "./routes/reports/monthly-summary";
 import fieldOperationsRouter from "./modules/field-operations/routes/fieldOperations.routes";
+import adminTenantsRoutes from "./routes/adminTenants";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -250,6 +251,7 @@ app.use(
   fieldOperationsRouter
 );
 app.use("/api/reports", monthlySummaryReportRouter);
+app.use("/api/admin/tenants", adminTenantsRoutes);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {

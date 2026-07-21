@@ -31,7 +31,20 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       return res.status(401).json({ error: 'Tenant no encontrado o no asignado' });
     }
 
-    const userRes = await pool.query('SELECT uid, email, owner_name FROM users WHERE uid = $1', [uid]);
+    const userRes = await pool.query(
+      `
+        SELECT
+          uid,
+          email,
+          owner_name,
+          tenant_id AS home_tenant_id,
+          COALESCE(role, 'business_owner') AS role
+        FROM users
+        WHERE uid = $1
+        LIMIT 1
+      `,
+      [uid]
+    );
     const user = userRes.rows[0];
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
@@ -196,7 +209,12 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       uid: user.uid,
       email: user.email,
       owner_name: user.owner_name,
+
+      role: req.user?.role ?? user.role ?? "business_owner",
+      is_admin: req.user?.is_admin === true,
+
       tenant_id,
+      home_tenant_id: req.user?.home_tenant_id ?? user.home_tenant_id,
 
       // Membresía / trial
       membresia_activa: Boolean(tenant.membresia_activa),
