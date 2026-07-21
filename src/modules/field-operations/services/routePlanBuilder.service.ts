@@ -274,9 +274,16 @@ export async function buildRoutePlan(
         a.customer_phone,
 
         a.start_time,
-        a.end_time,
 
-        a.status AS appointment_status,
+        COALESCE(
+          a.end_time,
+          a.start_time + INTERVAL '60 minutes'
+        ) AS end_time,
+
+        COALESCE(
+          a.status,
+          'confirmed'
+        ) AS appointment_status,
 
         al.id AS location_id,
         al.formatted_address,
@@ -293,30 +300,39 @@ export async function buildRoutePlan(
 
       INNER JOIN appointments a
         ON a.id::text = ara.appointment_id
-       AND a.tenant_id::text = ara.tenant_id
+      AND a.tenant_id::text = ara.tenant_id
 
       LEFT JOIN services s
         ON s.id = a.service_id
 
       LEFT JOIN appointment_locations al
-        ON al.tenant_id::text = ara.tenant_id
-       AND al.appointment_id::text = ara.appointment_id
-       AND al.location_type = 'service'
+        ON al.tenant_id = ara.tenant_id
+      AND al.appointment_id = ara.appointment_id
+      AND al.location_type = 'service'
 
       WHERE ara.tenant_id = $1
         AND ara.resource_id = $2
 
-        AND a.start_time >= (
-          $3::date::timestamp
-          AT TIME ZONE $4
+        AND ara.assignment_status = ANY(
+          ARRAY[
+            'assigned',
+            'accepted',
+            'confirmed',
+            'dispatched',
+            'en_route',
+            'arrived',
+            'in_progress'
+          ]::text[]
         )
 
-        AND a.start_time < (
-          ($3::date + 1)::timestamp
-          AT TIME ZONE $4
-        )
+        AND COALESCE(
+          LOWER(a.status),
+          ''
+        ) <> 'cancelled'
 
-        AND a.status <> 'cancelled'
+        AND (
+          a.start_time AT TIME ZONE $4
+        )::date = $3::date
 
       ORDER BY
         a.start_time ASC,
