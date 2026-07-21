@@ -285,8 +285,8 @@ async function hasTimeConflict(input: {
         FROM appointment_resource_assignments ara
 
         INNER JOIN appointments a
-          ON a.tenant_id = ara.tenant_id
-         AND a.id = ara.appointment_id
+          ON a.tenant_id::text = ara.tenant_id
+         AND a.id::text = ara.appointment_id
 
         WHERE ara.tenant_id = $1
           AND ara.resource_id = $2
@@ -365,8 +365,8 @@ async function getDailyLoad(input: {
       FROM appointment_resource_assignments ara
 
       INNER JOIN appointments a
-        ON a.tenant_id = ara.tenant_id
-       AND a.id = ara.appointment_id
+        ON a.tenant_id::text = ara.tenant_id
+       AND a.id::text = ara.appointment_id
 
       WHERE ara.tenant_id = $1
         AND ara.resource_id = $2
@@ -440,8 +440,8 @@ async function getPreviousRouteNeighbor(input: {
       FROM appointment_resource_assignments ara
 
       INNER JOIN appointments a
-        ON a.tenant_id = ara.tenant_id
-       AND a.id = ara.appointment_id
+        ON a.tenant_id::text = ara.tenant_id
+       AND a.id::text = ara.appointment_id
 
       LEFT JOIN appointment_locations al
         ON al.tenant_id = a.tenant_id
@@ -511,8 +511,8 @@ async function getNextRouteNeighbor(input: {
       FROM appointment_resource_assignments ara
 
       INNER JOIN appointments a
-        ON a.tenant_id = ara.tenant_id
-       AND a.id = ara.appointment_id
+        ON a.tenant_id::text = ara.tenant_id
+       AND a.id::text = ara.appointment_id
 
       LEFT JOIN appointment_locations al
         ON al.tenant_id = a.tenant_id
@@ -574,8 +574,8 @@ async function wasPreviousResourceForCustomer(input: {
         FROM appointment_resource_assignments ara
 
         INNER JOIN appointments a
-          ON a.tenant_id = ara.tenant_id
-         AND a.id = ara.appointment_id
+          ON a.tenant_id::text = ara.tenant_id
+         AND a.id::text = ara.appointment_id
 
         WHERE ara.tenant_id = $1
           AND ara.resource_id = $2
