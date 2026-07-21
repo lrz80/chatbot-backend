@@ -1,0 +1,2822 @@
+
+============================================================
+
+FILE: src\modules\field-operations\domain\fieldOperations.types.ts
+
+============================================================
+
+// src/modules/field-operations/domain/fieldOperations.types.ts
+
+export type FieldOperationResourceType =
+  | "person"
+  | "crew"
+  | "vehicle"
+  | "equipment"
+  | "other";
+
+export type FieldOperationResource = {
+  id: string;
+  tenantId: string;
+
+  name: string;
+  resourceType: FieldOperationResourceType;
+
+  externalProvider: string | null;
+  externalReference: string | null;
+
+  active: boolean;
+
+  startAddress: string | null;
+  startLatitude: number | null;
+  startLongitude: number | null;
+
+  endAddress: string | null;
+  endLatitude: number | null;
+  endLongitude: number | null;
+
+  timezone: string | null;
+
+  availability: Record<string, unknown>;
+  capabilities: unknown[];
+  metadata: Record<string, unknown>;
+
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AppointmentLocationType =
+  | "service"
+  | "pickup"
+  | "dropoff"
+  | "start"
+  | "end"
+  | "other";
+
+export type AppointmentLocation = {
+  id: string;
+  tenantId: string;
+  appointmentId: string;
+
+  locationType: AppointmentLocationType;
+  formattedAddress: string;
+  addressComponents: Record<string, unknown>;
+
+  latitude: number | null;
+  longitude: number | null;
+
+  geocodingProvider: string | null;
+  providerPlaceId: string | null;
+  geocodingStatus: string;
+  geocodingError: string | null;
+
+  metadata: Record<string, unknown>;
+
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RoutePlanMode =
+  | "view_only"
+  | "suggest"
+  | "automatic";
+
+export type RoutePlanStatus =
+  | "draft"
+  | "calculating"
+  | "ready"
+  | "failed"
+  | "archived";
+
+export type RoutePlan = {
+  id: string;
+  tenantId: string;
+  resourceId: string;
+
+  serviceDate: string;
+  status: RoutePlanStatus;
+  mode: RoutePlanMode;
+
+  routingProvider: string | null;
+
+  totalDistanceMeters: number;
+  totalDriveSeconds: number;
+  totalServiceSeconds: number;
+
+  optimizationRequest: Record<string, unknown>;
+  optimizationResult: Record<string, unknown>;
+  providerMetadata: Record<string, unknown>;
+
+  calculationStartedAt: string | null;
+  calculationFinishedAt: string | null;
+
+  errorCode: string | null;
+  errorDetails: Record<string, unknown>;
+
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RouteStopInput = {
+  appointmentId: string | null;
+  locationId: string;
+
+  latitude: number;
+  longitude: number;
+
+  serviceDurationSeconds: number;
+
+  availableFrom: string | null;
+  availableUntil: string | null;
+
+  locked: boolean;
+
+  metadata?: Record<string, unknown>;
+};
+
+export type RouteStopResult = {
+  appointmentId: string | null;
+  locationId: string;
+
+  order: number;
+
+  plannedArrivalAt: string | null;
+  plannedDepartureAt: string | null;
+
+  serviceDurationSeconds: number;
+  driveSecondsFromPrevious: number;
+  distanceMetersFromPrevious: number;
+
+  metadata: Record<string, unknown>;
+};
+
+export type RouteOptimizationInput = {
+  tenantId: string;
+  resourceId: string;
+  serviceDate: string;
+
+  startLocation: {
+    latitude: number;
+    longitude: number;
+  } | null;
+
+  endLocation: {
+    latitude: number;
+    longitude: number;
+  } | null;
+
+  stops: RouteStopInput[];
+
+  options: Record<string, unknown>;
+};
+
+export type RouteOptimizationResult = {
+  provider: string;
+
+  orderedStops: RouteStopResult[];
+
+  totalDistanceMeters: number;
+  totalDriveSeconds: number;
+  totalServiceSeconds: number;
+
+  providerMetadata: Record<string, unknown>;
+};
+
+============================================================
+
+FILE: src\modules\field-operations\repositories\fieldResources.repo.ts
+
+============================================================
+
+// src/modules/field-operations/repositories/fieldResources.repo.ts
+
+import { randomUUID } from "node:crypto";
+import pool from "../../../lib/db";
+import type {
+  FieldOperationResource,
+  FieldOperationResourceType,
+} from "../domain/fieldOperations.types";
+
+type DatabaseJson = Record<string, unknown> | unknown[];
+
+type FieldOperationResourceRow = {
+  id: string;
+  tenant_id: string;
+
+  name: string;
+  resource_type: FieldOperationResourceType;
+
+  external_provider: string | null;
+  external_reference: string | null;
+
+  active: boolean;
+
+  start_address: string | null;
+  start_latitude: number | string | null;
+  start_longitude: number | string | null;
+
+  end_address: string | null;
+  end_latitude: number | string | null;
+  end_longitude: number | string | null;
+
+  timezone: string | null;
+
+  availability: DatabaseJson | null;
+  capabilities: DatabaseJson | null;
+  metadata: DatabaseJson | null;
+
+  created_at: Date | string;
+  updated_at: Date | string;
+};
+
+export type CreateFieldOperationResourceInput = {
+  tenantId: string;
+
+  name: string;
+  resourceType: FieldOperationResourceType;
+
+  externalProvider?: string | null;
+  externalReference?: string | null;
+
+  active?: boolean;
+
+  startAddress?: string | null;
+  startLatitude?: number | null;
+  startLongitude?: number | null;
+
+  endAddress?: string | null;
+  endLatitude?: number | null;
+  endLongitude?: number | null;
+
+  timezone?: string | null;
+
+  availability?: Record<string, unknown>;
+  capabilities?: unknown[];
+  metadata?: Record<string, unknown>;
+};
+
+export type UpdateFieldOperationResourceInput = {
+  name?: string;
+  resourceType?: FieldOperationResourceType;
+
+  externalProvider?: string | null;
+  externalReference?: string | null;
+
+  active?: boolean;
+
+  startAddress?: string | null;
+  startLatitude?: number | null;
+  startLongitude?: number | null;
+
+  endAddress?: string | null;
+  endLatitude?: number | null;
+  endLongitude?: number | null;
+
+  timezone?: string | null;
+
+  availability?: Record<string, unknown>;
+  capabilities?: unknown[];
+  metadata?: Record<string, unknown>;
+};
+
+function cleanRequiredString(value: unknown, fieldName: string): string {
+  const result = String(value ?? "").trim();
+
+  if (!result) {
+    throw new Error(`FIELD_OPERATIONS_REQUIRED_FIELD:${fieldName}`);
+  }
+
+  return result;
+}
+
+function cleanOptionalString(value: unknown): string | null {
+  const result = String(value ?? "").trim();
+  return result || null;
+}
+
+function normalizeCoordinate(
+  value: unknown,
+  fieldName: string,
+  minimum: number,
+  maximum: number
+): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const numberValue = Number(value);
+
+  if (
+    !Number.isFinite(numberValue) ||
+    numberValue < minimum ||
+    numberValue > maximum
+  ) {
+    throw new Error(`FIELD_OPERATIONS_INVALID_COORDINATE:${fieldName}`);
+  }
+
+  return numberValue;
+}
+
+function parseNumberOrNull(value: number | string | null): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function parseObjectJson(value: DatabaseJson | null): Record<string, unknown> {
+  if (!value || Array.isArray(value) || typeof value !== "object") {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function parseArrayJson(value: DatabaseJson | null): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function toIsoString(value: Date | string): string {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("FIELD_OPERATIONS_INVALID_DATABASE_TIMESTAMP");
+  }
+
+  return parsed.toISOString();
+}
+
+function mapResourceRow(
+  row: FieldOperationResourceRow
+): FieldOperationResource {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+
+    name: row.name,
+    resourceType: row.resource_type,
+
+    externalProvider: row.external_provider,
+    externalReference: row.external_reference,
+
+    active: row.active,
+
+    startAddress: row.start_address,
+    startLatitude: parseNumberOrNull(row.start_latitude),
+    startLongitude: parseNumberOrNull(row.start_longitude),
+
+    endAddress: row.end_address,
+    endLatitude: parseNumberOrNull(row.end_latitude),
+    endLongitude: parseNumberOrNull(row.end_longitude),
+
+    timezone: row.timezone,
+
+    availability: parseObjectJson(row.availability),
+    capabilities: parseArrayJson(row.capabilities),
+    metadata: parseObjectJson(row.metadata),
+
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
+  };
+}
+
+export async function createFieldOperationResource(
+  input: CreateFieldOperationResourceInput
+): Promise<FieldOperationResource> {
+  const id = randomUUID();
+  const tenantId = cleanRequiredString(input.tenantId, "tenantId");
+  const name = cleanRequiredString(input.name, "name");
+
+  const resourceType = cleanRequiredString(
+    input.resourceType,
+    "resourceType"
+  ) as FieldOperationResourceType;
+
+  const startLatitude = normalizeCoordinate(
+    input.startLatitude,
+    "startLatitude",
+    -90,
+    90
+  );
+
+  const startLongitude = normalizeCoordinate(
+    input.startLongitude,
+    "startLongitude",
+    -180,
+    180
+  );
+
+  const endLatitude = normalizeCoordinate(
+    input.endLatitude,
+    "endLatitude",
+    -90,
+    90
+  );
+
+  const endLongitude = normalizeCoordinate(
+    input.endLongitude,
+    "endLongitude",
+    -180,
+    180
+  );
+
+  const { rows } = await pool.query<FieldOperationResourceRow>(
+    `
+    INSERT INTO field_operation_resources (
+      id,
+      tenant_id,
+      name,
+      resource_type,
+      external_provider,
+      external_reference,
+      active,
+      start_address,
+      start_latitude,
+      start_longitude,
+      end_address,
+      end_latitude,
+      end_longitude,
+      timezone,
+      availability,
+      capabilities,
+      metadata,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      $1,
+      $2,
+      $3,
+      $4,
+      $5,
+      $6,
+      $7,
+      $8,
+      $9,
+      $10,
+      $11,
+      $12,
+      $13,
+      $14,
+      $15::jsonb,
+      $16::jsonb,
+      $17::jsonb,
+      NOW(),
+      NOW()
+    )
+    RETURNING *
+    `,
+    [
+      id,
+      tenantId,
+      name,
+      resourceType,
+      cleanOptionalString(input.externalProvider),
+      cleanOptionalString(input.externalReference),
+      input.active ?? true,
+      cleanOptionalString(input.startAddress),
+      startLatitude,
+      startLongitude,
+      cleanOptionalString(input.endAddress),
+      endLatitude,
+      endLongitude,
+      cleanOptionalString(input.timezone),
+      JSON.stringify(input.availability ?? {}),
+      JSON.stringify(input.capabilities ?? []),
+      JSON.stringify(input.metadata ?? {}),
+    ]
+  );
+
+  const row = rows[0];
+
+  if (!row) {
+    throw new Error("FIELD_OPERATIONS_RESOURCE_CREATE_FAILED");
+  }
+
+  return mapResourceRow(row);
+}
+
+export async function getFieldOperationResourceById(input: {
+  tenantId: string;
+  resourceId: string;
+}): Promise<FieldOperationResource | null> {
+  const tenantId = cleanRequiredString(input.tenantId, "tenantId");
+  const resourceId = cleanRequiredString(input.resourceId, "resourceId");
+
+  const { rows } = await pool.query<FieldOperationResourceRow>(
+    `
+    SELECT *
+    FROM field_operation_resources
+    WHERE tenant_id = $1
+      AND id = $2
+    LIMIT 1
+    `,
+    [tenantId, resourceId]
+  );
+
+  return rows[0] ? mapResourceRow(rows[0]) : null;
+}
+
+export async function listFieldOperationResources(input: {
+  tenantId: string;
+  active?: boolean;
+}): Promise<FieldOperationResource[]> {
+  const tenantId = cleanRequiredString(input.tenantId, "tenantId");
+
+  const values: unknown[] = [tenantId];
+  const conditions = ["tenant_id = $1"];
+
+  if (typeof input.active === "boolean") {
+    values.push(input.active);
+    conditions.push(`active = $${values.length}`);
+  }
+
+  const { rows } = await pool.query<FieldOperationResourceRow>(
+    `
+    SELECT *
+    FROM field_operation_resources
+    WHERE ${conditions.join("\n      AND ")}
+    ORDER BY active DESC, name ASC, created_at ASC
+    `,
+    values
+  );
+
+  return rows.map(mapResourceRow);
+}
+
+export async function updateFieldOperationResource(
+  tenantIdInput: string,
+  resourceIdInput: string,
+  input: UpdateFieldOperationResourceInput
+): Promise<FieldOperationResource | null> {
+  const tenantId = cleanRequiredString(tenantIdInput, "tenantId");
+  const resourceId = cleanRequiredString(resourceIdInput, "resourceId");
+
+  const assignments: string[] = [];
+  const values: unknown[] = [tenantId, resourceId];
+
+  function addAssignment(column: string, value: unknown): void {
+    values.push(value);
+    assignments.push(`${column} = $${values.length}`);
+  }
+
+  if (input.name !== undefined) {
+    addAssignment("name", cleanRequiredString(input.name, "name"));
+  }
+
+  if (input.resourceType !== undefined) {
+    addAssignment(
+      "resource_type",
+      cleanRequiredString(input.resourceType, "resourceType")
+    );
+  }
+
+  if (input.externalProvider !== undefined) {
+    addAssignment(
+      "external_provider",
+      cleanOptionalString(input.externalProvider)
+    );
+  }
+
+  if (input.externalReference !== undefined) {
+    addAssignment(
+      "external_reference",
+      cleanOptionalString(input.externalReference)
+    );
+  }
+
+  if (input.active !== undefined) {
+    addAssignment("active", input.active);
+  }
+
+  if (input.startAddress !== undefined) {
+    addAssignment("start_address", cleanOptionalString(input.startAddress));
+  }
+
+  if (input.startLatitude !== undefined) {
+    addAssignment(
+      "start_latitude",
+      normalizeCoordinate(input.startLatitude, "startLatitude", -90, 90)
+    );
+  }
+
+  if (input.startLongitude !== undefined) {
+    addAssignment(
+      "start_longitude",
+      normalizeCoordinate(input.startLongitude, "startLongitude", -180, 180)
+    );
+  }
+
+  if (input.endAddress !== undefined) {
+    addAssignment("end_address", cleanOptionalString(input.endAddress));
+  }
+
+  if (input.endLatitude !== undefined) {
+    addAssignment(
+      "end_latitude",
+      normalizeCoordinate(input.endLatitude, "endLatitude", -90, 90)
+    );
+  }
+
+  if (input.endLongitude !== undefined) {
+    addAssignment(
+      "end_longitude",
+      normalizeCoordinate(input.endLongitude, "endLongitude", -180, 180)
+    );
+  }
+
+  if (input.timezone !== undefined) {
+    addAssignment("timezone", cleanOptionalString(input.timezone));
+  }
+
+  if (input.availability !== undefined) {
+    values.push(JSON.stringify(input.availability));
+    assignments.push(`availability = $${values.length}::jsonb`);
+  }
+
+  if (input.capabilities !== undefined) {
+    values.push(JSON.stringify(input.capabilities));
+    assignments.push(`capabilities = $${values.length}::jsonb`);
+  }
+
+  if (input.metadata !== undefined) {
+    values.push(JSON.stringify(input.metadata));
+    assignments.push(`metadata = $${values.length}::jsonb`);
+  }
+
+  if (assignments.length === 0) {
+    return getFieldOperationResourceById({
+      tenantId,
+      resourceId,
+    });
+  }
+
+  assignments.push("updated_at = NOW()");
+
+  const { rows } = await pool.query<FieldOperationResourceRow>(
+    `
+    UPDATE field_operation_resources
+    SET ${assignments.join(",\n        ")}
+    WHERE tenant_id = $1
+      AND id = $2
+    RETURNING *
+    `,
+    values
+  );
+
+  return rows[0] ? mapResourceRow(rows[0]) : null;
+}
+
+export async function deactivateFieldOperationResource(input: {
+  tenantId: string;
+  resourceId: string;
+}): Promise<boolean> {
+  const tenantId = cleanRequiredString(input.tenantId, "tenantId");
+  const resourceId = cleanRequiredString(input.resourceId, "resourceId");
+
+  const result = await pool.query(
+    `
+    UPDATE field_operation_resources
+    SET active = FALSE,
+        updated_at = NOW()
+    WHERE tenant_id = $1
+      AND id = $2
+      AND active = TRUE
+    `,
+    [tenantId, resourceId]
+  );
+
+  return (result.rowCount ?? 0) > 0;
+}
+
+============================================================
+
+FILE: src\modules\field-operations\repositories\resourceAssignments.repo.ts
+
+============================================================
+
+// src/modules/field-operations/repositories/resourceAssignments.repo.ts
+
+import { randomUUID } from "node:crypto";
+import pool from "../../../lib/db";
+
+export type ResourceAssignment = {
+  id: string;
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+  assignmentRole: string;
+  assignmentStatus: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ResourceAssignmentRow = {
+  id: string;
+  tenant_id: string;
+  appointment_id: string;
+  resource_id: string;
+  assignment_role: string;
+  assignment_status: string;
+  metadata: Record<string, unknown> | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+};
+
+export type SaveResourceAssignmentInput = {
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+  assignmentRole?: string;
+  assignmentStatus?: string;
+  metadata?: Record<string, unknown>;
+};
+
+function requiredString(value: unknown, fieldName: string): string {
+  const result = String(value ?? "").trim();
+
+  if (!result) {
+    throw new Error(`FIELD_OPERATIONS_REQUIRED_FIELD:${fieldName}`);
+  }
+
+  return result;
+}
+
+function optionalString(value: unknown): string | null {
+  const result = String(value ?? "").trim();
+  return result || null;
+}
+
+function toIsoString(value: Date | string): string {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("FIELD_OPERATIONS_INVALID_DATABASE_TIMESTAMP");
+  }
+
+  return parsed.toISOString();
+}
+
+function mapAssignmentRow(
+  row: ResourceAssignmentRow
+): ResourceAssignment {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    appointmentId: row.appointment_id,
+    resourceId: row.resource_id,
+    assignmentRole: row.assignment_role,
+    assignmentStatus: row.assignment_status,
+    metadata:
+      row.metadata &&
+      typeof row.metadata === "object" &&
+      !Array.isArray(row.metadata)
+        ? row.metadata
+        : {},
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
+  };
+}
+
+export async function saveResourceAssignment(
+  input: SaveResourceAssignmentInput
+): Promise<ResourceAssignment> {
+  const id = randomUUID();
+
+  const tenantId = requiredString(input.tenantId, "tenantId");
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+  const resourceId = requiredString(input.resourceId, "resourceId");
+
+  const assignmentRole =
+    optionalString(input.assignmentRole) ?? "primary";
+
+  const assignmentStatus =
+    optionalString(input.assignmentStatus) ?? "assigned";
+
+  const { rows } = await pool.query<ResourceAssignmentRow>(
+    `
+    INSERT INTO appointment_resource_assignments (
+      id,
+      tenant_id,
+      appointment_id,
+      resource_id,
+      assignment_role,
+      assignment_status,
+      metadata,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      $1,
+      $2,
+      $3,
+      $4,
+      $5,
+      $6,
+      $7::jsonb,
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (
+      tenant_id,
+      appointment_id,
+      resource_id,
+      assignment_role
+    )
+    DO UPDATE SET
+      assignment_status = EXCLUDED.assignment_status,
+      metadata = EXCLUDED.metadata,
+      updated_at = NOW()
+    RETURNING *
+    `,
+    [
+      id,
+      tenantId,
+      appointmentId,
+      resourceId,
+      assignmentRole,
+      assignmentStatus,
+      JSON.stringify(input.metadata ?? {}),
+    ]
+  );
+
+  const row = rows[0];
+
+  if (!row) {
+    throw new Error("FIELD_OPERATIONS_ASSIGNMENT_SAVE_FAILED");
+  }
+
+  return mapAssignmentRow(row);
+}
+
+export async function getResourceAssignment(input: {
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+  assignmentRole?: string;
+}): Promise<ResourceAssignment | null> {
+  const tenantId = requiredString(input.tenantId, "tenantId");
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+  const resourceId = requiredString(input.resourceId, "resourceId");
+
+  const assignmentRole =
+    optionalString(input.assignmentRole) ?? "primary";
+
+  const { rows } = await pool.query<ResourceAssignmentRow>(
+    `
+    SELECT *
+    FROM appointment_resource_assignments
+    WHERE tenant_id = $1
+      AND appointment_id = $2
+      AND resource_id = $3
+      AND assignment_role = $4
+    LIMIT 1
+    `,
+    [tenantId, appointmentId, resourceId, assignmentRole]
+  );
+
+  return rows[0] ? mapAssignmentRow(rows[0]) : null;
+}
+
+export async function listResourceAssignments(input: {
+  tenantId: string;
+  resourceId?: string;
+  appointmentId?: string;
+  assignmentStatus?: string;
+}): Promise<ResourceAssignment[]> {
+  const tenantId = requiredString(input.tenantId, "tenantId");
+
+  const values: unknown[] = [tenantId];
+  const conditions = ["tenant_id = $1"];
+
+  const resourceId = optionalString(input.resourceId);
+  const appointmentId = optionalString(input.appointmentId);
+  const assignmentStatus = optionalString(input.assignmentStatus);
+
+  if (resourceId) {
+    values.push(resourceId);
+    conditions.push(`resource_id = $${values.length}`);
+  }
+
+  if (appointmentId) {
+    values.push(appointmentId);
+    conditions.push(`appointment_id = $${values.length}`);
+  }
+
+  if (assignmentStatus) {
+    values.push(assignmentStatus);
+    conditions.push(`assignment_status = $${values.length}`);
+  }
+
+  const { rows } = await pool.query<ResourceAssignmentRow>(
+    `
+    SELECT *
+    FROM appointment_resource_assignments
+    WHERE ${conditions.join("\n      AND ")}
+    ORDER BY created_at ASC
+    `,
+    values
+  );
+
+  return rows.map(mapAssignmentRow);
+}
+
+export async function updateResourceAssignmentStatus(input: {
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+  assignmentRole?: string;
+  assignmentStatus: string;
+}): Promise<ResourceAssignment | null> {
+  const tenantId = requiredString(input.tenantId, "tenantId");
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+  const resourceId = requiredString(input.resourceId, "resourceId");
+
+  const assignmentRole =
+    optionalString(input.assignmentRole) ?? "primary";
+
+  const assignmentStatus = requiredString(
+    input.assignmentStatus,
+    "assignmentStatus"
+  );
+
+  const { rows } = await pool.query<ResourceAssignmentRow>(
+    `
+    UPDATE appointment_resource_assignments
+    SET assignment_status = $5,
+        updated_at = NOW()
+    WHERE tenant_id = $1
+      AND appointment_id = $2
+      AND resource_id = $3
+      AND assignment_role = $4
+    RETURNING *
+    `,
+    [
+      tenantId,
+      appointmentId,
+      resourceId,
+      assignmentRole,
+      assignmentStatus,
+    ]
+  );
+
+  return rows[0] ? mapAssignmentRow(rows[0]) : null;
+}
+
+export async function deleteResourceAssignment(input: {
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+  assignmentRole?: string;
+}): Promise<boolean> {
+  const tenantId = requiredString(input.tenantId, "tenantId");
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+  const resourceId = requiredString(input.resourceId, "resourceId");
+
+  const assignmentRole =
+    optionalString(input.assignmentRole) ?? "primary";
+
+  const result = await pool.query(
+    `
+    DELETE FROM appointment_resource_assignments
+    WHERE tenant_id = $1
+      AND appointment_id = $2
+      AND resource_id = $3
+      AND assignment_role = $4
+    `,
+    [tenantId, appointmentId, resourceId, assignmentRole]
+  );
+
+  return (result.rowCount ?? 0) > 0;
+}
+
+============================================================
+
+FILE: src\modules\field-operations\services\automaticResourceAssignment.service.ts
+
+============================================================
+
+// src/modules/field-operations/services/automaticResourceAssignment.service.ts
+
+import pool from "../../../lib/db";
+import { listFieldOperationResources } from "../repositories/fieldResources.repo";
+import {
+  listResourceAssignments,
+  saveResourceAssignment,
+} from "../repositories/resourceAssignments.repo";
+import type { FieldOperationResource } from "../domain/fieldOperations.types";
+
+type AppointmentRow = {
+  id: string;
+  tenant_id: string;
+  service_id: string | null;
+  start_time: Date | string;
+  end_time: Date | string | null;
+};
+
+type LocationRow = {
+  latitude: number | string | null;
+  longitude: number | string | null;
+};
+
+export type AutomaticResourceAssignmentResult = {
+  status:
+    | "assigned"
+    | "already_assigned"
+    | "appointment_not_found"
+    | "no_active_resources"
+    | "no_eligible_resources";
+  appointmentId: string;
+  resourceId: string | null;
+  resourceName: string | null;
+  score: number | null;
+  reason: string;
+  candidatesEvaluated: number;
+  candidatesRejected: number;
+};
+
+type Candidate = {
+  resource: FieldOperationResource;
+  eligible: boolean;
+  rejectionReason: string | null;
+  distanceKm: number | null;
+  appointmentCount: number;
+  assignedMinutes: number;
+  score: number;
+};
+
+const ACTIVE_ASSIGNMENT_STATUSES = [
+  "assigned",
+  "accepted",
+  "confirmed",
+  "en_route",
+  "in_progress",
+];
+
+function requiredString(value: unknown, fieldName: string): string {
+  const result = String(value ?? "").trim();
+  if (!result) {
+    throw new Error(`FIELD_OPERATIONS_REQUIRED_FIELD:${fieldName}`);
+  }
+  return result;
+}
+
+function normalize(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toDate(value: Date | string | null, fieldName: string): Date {
+  if (!value) {
+    throw new Error(`FIELD_OPERATIONS_REQUIRED_FIELD:${fieldName}`);
+  }
+
+  const parsed = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`FIELD_OPERATIONS_INVALID_DATE:${fieldName}`);
+  }
+
+  return parsed;
+}
+
+function haversineDistanceKm(
+  latitudeA: number,
+  longitudeA: number,
+  latitudeB: number,
+  longitudeB: number
+): number {
+  const radiusKm = 6371;
+  const radians = (degrees: number) => (degrees * Math.PI) / 180;
+  const deltaLatitude = radians(latitudeB - latitudeA);
+  const deltaLongitude = radians(longitudeB - longitudeA);
+
+  const value =
+    Math.sin(deltaLatitude / 2) ** 2 +
+    Math.cos(radians(latitudeA)) *
+      Math.cos(radians(latitudeB)) *
+      Math.sin(deltaLongitude / 2) ** 2;
+
+  return (
+    2 *
+    radiusKm *
+    Math.atan2(Math.sqrt(value), Math.sqrt(1 - value))
+  );
+}
+
+function capabilityMatches(
+  resource: FieldOperationResource,
+  appointment: AppointmentRow
+): boolean {
+  const capabilities = Array.isArray(resource.capabilities)
+    ? resource.capabilities
+    : [];
+
+  if (capabilities.length === 0) return true;
+
+  const serviceTokens = new Set(
+    [appointment.service_id]
+      .map(normalize)
+      .filter(Boolean)
+  );
+
+  if (serviceTokens.size === 0) return true;
+
+  let recognized = false;
+
+  for (const capability of capabilities) {
+    if (typeof capability === "string") {
+      recognized = true;
+      if (serviceTokens.has(normalize(capability))) return true;
+      continue;
+    }
+
+    if (
+      capability &&
+      typeof capability === "object" &&
+      !Array.isArray(capability)
+    ) {
+      const item = capability as Record<string, unknown>;
+      const values = [
+        item.serviceId,
+        item.service_id,
+        item.serviceName,
+        item.service_name,
+        item.id,
+        item.name,
+        item.value,
+        item.key,
+      ]
+        .map(normalize)
+        .filter(Boolean);
+
+      if (values.length > 0) recognized = true;
+      if (values.some((value) => serviceTokens.has(value))) return true;
+    }
+  }
+
+  // Unknown metadata structures remain permissive.
+  return !recognized;
+}
+
+async function getAppointment(
+  tenantId: string,
+  appointmentId: string
+): Promise<AppointmentRow | null> {
+  const { rows } = await pool.query<AppointmentRow>(
+    `
+    SELECT
+      id,
+      tenant_id,
+      service_id,
+      start_time,
+      end_time
+    FROM appointments
+    WHERE tenant_id = $1
+      AND id = $2
+    LIMIT 1
+    `,
+    [tenantId, appointmentId]
+  );
+
+  return rows[0] ?? null;
+}
+
+async function getAppointmentLocation(
+  tenantId: string,
+  appointmentId: string
+): Promise<LocationRow | null> {
+  const { rows } = await pool.query<LocationRow>(
+    `
+    SELECT latitude, longitude
+    FROM appointment_locations
+    WHERE tenant_id = $1
+      AND appointment_id = $2
+      AND location_type = 'service'
+    LIMIT 1
+    `,
+    [tenantId, appointmentId]
+  );
+
+  return rows[0] ?? null;
+}
+
+async function hasTimeConflict(input: {
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+  startAt: Date;
+  endAt: Date;
+}): Promise<boolean> {
+  const { rows } = await pool.query<{ conflict: boolean }>(
+    `
+    SELECT EXISTS (
+      SELECT 1
+      FROM appointment_resource_assignments ara
+      INNER JOIN appointments a
+        ON a.tenant_id = ara.tenant_id
+       AND a.id = ara.appointment_id
+      WHERE ara.tenant_id = $1
+        AND ara.resource_id = $2
+        AND ara.appointment_id <> $3
+        AND ara.assignment_status = ANY($4::text[])
+        AND COALESCE(a.status, '') <> 'cancelled'
+        AND a.start_time < $6
+        AND COALESCE(
+          a.end_time,
+          a.start_time + INTERVAL '60 minutes'
+        ) > $5
+    ) AS conflict
+    `,
+    [
+      input.tenantId,
+      input.resourceId,
+      input.appointmentId,
+      ACTIVE_ASSIGNMENT_STATUSES,
+      input.startAt.toISOString(),
+      input.endAt.toISOString(),
+    ]
+  );
+
+  return Boolean(rows[0]?.conflict);
+}
+
+async function getDailyLoad(input: {
+  tenantId: string;
+  resourceId: string;
+  startAt: Date;
+}): Promise<{ appointmentCount: number; assignedMinutes: number }> {
+  const startOfDay = new Date(input.startAt);
+  startOfDay.setUTCHours(0, 0, 0, 0);
+
+  const endOfDay = new Date(startOfDay);
+  endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+
+  const { rows } = await pool.query<{
+    appointment_count: number | string;
+    assigned_minutes: number | string;
+  }>(
+    `
+    SELECT
+      COUNT(*)::int AS appointment_count,
+      COALESCE(
+        SUM(
+          EXTRACT(
+            EPOCH FROM (
+              COALESCE(
+                a.end_time,
+                a.start_time + INTERVAL '60 minutes'
+              ) - a.start_time
+            )
+          ) / 60
+        ),
+        0
+      )::float AS assigned_minutes
+    FROM appointment_resource_assignments ara
+    INNER JOIN appointments a
+      ON a.tenant_id = ara.tenant_id
+     AND a.id = ara.appointment_id
+    WHERE ara.tenant_id = $1
+      AND ara.resource_id = $2
+      AND ara.assignment_status = ANY($3::text[])
+      AND COALESCE(a.status, '') <> 'cancelled'
+      AND a.start_time >= $4
+      AND a.start_time < $5
+    `,
+    [
+      input.tenantId,
+      input.resourceId,
+      ACTIVE_ASSIGNMENT_STATUSES,
+      startOfDay.toISOString(),
+      endOfDay.toISOString(),
+    ]
+  );
+
+  return {
+    appointmentCount: Number(rows[0]?.appointment_count ?? 0),
+    assignedMinutes: Number(rows[0]?.assigned_minutes ?? 0),
+  };
+}
+
+async function getPreviousStopCoordinates(input: {
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+  startAt: Date;
+}): Promise<{ latitude: number; longitude: number } | null> {
+  const { rows } = await pool.query<LocationRow>(
+    `
+    SELECT al.latitude, al.longitude
+    FROM appointment_resource_assignments ara
+    INNER JOIN appointments a
+      ON a.tenant_id = ara.tenant_id
+     AND a.id = ara.appointment_id
+    INNER JOIN appointment_locations al
+      ON al.tenant_id = a.tenant_id
+     AND al.appointment_id = a.id
+     AND al.location_type = 'service'
+    WHERE ara.tenant_id = $1
+      AND ara.resource_id = $2
+      AND ara.appointment_id <> $3
+      AND ara.assignment_status = ANY($4::text[])
+      AND COALESCE(a.status, '') <> 'cancelled'
+      AND COALESCE(
+        a.end_time,
+        a.start_time + INTERVAL '60 minutes'
+      ) <= $5
+      AND al.latitude IS NOT NULL
+      AND al.longitude IS NOT NULL
+    ORDER BY COALESCE(
+      a.end_time,
+      a.start_time + INTERVAL '60 minutes'
+    ) DESC
+    LIMIT 1
+    `,
+    [
+      input.tenantId,
+      input.resourceId,
+      input.appointmentId,
+      ACTIVE_ASSIGNMENT_STATUSES,
+      input.startAt.toISOString(),
+    ]
+  );
+
+  const latitude = numberOrNull(rows[0]?.latitude);
+  const longitude = numberOrNull(rows[0]?.longitude);
+
+  if (latitude === null || longitude === null) return null;
+
+  return { latitude, longitude };
+}
+
+async function evaluateCandidate(input: {
+  tenantId: string;
+  appointmentId: string;
+  appointment: AppointmentRow;
+  resource: FieldOperationResource;
+  appointmentLatitude: number | null;
+  appointmentLongitude: number | null;
+  startAt: Date;
+  endAt: Date;
+}): Promise<Candidate> {
+  if (!capabilityMatches(input.resource, input.appointment)) {
+    return {
+      resource: input.resource,
+      eligible: false,
+      rejectionReason: "CAPABILITY_MISMATCH",
+      distanceKm: null,
+      appointmentCount: 0,
+      assignedMinutes: 0,
+      score: Number.POSITIVE_INFINITY,
+    };
+  }
+
+  if (
+    await hasTimeConflict({
+      tenantId: input.tenantId,
+      appointmentId: input.appointmentId,
+      resourceId: input.resource.id,
+      startAt: input.startAt,
+      endAt: input.endAt,
+    })
+  ) {
+    return {
+      resource: input.resource,
+      eligible: false,
+      rejectionReason: "TIME_CONFLICT",
+      distanceKm: null,
+      appointmentCount: 0,
+      assignedMinutes: 0,
+      score: Number.POSITIVE_INFINITY,
+    };
+  }
+
+  const load = await getDailyLoad({
+    tenantId: input.tenantId,
+    resourceId: input.resource.id,
+    startAt: input.startAt,
+  });
+
+  const previousStop = await getPreviousStopCoordinates({
+    tenantId: input.tenantId,
+    appointmentId: input.appointmentId,
+    resourceId: input.resource.id,
+    startAt: input.startAt,
+  });
+
+  const anchorLatitude =
+    previousStop?.latitude ?? input.resource.startLatitude;
+
+  const anchorLongitude =
+    previousStop?.longitude ?? input.resource.startLongitude;
+
+  let distanceKm: number | null = null;
+
+  if (
+    input.appointmentLatitude !== null &&
+    input.appointmentLongitude !== null &&
+    anchorLatitude !== null &&
+    anchorLongitude !== null
+  ) {
+    distanceKm = haversineDistanceKm(
+      anchorLatitude,
+      anchorLongitude,
+      input.appointmentLatitude,
+      input.appointmentLongitude
+    );
+  }
+
+  // Lower score wins. Distance is strongest, then load balancing.
+  const score =
+    (distanceKm === null ? 50 : distanceKm * 10) +
+    load.appointmentCount * 8 +
+    (load.assignedMinutes / 60) * 3;
+
+  return {
+    resource: input.resource,
+    eligible: true,
+    rejectionReason: null,
+    distanceKm,
+    appointmentCount: load.appointmentCount,
+    assignedMinutes: load.assignedMinutes,
+    score,
+  };
+}
+
+export async function automaticallyAssignBestResource(input: {
+  tenantId: string;
+  appointmentId: string;
+}): Promise<AutomaticResourceAssignmentResult> {
+  const tenantId = requiredString(input.tenantId, "tenantId");
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+
+  const existingAssignments = await listResourceAssignments({
+    tenantId,
+    appointmentId,
+  });
+
+  const existingActive = existingAssignments.find((assignment) =>
+    ACTIVE_ASSIGNMENT_STATUSES.includes(
+      normalize(assignment.assignmentStatus)
+    )
+  );
+
+  if (existingActive) {
+    return {
+      status: "already_assigned",
+      appointmentId,
+      resourceId: existingActive.resourceId,
+      resourceName: null,
+      score: null,
+      reason: "ACTIVE_ASSIGNMENT_ALREADY_EXISTS",
+      candidatesEvaluated: 0,
+      candidatesRejected: 0,
+    };
+  }
+
+  const appointment = await getAppointment(tenantId, appointmentId);
+
+  if (!appointment) {
+    return {
+      status: "appointment_not_found",
+      appointmentId,
+      resourceId: null,
+      resourceName: null,
+      score: null,
+      reason: "APPOINTMENT_NOT_FOUND",
+      candidatesEvaluated: 0,
+      candidatesRejected: 0,
+    };
+  }
+
+  const resources = await listFieldOperationResources({
+    tenantId,
+    active: true,
+  });
+
+  if (resources.length === 0) {
+    return {
+      status: "no_active_resources",
+      appointmentId,
+      resourceId: null,
+      resourceName: null,
+      score: null,
+      reason: "NO_ACTIVE_RESOURCES",
+      candidatesEvaluated: 0,
+      candidatesRejected: 0,
+    };
+  }
+
+  const startAt = toDate(appointment.start_time, "appointment.start_time");
+  const endAt = appointment.end_time
+    ? toDate(appointment.end_time, "appointment.end_time")
+    : new Date(startAt.getTime() + 60 * 60 * 1000);
+
+  const location = await getAppointmentLocation(tenantId, appointmentId);
+  const appointmentLatitude = numberOrNull(location?.latitude);
+  const appointmentLongitude = numberOrNull(location?.longitude);
+
+  const evaluations = await Promise.all(
+    resources.map((resource) =>
+      evaluateCandidate({
+        tenantId,
+        appointmentId,
+        appointment,
+        resource,
+        appointmentLatitude,
+        appointmentLongitude,
+        startAt,
+        endAt,
+      })
+    )
+  );
+
+  const eligible = evaluations
+    .filter((candidate) => candidate.eligible)
+    .sort(
+      (a, b) =>
+        a.score - b.score ||
+        a.resource.name.localeCompare(b.resource.name)
+    );
+
+  const best = eligible[0];
+  const rejectedCount = evaluations.length - eligible.length;
+
+  if (!best) {
+    return {
+      status: "no_eligible_resources",
+      appointmentId,
+      resourceId: null,
+      resourceName: null,
+      score: null,
+      reason: "ALL_ACTIVE_RESOURCES_REJECTED",
+      candidatesEvaluated: evaluations.length,
+      candidatesRejected: rejectedCount,
+    };
+  }
+
+  await saveResourceAssignment({
+    tenantId,
+    appointmentId,
+    resourceId: best.resource.id,
+    assignmentRole: "primary",
+    assignmentStatus: "assigned",
+    metadata: {
+      assignmentSource: "automatic_best_resource",
+      assignedAt: new Date().toISOString(),
+      scoringVersion: "distance_conflict_load_v1",
+      score: Number(best.score.toFixed(4)),
+      distanceKm:
+        best.distanceKm === null
+          ? null
+          : Number(best.distanceKm.toFixed(3)),
+      appointmentCountBeforeAssignment: best.appointmentCount,
+      assignedMinutesBeforeAssignment: best.assignedMinutes,
+      candidatesEvaluated: evaluations.length,
+      candidatesRejected: rejectedCount,
+    },
+  });
+
+  return {
+    status: "assigned",
+    appointmentId,
+    resourceId: best.resource.id,
+    resourceName: best.resource.name,
+    score: Number(best.score.toFixed(4)),
+    reason: "BEST_ELIGIBLE_RESOURCE_SELECTED",
+    candidatesEvaluated: evaluations.length,
+    candidatesRejected: rejectedCount,
+  };
+}
+
+============================================================
+
+FILE: src\modules\field-operations\services\appointmentFieldOperations.service.ts
+
+============================================================
+
+// src/modules/field-operations/services/appointmentFieldOperations.service.ts
+
+import {
+  deleteAppointmentLocation,
+  getAppointmentLocation,
+  saveAppointmentLocation,
+} from "../repositories/appointmentLocations.repo";
+
+import {
+  deleteResourceAssignment,
+  getResourceAssignment,
+  listResourceAssignments,
+  saveResourceAssignment,
+  updateResourceAssignmentStatus,
+} from "../repositories/resourceAssignments.repo";
+
+import {
+  getFieldOperationResourceById,
+} from "../repositories/fieldResources.repo";
+
+/**
+ * Inferimos los inputs directamente desde los repositorios.
+ *
+ * Así evitamos duplicar contratos y mantener tipos paralelos que
+ * podrían desincronizarse cuando cambien los repositorios.
+ */
+type SaveAppointmentLocationRepositoryInput =
+  Parameters<typeof saveAppointmentLocation>[0];
+
+type SaveResourceAssignmentRepositoryInput =
+  Parameters<typeof saveResourceAssignment>[0];
+
+export type SetAppointmentFieldLocationInput = Omit<
+  SaveAppointmentLocationRepositoryInput,
+  "tenantId" | "appointmentId"
+> & {
+  tenantId: string;
+  appointmentId: string;
+};
+
+export type AssignAppointmentResourceInput = Omit<
+  SaveResourceAssignmentRepositoryInput,
+  "tenantId" | "appointmentId"
+> & {
+  tenantId: string;
+  appointmentId: string;
+};
+
+export type GetAppointmentFieldOperationsInput = {
+  tenantId: string;
+  appointmentId: string;
+};
+
+export type RemoveAppointmentResourceInput = {
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+  assignmentRole?: string;
+};
+
+export type ChangeAppointmentResourceStatusInput = {
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+  assignmentRole?: string;
+  assignmentStatus: string;
+};
+
+function requiredString(
+  value: unknown,
+  fieldName: string
+): string {
+  const normalized = String(value ?? "").trim();
+
+  if (!normalized) {
+    throw new Error(
+      `FIELD_OPERATIONS_REQUIRED_FIELD:${fieldName}`
+    );
+  }
+
+  return normalized;
+}
+
+/**
+ * Guarda o actualiza la ubicación operativa de un appointment.
+ *
+ * Este método no modifica la tabla appointments.
+ * La ubicación queda únicamente en appointment_locations.
+ */
+export async function setAppointmentFieldLocation(
+  input: SetAppointmentFieldLocationInput
+) {
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+
+  return saveAppointmentLocation({
+    ...input,
+    tenantId,
+    appointmentId,
+  });
+}
+
+/**
+ * Obtiene la ubicación operativa asociada a un appointment.
+ */
+export async function getAppointmentFieldLocation(input: {
+  tenantId: string;
+  appointmentId: string;
+}) {
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+
+  return getAppointmentLocation({
+    tenantId,
+    appointmentId,
+  });
+}
+
+/**
+ * Elimina solamente la ubicación del módulo Field Operations.
+ *
+ * No elimina ni cancela el appointment original.
+ */
+export async function removeAppointmentFieldLocation(input: {
+  tenantId: string;
+  appointmentId: string;
+}): Promise<boolean> {
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+
+  return deleteAppointmentLocation({
+    tenantId,
+    appointmentId,
+  });
+}
+
+/**
+ * Asigna un recurso operativo a un appointment.
+ *
+ * Antes de crear la asignación:
+ * 1. Verifica que el recurso pertenezca al tenant.
+ * 2. Verifica que el recurso exista.
+ * 3. Verifica que esté activo.
+ *
+ * No modifica staff_id, provider, Square, Google Calendar,
+ * disponibilidad ni ninguna parte del booking actual.
+ */
+export async function assignResourceToAppointment(
+  input: AssignAppointmentResourceInput
+) {
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+
+  const resourceId = requiredString(
+    input.resourceId,
+    "resourceId"
+  );
+
+  const resource = await getFieldOperationResourceById({
+    tenantId,
+    resourceId,
+  });
+
+  if (!resource) {
+    throw new Error(
+      "FIELD_OPERATIONS_RESOURCE_NOT_FOUND"
+    );
+  }
+
+  if (!resource.active) {
+    throw new Error(
+      "FIELD_OPERATIONS_RESOURCE_INACTIVE"
+    );
+  }
+
+  return saveResourceAssignment({
+    ...input,
+    tenantId,
+    appointmentId,
+    resourceId,
+  });
+}
+
+/**
+ * Obtiene una asignación específica.
+ */
+export async function getAppointmentResourceAssignment(input: {
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+  assignmentRole?: string;
+}) {
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+
+  const resourceId = requiredString(
+    input.resourceId,
+    "resourceId"
+  );
+
+  return getResourceAssignment({
+    tenantId,
+    appointmentId,
+    resourceId,
+    assignmentRole: input.assignmentRole,
+  });
+}
+
+/**
+ * Cambia el estado de una asignación existente.
+ *
+ * Ejemplos posibles:
+ * - assigned
+ * - confirmed
+ * - dispatched
+ * - en_route
+ * - arrived
+ * - completed
+ * - cancelled
+ *
+ * El servicio no impone una lista cerrada porque diferentes
+ * industrias pueden necesitar estados distintos.
+ */
+export async function changeAppointmentResourceStatus(
+  input: ChangeAppointmentResourceStatusInput
+) {
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+
+  const resourceId = requiredString(
+    input.resourceId,
+    "resourceId"
+  );
+
+  const assignmentStatus = requiredString(
+    input.assignmentStatus,
+    "assignmentStatus"
+  );
+
+  const assignment =
+    await updateResourceAssignmentStatus({
+      tenantId,
+      appointmentId,
+      resourceId,
+      assignmentRole: input.assignmentRole,
+      assignmentStatus,
+    });
+
+  if (!assignment) {
+    throw new Error(
+      "FIELD_OPERATIONS_ASSIGNMENT_NOT_FOUND"
+    );
+  }
+
+  return assignment;
+}
+
+/**
+ * Elimina una asignación del módulo Field Operations.
+ *
+ * No elimina:
+ * - el appointment
+ * - el recurso
+ * - el staff original del booking
+ * - la reserva en Square
+ * - el evento de Google Calendar
+ */
+export async function removeResourceFromAppointment(
+  input: RemoveAppointmentResourceInput
+): Promise<boolean> {
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+
+  const resourceId = requiredString(
+    input.resourceId,
+    "resourceId"
+  );
+
+  return deleteResourceAssignment({
+    tenantId,
+    appointmentId,
+    resourceId,
+    assignmentRole: input.assignmentRole,
+  });
+}
+
+/**
+ * Devuelve toda la información de Field Operations relacionada
+ * con un appointment:
+ *
+ * - ubicación
+ * - asignaciones
+ * - recursos vinculados
+ *
+ * Si alguno de los recursos fue eliminado o dejó de estar
+ * disponible, la asignación se conserva y resource será null.
+ */
+export async function getAppointmentFieldOperations(
+  input: GetAppointmentFieldOperationsInput
+) {
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
+  const appointmentId = requiredString(
+    input.appointmentId,
+    "appointmentId"
+  );
+
+  const [location, assignments] = await Promise.all([
+    getAppointmentLocation({
+      tenantId,
+      appointmentId,
+    }),
+
+    listResourceAssignments({
+      tenantId,
+      appointmentId,
+    }),
+  ]);
+
+  const assignmentsWithResources = await Promise.all(
+    assignments.map(async (assignment) => {
+      const resource =
+        await getFieldOperationResourceById({
+          tenantId,
+          resourceId: assignment.resourceId,
+        });
+
+      return {
+        assignment,
+        resource,
+      };
+    })
+  );
+
+  return {
+    tenantId,
+    appointmentId,
+    location,
+    assignments: assignmentsWithResources,
+  };
+}
+
+============================================================
+
+FILE: src\modules\field-operations\services\fieldOperationsSync.service.ts
+
+============================================================
+
+// src/modules/field-operations/services/fieldOperationsSync.service.ts
+
+import {
+  setAppointmentFieldLocation,
+} from "./appointmentFieldOperations.service";
+
+import {
+  geocodeAppointmentLocation,
+} from "./appointmentGeocoding.service";
+
+import {
+  automaticallyAssignBestResource,
+} from "./automaticResourceAssignment.service";
+
+export type SyncAppointmentToFieldOperationsInput = {
+  tenantId: string;
+  appointmentId: string;
+
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+
+  answersBySlot: Record<
+    string,
+    string | null | undefined
+  >;
+};
+
+function clean(value: unknown): string | null {
+  const result = String(value ?? "").trim();
+  return result || null;
+}
+
+function normalizeError(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : String(error);
+}
+
+function validCoordinate(
+  value: unknown,
+  minimum: number,
+  maximum: number
+): number | null {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
+
+  const parsed = Number(value);
+
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < minimum ||
+    parsed > maximum
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+async function assignBestResourceSafely(input: {
+  tenantId: string;
+  appointmentId: string;
+}): Promise<void> {
+  try {
+    const result = await automaticallyAssignBestResource({
+      tenantId: input.tenantId,
+      appointmentId: input.appointmentId,
+    });
+
+    console.log(
+      "[FIELD_OPERATIONS][AUTOMATIC_RESOURCE_ASSIGNMENT_COMPLETED]",
+      {
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+        status: result.status,
+        resourceId: result.resourceId,
+        resourceName: result.resourceName,
+        score: result.score,
+        reason: result.reason,
+        candidatesEvaluated:
+          result.candidatesEvaluated,
+        candidatesRejected:
+          result.candidatesRejected,
+      }
+    );
+  } catch (error) {
+    console.error(
+      "[FIELD_OPERATIONS][AUTOMATIC_RESOURCE_ASSIGNMENT_FAILED]",
+      {
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+        error: normalizeError(error),
+      }
+    );
+  }
+}
+
+export async function syncAppointmentToFieldOperations(
+  input: SyncAppointmentToFieldOperationsInput
+): Promise<void> {
+  const address =
+    clean(input.address) ??
+    clean(input.answersBySlot.address) ??
+    clean(input.answersBySlot.service_address) ??
+    clean(input.answersBySlot.location) ??
+    clean(input.answersBySlot.property_address);
+
+  const latitude = validCoordinate(
+    input.latitude,
+    -90,
+    90
+  );
+
+  const longitude = validCoordinate(
+    input.longitude,
+    -180,
+    180
+  );
+
+  const hasResolvedCoordinates =
+    latitude !== null &&
+    longitude !== null;
+
+  if (!address) {
+    console.log(
+      "[FIELD_OPERATIONS][LOCATION_SYNC_SKIPPED]",
+      {
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+        reason: "SERVICE_ADDRESS_NOT_AVAILABLE",
+      }
+    );
+
+    await assignBestResourceSafely({
+      tenantId: input.tenantId,
+      appointmentId: input.appointmentId,
+    });
+
+    return;
+  }
+
+  console.log(
+    "[FIELD_OPERATIONS][LOCATION_SYNC_STARTED]",
+    {
+      tenantId: input.tenantId,
+      appointmentId: input.appointmentId,
+      address,
+      hasResolvedCoordinates,
+    }
+  );
+
+  await setAppointmentFieldLocation({
+    tenantId: input.tenantId,
+    appointmentId: input.appointmentId,
+    locationType: "service",
+    formattedAddress: address,
+    latitude,
+    longitude,
+    geocodingStatus:
+      hasResolvedCoordinates
+        ? "geocoded"
+        : "pending",
+  });
+
+  if (hasResolvedCoordinates) {
+    console.log(
+      "[FIELD_OPERATIONS][LOCATION_SYNC_COMPLETED]",
+      {
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+        address,
+        latitude,
+        longitude,
+        geocodingReused: true,
+      }
+    );
+  } else {
+    console.log(
+      "[FIELD_OPERATIONS][LOCATION_SAVED_PENDING_GEOCODING]",
+      {
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+        address,
+      }
+    );
+
+    try {
+      console.log(
+        "[FIELD_OPERATIONS][GEOCODING_REQUEST_STARTED]",
+        {
+          tenantId: input.tenantId,
+          appointmentId: input.appointmentId,
+        }
+      );
+
+      const result =
+        await geocodeAppointmentLocation({
+          tenantId: input.tenantId,
+          appointmentId: input.appointmentId,
+        });
+
+      console.log(
+        "[FIELD_OPERATIONS][GEOCODING_REQUEST_COMPLETED]",
+        {
+          tenantId: input.tenantId,
+          appointmentId: input.appointmentId,
+          status: result.status,
+          error: result.error,
+          latitude:
+            result.geocoding?.latitude ?? null,
+          longitude:
+            result.geocoding?.longitude ?? null,
+        }
+      );
+    } catch (error) {
+      console.error(
+        "[FIELD_OPERATIONS][GEOCODING_FAILED]",
+        {
+          tenantId: input.tenantId,
+          appointmentId: input.appointmentId,
+          error: normalizeError(error),
+        }
+      );
+    }
+  }
+
+  // Assignment runs after geocoding so distance scoring can use coordinates.
+  await assignBestResourceSafely({
+    tenantId: input.tenantId,
+    appointmentId: input.appointmentId,
+  });
+
+  console.log(
+    "[FIELD_OPERATIONS][APPOINTMENT_SYNC_COMPLETED]",
+    {
+      tenantId: input.tenantId,
+      appointmentId: input.appointmentId,
+    }
+  );
+}
+
+============================================================
+
+FILE: src\modules\field-operations\services\routePlanBuilder.service.ts
+
+============================================================
+
+// src/modules/field-operations/services/routePlanBuilder.service.ts
+
+import pool from "../../../lib/db";
+
+import {
+  getFieldOperationResourceById,
+} from "../repositories/fieldResources.repo";
+
+import {
+  saveRoutePlan,
+} from "../repositories/routePlans.repo";
+
+import {
+  geocodeAppointmentLocation,
+} from "./appointmentGeocoding.service";
+
+import type {
+  RoutePlan,
+  RoutePlanMode,
+} from "../domain/fieldOperations.types";
+
+import type {
+  RoutingStopInput,
+} from "../providers/routingProvider.types";
+
+import {
+  getAppointmentSettings,
+} from "../../../lib/appointments/getAppointmentSettings";
+
+import {
+  validateFieldServiceArea,
+} from "./fieldServiceArea.service";
+
+type RouteAppointmentRow = {
+  appointment_id: string;
+
+  service_id: string | null;
+  service_name: string | null;
+
+  customer_name: string | null;
+  customer_phone: string | null;
+
+  start_time: Date | string;
+  end_time: Date | string;
+
+  appointment_status: string;
+
+  location_id: string | null;
+  formatted_address: string | null;
+
+  latitude: number | string | null;
+  longitude: number | string | null;
+
+  geocoding_status: string | null;
+
+  assignment_role: string;
+  assignment_status: string;
+};
+
+export type SkippedRouteAppointment = {
+  appointmentId: string;
+
+  reason:
+    | "LOCATION_NOT_FOUND"
+    | "LOCATION_NOT_GEOCODED"
+    | "GEOCODING_NOT_FOUND"
+    | "GEOCODING_FAILED"
+    | "INVALID_COORDINATES"
+    | "INVALID_APPOINTMENT_TIME"
+    | "FIELD_SERVICE_AREA_NOT_CONFIGURED"
+    | "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS";
+
+  formattedAddress: string | null;
+  error?: string | null;
+
+  distanceMiles?: number | null;
+  allowedRadiusMiles?: number | null;
+};
+
+export type BuildRoutePlanInput = {
+  tenantId: string;
+  resourceId: string;
+  serviceDate: string;
+  mode?: RoutePlanMode;
+  geocodeMissingLocations?: boolean;
+  geocodingLanguage?: string;
+  geocodingRegion?: string;
+};
+
+export type BuildRoutePlanResult = {
+  routePlan: RoutePlan;
+  stops: RoutingStopInput[];
+  skippedAppointments: SkippedRouteAppointment[];
+};
+
+function requiredString(
+  value: unknown,
+  fieldName: string
+): string {
+  const result = String(value ?? "").trim();
+
+  if (!result) {
+    throw new Error(
+      `FIELD_OPERATIONS_REQUIRED_FIELD:${fieldName}`
+    );
+  }
+
+  return result;
+}
+
+function normalizeServiceDate(
+  value: unknown
+): string {
+  const serviceDate = requiredString(
+    value,
+    "serviceDate"
+  );
+
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})$/.exec(serviceDate);
+
+  if (!match) {
+    throw new Error(
+      "FIELD_OPERATIONS_INVALID_SERVICE_DATE"
+    );
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  const parsed = new Date(
+    Date.UTC(year, month - 1, day)
+  );
+
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    throw new Error(
+      "FIELD_OPERATIONS_INVALID_SERVICE_DATE"
+    );
+  }
+
+  return serviceDate;
+}
+
+function toIsoString(
+  value: Date | string
+): string | null {
+  const parsed =
+    value instanceof Date
+      ? value
+      : new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString();
+}
+
+function parseCoordinate(
+  value: number | string | null,
+  minimum: number,
+  maximum: number
+): number | null {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
+
+  const parsed = Number(value);
+
+  if (
+    !Number.isFinite(parsed) ||
+    parsed < minimum ||
+    parsed > maximum
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function calculateServiceDurationSeconds(
+  startISO: string,
+  endISO: string
+): number {
+  const start = new Date(startISO);
+  const end = new Date(endISO);
+
+  const durationMilliseconds =
+    end.getTime() - start.getTime();
+
+  if (
+    !Number.isFinite(durationMilliseconds) ||
+    durationMilliseconds < 0
+  ) {
+    return 0;
+  }
+
+  return Math.round(
+    durationMilliseconds / 1000
+  );
+}
+
+export async function buildRoutePlan(
+  input: BuildRoutePlanInput
+): Promise<BuildRoutePlanResult> {
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
+  const resourceId = requiredString(
+    input.resourceId,
+    "resourceId"
+  );
+
+  const serviceDate = normalizeServiceDate(
+    input.serviceDate
+  );
+
+  const resource =
+    await getFieldOperationResourceById({
+      tenantId,
+      resourceId,
+    });
+
+  if (!resource) {
+    throw new Error(
+      "FIELD_OPERATIONS_RESOURCE_NOT_FOUND"
+    );
+  }
+
+  if (!resource.active) {
+    throw new Error(
+      "FIELD_OPERATIONS_RESOURCE_INACTIVE"
+    );
+  }
+
+  const appointmentSettings =
+    await getAppointmentSettings(tenantId);
+
+  const timezone =
+    String(
+      resource.timezone ??
+        appointmentSettings.timezone ??
+        ""
+    ).trim() || "America/New_York";
+
+  const bufferAfterSeconds = Math.max(
+    0,
+    Math.round(
+      Number(appointmentSettings.buffer_min || 0) * 60
+    )
+  );
+
+  const { rows } =
+    await pool.query<RouteAppointmentRow>(
+      `
+      SELECT
+        a.id::text AS appointment_id,
+
+        a.service_id::text AS service_id,
+        s.name AS service_name,
+
+        a.customer_name,
+        a.customer_phone,
+
+        a.start_time,
+        a.end_time,
+
+        a.status AS appointment_status,
+
+        al.id AS location_id,
+        al.formatted_address,
+
+        al.latitude,
+        al.longitude,
+
+        al.geocoding_status,
+
+        ara.assignment_role,
+        ara.assignment_status
+
+      FROM appointment_resource_assignments ara
+
+      INNER JOIN appointments a
+        ON a.id::text = ara.appointment_id
+       AND a.tenant_id::text = ara.tenant_id
+
+      LEFT JOIN services s
+        ON s.id = a.service_id
+
+      LEFT JOIN appointment_locations al
+        ON al.tenant_id::text = ara.tenant_id
+       AND al.appointment_id::text = ara.appointment_id
+       AND al.location_type = 'service'
+
+      WHERE ara.tenant_id = $1
+        AND ara.resource_id = $2
+
+        AND a.start_time >= (
+          $3::date::timestamp
+          AT TIME ZONE $4
+        )
+
+        AND a.start_time < (
+          ($3::date + 1)::timestamp
+          AT TIME ZONE $4
+        )
+
+        AND a.status <> 'cancelled'
+
+      ORDER BY
+        a.start_time ASC,
+        ara.created_at ASC
+      `,
+      [
+        tenantId,
+        resourceId,
+        serviceDate,
+        timezone,
+      ]
+    );
+
+  const stops: RoutingStopInput[] = [];
+  const skippedAppointments:
+    SkippedRouteAppointment[] = [];
+
+  for (const row of rows) {
+    if (!row.location_id) {
+      skippedAppointments.push({
+        appointmentId: row.appointment_id,
+        reason: "LOCATION_NOT_FOUND",
+        formattedAddress:
+          row.formatted_address ?? null,
+      });
+
+      continue;
+    }
+
+    let latitude = parseCoordinate(
+      row.latitude,
+      -90,
+      90
+    );
+
+    let longitude = parseCoordinate(
+      row.longitude,
+      -180,
+      180
+    );
+
+    if (
+      (latitude === null || longitude === null) &&
+      input.geocodeMissingLocations !== false &&
+      row.formatted_address
+    ) {
+      const geocoding =
+        await geocodeAppointmentLocation({
+          tenantId,
+          appointmentId: row.appointment_id,
+          language: input.geocodingLanguage,
+          region: input.geocodingRegion,
+        });
+
+      if (
+        geocoding.status === "geocoded" ||
+        geocoding.status === "already_geocoded"
+      ) {
+        latitude =
+          geocoding.geocoding?.latitude ?? null;
+        longitude =
+          geocoding.geocoding?.longitude ?? null;
+
+        if (geocoding.geocoding) {
+          row.formatted_address =
+            geocoding.geocoding.formattedAddress;
+        }
+      } else {
+        skippedAppointments.push({
+          appointmentId: row.appointment_id,
+          reason:
+            geocoding.status === "not_found"
+              ? "GEOCODING_NOT_FOUND"
+              : "GEOCODING_FAILED",
+          formattedAddress:
+            row.formatted_address,
+          error: geocoding.error,
+        });
+
+        continue;
+      }
+    }
+
+    if (
+      latitude === null ||
+      longitude === null
+    ) {
+      skippedAppointments.push({
+        appointmentId: row.appointment_id,
+        reason:
+          row.geocoding_status === "pending"
+            ? "LOCATION_NOT_GEOCODED"
+            : "INVALID_COORDINATES",
+        formattedAddress:
+          row.formatted_address ?? null,
+      });
+
+      continue;
+    }
+
+    const serviceAreaValidation =
+      await validateFieldServiceArea({
+        tenantId,
+        latitude,
+        longitude,
+      });
+
+    if (!serviceAreaValidation.allowed) {
+      skippedAppointments.push({
+        appointmentId:
+          row.appointment_id,
+
+        reason:
+          serviceAreaValidation.reason ===
+          "FIELD_SERVICE_AREA_NOT_CONFIGURED"
+            ? "FIELD_SERVICE_AREA_NOT_CONFIGURED"
+            : "FIELD_SERVICE_LOCATION_OUTSIDE_RADIUS",
+
+        formattedAddress:
+          row.formatted_address ?? null,
+
+        distanceMiles:
+          serviceAreaValidation.distanceMiles,
+
+        allowedRadiusMiles:
+          serviceAreaValidation.radiusMiles,
+      });
+
+      continue;
+    }
+
+    const scheduledStartAt = toIsoString(
+      row.start_time
+    );
+
+    const scheduledEndAt = toIsoString(
+      row.end_time
+    );
+
+    if (
+      !scheduledStartAt ||
+      !scheduledEndAt
+    ) {
+      skippedAppointments.push({
+        appointmentId: row.appointment_id,
+        reason: "INVALID_APPOINTMENT_TIME",
+        formattedAddress:
+          row.formatted_address ?? null,
+      });
+
+      continue;
+    }
+
+    stops.push({
+      appointmentId: row.appointment_id,
+      locationId: row.location_id,
+      latitude,
+      longitude,
+      scheduledStartAt,
+      scheduledEndAt,
+      serviceDurationSeconds:
+        calculateServiceDurationSeconds(
+          scheduledStartAt,
+          scheduledEndAt
+        ),
+      bufferAfterSeconds,
+      isLocked: false,
+      metadata: {
+        serviceId: row.service_id,
+        serviceName: row.service_name,
+        customerName: row.customer_name,
+        customerPhone: row.customer_phone,
+        formattedAddress:
+          row.formatted_address,
+        appointmentStatus:
+          row.appointment_status,
+        assignmentRole:
+          row.assignment_role,
+        assignmentStatus:
+          row.assignment_status,
+        bufferAfterSeconds,
+        bufferAfterMinutes:
+          Math.round(bufferAfterSeconds / 60),
+        fieldServiceAreaValidationApplied:
+          serviceAreaValidation.validationApplied,
+
+        fieldServiceDistanceMiles:
+          serviceAreaValidation.distanceMiles,
+
+        fieldServiceRadiusMiles:
+          serviceAreaValidation.radiusMiles,
+      },
+    });
+  }
+
+  const routePlan = await saveRoutePlan({
+    tenantId,
+    resourceId,
+    serviceDate,
+    mode: input.mode ?? "view_only",
+    status: "draft",
+    optimizationRequest: {
+      source: "automatic_builder",
+      timezone,
+      geocodeMissingLocations:
+        input.geocodeMissingLocations !== false,
+      totalAppointments: rows.length,
+      routableAppointments: stops.length,
+      skippedAppointments:
+        skippedAppointments.length,
+    },
+  });
+
+  return {
+    routePlan,
+    stops,
+    skippedAppointments,
+  };
+}

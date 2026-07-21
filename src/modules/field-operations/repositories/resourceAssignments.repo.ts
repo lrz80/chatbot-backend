@@ -91,12 +91,20 @@ export async function saveResourceAssignment(
 ): Promise<ResourceAssignment> {
   const id = randomUUID();
 
-  const tenantId = requiredString(input.tenantId, "tenantId");
+  const tenantId = requiredString(
+    input.tenantId,
+    "tenantId"
+  );
+
   const appointmentId = requiredString(
     input.appointmentId,
     "appointmentId"
   );
-  const resourceId = requiredString(input.resourceId, "resourceId");
+
+  const resourceId = requiredString(
+    input.resourceId,
+    "resourceId"
+  );
 
   const assignmentRole =
     optionalString(input.assignmentRole) ?? "primary";
@@ -131,10 +139,10 @@ export async function saveResourceAssignment(
     ON CONFLICT (
       tenant_id,
       appointment_id,
-      resource_id,
       assignment_role
     )
     DO UPDATE SET
+      resource_id = EXCLUDED.resource_id,
       assignment_status = EXCLUDED.assignment_status,
       metadata = EXCLUDED.metadata,
       updated_at = NOW()
@@ -154,7 +162,9 @@ export async function saveResourceAssignment(
   const row = rows[0];
 
   if (!row) {
-    throw new Error("FIELD_OPERATIONS_ASSIGNMENT_SAVE_FAILED");
+    throw new Error(
+      "FIELD_OPERATIONS_ASSIGNMENT_SAVE_FAILED"
+    );
   }
 
   return mapAssignmentRow(row);
