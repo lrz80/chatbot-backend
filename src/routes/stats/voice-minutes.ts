@@ -21,9 +21,18 @@ router.get('/voice/minutes', authenticateUser, async (req: Request, res: Respons
     const cicloInicio = cycleStartForNow(membresia_inicio);
 
     const usedQ = await pool.query(
-      `SELECT COALESCE(SUM(minutes_billed),0)::int AS used
-       FROM voice_minutes_usage
-       WHERE tenant_id = $1 AND created_at >= $2`,
+      `
+        SELECT
+          COALESCE(
+            CEIL(SUM(duration_sec) / 60.0),
+            0
+          )::int AS used
+        FROM voice_calls
+        WHERE tenant_id = $1
+          AND started_at >= $2
+          AND duration_sec IS NOT NULL
+          AND duration_sec > 0
+      `,
       [tenantId, cicloInicio]
     );
     const topupsQ = await pool.query(
