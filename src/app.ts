@@ -99,6 +99,7 @@ import twilioVoiceSetupRouter from "./routes/twilioVoiceSetup";
 import monthlySummaryReportRouter from "./routes/reports/monthly-summary";
 import fieldOperationsRouter from "./modules/field-operations/routes/fieldOperations.routes";
 import adminTenantsRoutes from "./routes/adminTenants";
+import conversationsRoutes from "./routes/conversations";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -172,6 +173,10 @@ app.use('/api/stats/monthly', statsMonthlyRoutes);
 app.use('/webhook/sms', smsWebhook);
 app.use('/webhook/voice-response', voiceResponse);
 app.use('/api/messages', messagesRoutes);
+app.use(
+  "/api/conversations",
+  conversationsRoutes
+);
 app.use('/api/generar-prompt', generarPromptRouter);
 app.use('/api/preview', previewRouter);
 app.use('/api/faqs', faqsRoutes);
