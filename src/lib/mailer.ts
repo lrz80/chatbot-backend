@@ -1,25 +1,51 @@
-import nodemailer from 'nodemailer';
-import { emailTemplates } from './emailTemplates'; // asegúrate que la ruta sea correcta
+import nodemailer from "nodemailer";
+import { emailTemplates } from "./emailTemplates";
+
+export type EmailLanguage = "es" | "en" | "pt";
 
 export const transporter = nodemailer.createTransport({
-  host: 'mail.privateemail.com',
+  host: "mail.privateemail.com",
   port: 587,
   secure: false,
   auth: {
-    user: process.env.SMTP_USER, // ✅ Usamos el usuario SMTP real
-    pass: process.env.SMTP_PASS, // ✅ La contraseña SMTP
-  },  
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
 });
 
-const from = `"Aamy AI" <${process.env.SMTP_FROM || 'noreply@aamy.ai'}>`;
+const from = `"Aamy AI" <${process.env.SMTP_FROM || "noreply@aamy.ai"}>`;
 
-// ✅ 1. Verificación de cuenta (no necesita tenantName)
+function normalizeEmailLanguage(
+  lang: unknown
+): EmailLanguage {
+  if (lang === "en" || lang === "pt") {
+    return lang;
+  }
+
+  return "es";
+}
+
+// 1. Verificación de cuenta
 export const sendVerificationEmail = async (
   to: string,
   verificationLink: string,
-  lang: 'es' | 'en' = 'es'
+  lang: EmailLanguage = "es"
 ) => {
-  const template = emailTemplates.verification[lang](verificationLink);
+  const normalizedLang =
+    normalizeEmailLanguage(lang);
+
+  const templateFactory =
+    emailTemplates.verification[normalizedLang];
+
+  if (!templateFactory) {
+    throw new Error(
+      `Verification email template not found for language: ${normalizedLang}`
+    );
+  }
+
+  const template =
+    templateFactory(verificationLink);
+
   await transporter.sendMail({
     from,
     to,
@@ -28,13 +54,27 @@ export const sendVerificationEmail = async (
   });
 };
 
-// ✅ 2. Cancelación de membresía (ahora recibe tenantName)
+// 2. Cancelación de membresía
 export const sendCancelationEmail = async (
   to: string,
   tenantName: string,
-  lang: 'es' | 'en' = 'es'
+  lang: EmailLanguage = "es"
 ) => {
-  const template = emailTemplates.cancelation[lang](tenantName);
+  const normalizedLang =
+    normalizeEmailLanguage(lang);
+
+  const templateFactory =
+    emailTemplates.cancelation[normalizedLang];
+
+  if (!templateFactory) {
+    throw new Error(
+      `Cancellation email template not found for language: ${normalizedLang}`
+    );
+  }
+
+  const template =
+    templateFactory(tenantName);
+
   await transporter.sendMail({
     from,
     to,
@@ -43,13 +83,27 @@ export const sendCancelationEmail = async (
   });
 };
 
-// ✅ 3. Renovación automática exitosa (ahora recibe tenantName)
+// 3. Renovación automática exitosa
 export const sendRenewalSuccessEmail = async (
   to: string,
   tenantName: string,
-  lang: 'es' | 'en' = 'es'
+  lang: EmailLanguage = "es"
 ) => {
-  const template = emailTemplates.renewal[lang](tenantName);
+  const normalizedLang =
+    normalizeEmailLanguage(lang);
+
+  const templateFactory =
+    emailTemplates.renewal[normalizedLang];
+
+  if (!templateFactory) {
+    throw new Error(
+      `Renewal email template not found for language: ${normalizedLang}`
+    );
+  }
+
+  const template =
+    templateFactory(tenantName);
+
   await transporter.sendMail({
     from,
     to,
@@ -58,18 +112,28 @@ export const sendRenewalSuccessEmail = async (
   });
 };
 
-// ✅ 4. Activación de membresía (compra o inicio de trial)
+// 4. Activación de membresía
 export const sendSubscriptionActivatedEmail = async (
   to: string,
   tenantName: string,
-  lang: 'es' | 'en' = 'es'
+  lang: EmailLanguage = "es"
 ) => {
-  const template = emailTemplates.subscriptionActivated?.[lang]?.(tenantName);
+  const normalizedLang =
+    normalizeEmailLanguage(lang);
 
-  if (!template) {
-    console.error('❌ Error: La plantilla subscriptionActivated no está definida.');
-    return;
+  const templateFactory =
+    emailTemplates.subscriptionActivated?.[
+      normalizedLang
+    ];
+
+  if (!templateFactory) {
+    throw new Error(
+      `Subscription activated email template not found for language: ${normalizedLang}`
+    );
   }
+
+  const template =
+    templateFactory(tenantName);
 
   await transporter.sendMail({
     from,
