@@ -272,11 +272,9 @@ router.get(
 
             CASE
               WHEN canonical_channel = 'voice'
-                THEN REGEXP_REPLACE(
-                  COALESCE(message_id, id::text),
-                  '^voice:',
-                  '',
-                  'i'
+                THEN SUBSTRING(
+                  COALESCE(message_id, '')
+                  FROM 'voice:(CA[a-zA-Z0-9]+)'
                 )
 
               ELSE CONCAT(
