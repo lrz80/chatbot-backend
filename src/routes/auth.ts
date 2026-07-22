@@ -77,10 +77,7 @@ router.post('/login', async (req: Request, res: Response) => {
         ? user.role.trim()
         : "business_owner";
 
-    const isAdmin =
-      user.is_admin === true ||
-      role === "platform_admin" ||
-      role === "admin";
+    const isAdmin = role === "admin";
 
     const token = jwt.sign(
       {
