@@ -29,7 +29,7 @@ function normalizeEmailLanguage(
 export const sendVerificationEmail = async (
   to: string,
   verificationLink: string,
-  lang: EmailLanguage = "es"
+  lang: EmailLanguage = "en"
 ) => {
   const normalizedLang =
     normalizeEmailLanguage(lang);
@@ -58,7 +58,7 @@ export const sendVerificationEmail = async (
 export const sendCancelationEmail = async (
   to: string,
   tenantName: string,
-  lang: EmailLanguage = "es"
+  lang: EmailLanguage = "en"
 ) => {
   const normalizedLang =
     normalizeEmailLanguage(lang);
@@ -87,7 +87,7 @@ export const sendCancelationEmail = async (
 export const sendRenewalSuccessEmail = async (
   to: string,
   tenantName: string,
-  lang: EmailLanguage = "es"
+  lang: EmailLanguage = "en"
 ) => {
   const normalizedLang =
     normalizeEmailLanguage(lang);
@@ -116,7 +116,7 @@ export const sendRenewalSuccessEmail = async (
 export const sendSubscriptionActivatedEmail = async (
   to: string,
   tenantName: string,
-  lang: EmailLanguage = "es"
+  lang: EmailLanguage = "en"
 ) => {
   const normalizedLang =
     normalizeEmailLanguage(lang);
