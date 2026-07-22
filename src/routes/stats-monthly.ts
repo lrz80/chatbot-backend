@@ -34,34 +34,55 @@ router.get(
         monthView === "current"
           ? `
             SELECT
-              DATE(created_at) AS dia,
-              COUNT(*)::int AS count
-            FROM interactions
+              DATE(timestamp) AS dia,
+              COUNT(DISTINCT message_id)::int AS count
+            FROM messages
             WHERE tenant_id = $1
-              AND created_at >= date_trunc('month', CURRENT_DATE)
-            GROUP BY DATE(created_at)
-            ORDER BY dia
+              AND role IN ('user', 'assistant')
+              AND timestamp >= date_trunc(
+                'month',
+                CURRENT_DATE
+              )
+            GROUP BY DATE(timestamp)
+            ORDER BY dia ASC
           `
           : `
             SELECT
-              TO_CHAR(created_at, 'YYYY-MM') AS mes,
-              COUNT(*)::int AS count
-            FROM interactions
+              TO_CHAR(
+                timestamp,
+                'YYYY-MM'
+              ) AS mes,
+              COUNT(
+                DISTINCT message_id
+              )::int AS count
+            FROM messages
             WHERE tenant_id = $1
-            GROUP BY TO_CHAR(created_at, 'YYYY-MM')
-            ORDER BY mes
+              AND role IN ('user', 'assistant')
+              AND timestamp >= date_trunc(
+                'year',
+                CURRENT_DATE
+              )
+            GROUP BY TO_CHAR(
+              timestamp,
+              'YYYY-MM'
+            )
+            ORDER BY mes ASC
           `;
 
-      const result = await pool.query(query, [
-        tenantId,
-      ]);
+      const result = await pool.query(
+        query,
+        [tenantId]
+      );
 
-      return res.status(200).json(result.rows);
+      return res.status(200).json(
+        result.rows
+      );
     } catch (error) {
       console.error(
         "❌ Error en /stats/monthly:",
         {
           tenantId,
+          monthView,
           error,
         }
       );
