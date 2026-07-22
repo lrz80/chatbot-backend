@@ -15,23 +15,21 @@ export type UserRole =
 
 export interface AuthenticatedUser {
   uid: string;
+  email?: string;
+
+  role: UserRole;
+  is_admin: boolean;
 
   /**
-   * Tenant efectivo utilizado por esta petición.
-   *
-   * Un usuario normal siempre utiliza su tenant asignado.
-   * Un admin puede utilizar X-Tenant-ID para administrar otro tenant.
-   */
-  tenant_id: string;
-
-  /**
-   * Tenant originalmente asociado a la cuenta.
+   * Tenant propio de la cuenta.
    */
   home_tenant_id: string;
 
-  email?: string;
-  role: UserRole;
-  is_admin: boolean;
+  /**
+   * Tenant que debe utilizar la petición.
+   * Para admin puede ser el tenant seleccionado.
+   */
+  tenant_id: string;
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -51,18 +49,14 @@ function normalizeRole(value: unknown): UserRole {
   }
 }
 
-function readRequestedTenantId(req: Request): string | null {
-  const rawHeader = req.headers["x-tenant-id"];
-
-  if (Array.isArray(rawHeader)) {
-    return rawHeader[0]?.trim() || null;
+function cleanTenantId(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
   }
 
-  if (typeof rawHeader === "string") {
-    return rawHeader.trim() || null;
-  }
+  const cleaned = value.trim();
 
-  return null;
+  return cleaned || null;
 }
 
 export const authenticateUser = async (
@@ -74,24 +68,12 @@ export const authenticateUser = async (
     return res.sendStatus(204);
   }
 
-  const rawAuth = req.headers.authorization ?? "";
+  const rawAuthorization = req.headers.authorization ?? "";
 
-  if (DEBUG_AUTH_LOGS) {
-    console.log("🔐 [AUTH]", req.method, req.originalUrl);
-    console.log(
-      "🔐 [AUTH] Cookie token:",
-      req.cookies?.token ? "✅ Sí" : "❌ No"
-    );
-    console.log(
-      "🔐 [AUTH] Has Authorization:",
-      rawAuth ? "✅ Sí" : "❌ No"
-    );
-  }
-
-  const lowerAuthorization = rawAuth.toLowerCase();
-
-  const headerToken = lowerAuthorization.startsWith("bearer ")
-    ? rawAuth.slice(7).trim()
+  const headerToken = rawAuthorization
+    .toLowerCase()
+    .startsWith("bearer ")
+    ? rawAuthorization.slice(7).trim()
     : undefined;
 
   const token = req.cookies?.token || headerToken;
@@ -135,10 +117,6 @@ export const authenticateUser = async (
     const userRow = userResult.rows[0];
 
     if (!userRow) {
-      console.warn(
-        `⚠️ [AUTH] Usuario no encontrado (uid=${decoded.uid})`
-      );
-
       return res.status(401).json({
         error: "Usuario no encontrado",
       });
@@ -152,20 +130,20 @@ export const authenticateUser = async (
 
     const role = normalizeRole(userRow.role);
     const isAdmin = role === "admin";
-    const requestedTenantId = readRequestedTenantId(req);
+
+    const selectedTenantId = isAdmin
+      ? cleanTenantId(req.cookies?.admin_tenant_id)
+      : null;
+
+    let effectiveTenantId =
+      selectedTenantId || userRow.tenant_id;
 
     /**
-     * Solo un admin puede sustituir el tenant mediante X-Tenant-ID.
+     * Nunca confiamos ciegamente en la cookie.
+     * Si el tenant fue eliminado o no existe,
+     * regresamos al tenant propio del administrador.
      */
-    const effectiveTenantId =
-      isAdmin && requestedTenantId
-        ? requestedTenantId
-        : userRow.tenant_id;
-
-    /**
-     * Validar que el tenant seleccionado por el admin exista.
-     */
-    if (isAdmin && requestedTenantId) {
+    if (isAdmin && selectedTenantId) {
       const tenantResult = await pool.query(
         `
           SELECT id
@@ -173,12 +151,13 @@ export const authenticateUser = async (
           WHERE id = $1
           LIMIT 1
         `,
-        [requestedTenantId]
+        [selectedTenantId]
       );
 
       if (!tenantResult.rows[0]) {
-        return res.status(404).json({
-          error: "El tenant seleccionado no existe",
+        effectiveTenantId = userRow.tenant_id;
+        res.clearCookie("admin_tenant_id", {
+          path: "/",
         });
       }
     }
@@ -193,10 +172,9 @@ export const authenticateUser = async (
     };
 
     if (DEBUG_AUTH_LOGS) {
-      console.log("👤 [AUTH] Usuario autenticado", {
+      console.log("👤 [AUTH]", {
         uid: req.user.uid,
         role: req.user.role,
-        isAdmin: req.user.is_admin,
         homeTenantId: req.user.home_tenant_id,
         effectiveTenantId: req.user.tenant_id,
       });
@@ -205,7 +183,7 @@ export const authenticateUser = async (
     return next();
   } catch (error) {
     console.warn(
-      `❌ [AUTH] Token inválido/expirado (${req.method} ${req.originalUrl})`
+      `❌ [AUTH] Token inválido o expirado (${req.method} ${req.originalUrl})`
     );
 
     if (DEBUG_AUTH_LOGS) {
