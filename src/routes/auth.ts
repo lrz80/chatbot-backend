@@ -66,15 +66,34 @@ router.post('/login', async (req: Request, res: Response) => {
       return res.status(403).json({ error: "Tu cuenta no está verificada. Revisa tu correo." });
     }
 
+    if (!user.tenant_id) {
+      return res.status(403).json({
+        error: "El usuario no tiene un negocio asignado",
+      });
+    }
+
+    const role =
+      typeof user.role === "string" && user.role.trim()
+        ? user.role.trim()
+        : "business_owner";
+
+    const isAdmin =
+      user.is_admin === true ||
+      role === "platform_admin" ||
+      role === "admin";
+
     const token = jwt.sign(
       {
         uid: user.uid,
         email: user.email,
-        tenant_id: user.tenant_id || user.uid, // 👈 usa el uid como tenant_id si no hay campo separado
+        tenant_id: user.tenant_id,
+        home_tenant_id: user.tenant_id,
+        role,
+        is_admin: isAdmin,
       },
       JWT_SECRET,
       {
-        expiresIn: '7d',
+        expiresIn: "7d",
       }
     );
 
