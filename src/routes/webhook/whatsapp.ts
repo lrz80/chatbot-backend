@@ -317,7 +317,19 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
-  const isNewLead = await ensureClienteBase(pool, tenant.id, canal, contactoNorm);
+  const isNewLead = await ensureClienteBase(
+    pool,
+    tenant.id,
+    canal,
+    contactoNorm
+  );
+
+  await upsertMessagingContact({
+    tenantId: tenant.id,
+    channel: canal,
+    contact: contactoNorm,
+    fromNumber,
+  });
 
   // ✅ whatsapp.ts no fuerza idioma por contenido parcial.
   // La resolución de idioma vive en resolveLangForTurn().
@@ -532,6 +544,92 @@ export async function procesarMensajeWhatsApp(
     if (params.step !== undefined) activeStep = params.step;
     if (params.patchCtx && typeof params.patchCtx === "object") {
       convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
+    }
+  }
+
+  async function upsertMessagingContact(params: {
+    tenantId: string;
+    channel: string;
+    contact: string;
+    fromNumber?: string | null;
+  }): Promise<void> {
+    const tenantId = String(params.tenantId || "").trim();
+    const channel = String(params.channel || "").trim().toLowerCase();
+    const contact = String(params.contact || "").trim();
+    const fromNumber = String(params.fromNumber || "").trim();
+
+    if (!tenantId || !contact) {
+      return;
+    }
+
+    /*
+    * WhatsApp proporciona un número telefónico.
+    * Instagram y Facebook proporcionan un identificador de usuario.
+    *
+    * Por ahora usamos el mismo campo que utiliza Voice para que el contacto
+    * aparezca inmediatamente en el CRM actual.
+    */
+    const contactIdentifier = fromNumber || contact;
+
+    try {
+      await pool.query(
+        `
+        WITH updated AS (
+          UPDATE contactos
+          SET
+            ultimo_canal = $3,
+            origen = COALESCE(NULLIF(origen, ''), $3),
+            ultima_interaccion_at = NOW(),
+            updated_at = NOW()
+          WHERE tenant_id = $1
+            AND telefono = $2
+          RETURNING id
+        )
+        INSERT INTO contactos (
+          tenant_id,
+          telefono,
+          segmento,
+          fecha_creacion,
+          origen,
+          ultimo_canal,
+          ultima_interaccion_at,
+          updated_at
+        )
+        SELECT
+          $1,
+          $2,
+          'lead',
+          NOW(),
+          $3,
+          $3,
+          NOW(),
+          NOW()
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM updated
+        )
+        `,
+        [
+          tenantId,
+          contactIdentifier,
+          channel,
+        ]
+      );
+
+      console.log("[CONTACTOS][MESSAGING_CONTACT_UPSERTED]", {
+        tenantId,
+        channel,
+        contactIdentifier,
+      });
+    } catch (error) {
+      console.error("[CONTACTOS][MESSAGING_CONTACT_UPSERT_ERROR]", {
+        tenantId,
+        channel,
+        contactIdentifier,
+        error: error instanceof Error
+          ? error.message
+          : String(error),
+      });
     }
   }
 
