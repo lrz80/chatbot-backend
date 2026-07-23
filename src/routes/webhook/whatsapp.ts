@@ -80,6 +80,7 @@ import {
 import {
   resolveTenantBookingProvider,
 } from "../../lib/appointments/booking/providers/resolveTenantBookingProvider";
+import { resolveMessagingContact } from "../../lib/crm/resolveMessagingContact";
 
 // Puedes ponerlo debajo de los imports
 export type MessagingChannel =
@@ -323,6 +324,28 @@ export async function procesarMensajeWhatsApp(
     canal,
     contactoNorm
   );
+
+  if (
+    canal === "whatsapp" ||
+    canal === "instagram" ||
+    canal === "facebook"
+  ) {
+    await resolveMessagingContact({
+      pool,
+      tenantId: tenant.id,
+      channel: canal as MessagingChannel,
+      channelContactId: contactoNorm,
+
+      /*
+      * WhatsApp entrega un teléfono real.
+      * Instagram y Facebook quedan en null.
+      */
+      phone:
+        canal === "whatsapp"
+          ? contactoNorm
+          : null,
+    });
+  }
 
   await upsertMessagingContact({
     tenantId: tenant.id,
