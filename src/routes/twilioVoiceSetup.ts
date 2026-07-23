@@ -1,4 +1,4 @@
-//src/routes/twilioVoiceSetup.ts
+// src/routes/twilioVoiceSetup.ts
 
 import { Router } from "express";
 import twilio from "twilio";
@@ -15,7 +15,9 @@ router.post("/api/twilio/voice/setup", authenticateUser, async (req, res) => {
     const tenantId = (req as any).user?.tenant_id;
 
     if (!tenantId) {
-      return res.status(401).json({ error: "Tenant no encontrado en req.user" });
+      return res.status(401).json({
+        error: "Tenant no encontrado en req.user",
+      });
     }
 
     const tenantResult = await pool.query(
@@ -23,6 +25,7 @@ router.post("/api/twilio/voice/setup", authenticateUser, async (req, res) => {
       SELECT
         id,
         name,
+        twilio_number,
         twilio_voice_number
       FROM tenants
       WHERE id = $1
@@ -34,7 +37,9 @@ router.post("/api/twilio/voice/setup", authenticateUser, async (req, res) => {
     const tenant = tenantResult.rows[0];
 
     if (!tenant) {
-      return res.status(404).json({ error: "Tenant no encontrado" });
+      return res.status(404).json({
+        error: "Tenant no encontrado",
+      });
     }
 
     const twilioAccount = await ensureTwilioSubaccountForTenant(tenant.id);
@@ -44,7 +49,18 @@ router.post("/api/twilio/voice/setup", authenticateUser, async (req, res) => {
       twilioAccount.twilioSubaccountAuthToken
     );
 
-    let voiceNumber = tenant.twilio_voice_number;
+    /*
+     * Orden:
+     * 1. Mantener el número Voice existente.
+     * 2. Reutilizar el número de WhatsApp.
+     * 3. Comprar un número Voice + SMS.
+     *
+     * Si el tenant ya tiene dos números distintos, no los reemplazamos.
+     */
+    let voiceNumber: string | null =
+      tenant.twilio_voice_number ||
+      tenant.twilio_number ||
+      null;
 
     if (!voiceNumber) {
       const available = await subClient.availablePhoneNumbers("US").local.list({
@@ -55,7 +71,8 @@ router.post("/api/twilio/voice/setup", authenticateUser, async (req, res) => {
 
       if (!available.length) {
         return res.status(400).json({
-          error: "No hay números Twilio disponibles para voz.",
+          error:
+            "No hay números Twilio con capacidad Voice y SMS disponibles.",
         });
       }
 
@@ -69,28 +86,46 @@ router.post("/api/twilio/voice/setup", authenticateUser, async (req, res) => {
 
       voiceNumber = purchased.phoneNumber;
     } else {
-      const existingNumbers = await subClient.incomingPhoneNumbers.list({
-        phoneNumber: voiceNumber,
-        limit: 1,
-      });
+      const existingNumbers =
+        await subClient.incomingPhoneNumbers.list({
+          phoneNumber: voiceNumber,
+          limit: 1,
+        });
 
       const existingNumber = existingNumbers[0];
 
-      if (existingNumber) {
-        await subClient.incomingPhoneNumbers(existingNumber.sid).update({
+      if (!existingNumber) {
+        return res.status(409).json({
+          error:
+            "El número guardado para este tenant no existe dentro de su subcuenta Twilio.",
+          phone_number: voiceNumber,
+        });
+      }
+
+      const capabilities = (existingNumber as any).capabilities;
+
+      if (capabilities && capabilities.voice === false) {
+        return res.status(409).json({
+          error:
+            "El número de WhatsApp existente no tiene capacidad para llamadas de voz. Debe migrarse a un número compatible con Voice y SMS.",
+          phone_number: voiceNumber,
+        });
+      }
+
+      await subClient
+        .incomingPhoneNumbers(existingNumber.sid)
+        .update({
           voiceUrl: `${BACKEND_URL}/webhook/voice-realtime`,
           voiceMethod: "POST",
           statusCallback: `${BACKEND_URL}/webhook/voice-status`,
           statusCallbackMethod: "POST",
         });
-      }
     }
 
     await pool.query(
       `
       UPDATE tenants
-      SET
-        twilio_voice_number = $1
+      SET twilio_voice_number = $1
       WHERE id = $2
       `,
       [voiceNumber, tenant.id]
@@ -101,6 +136,12 @@ router.post("/api/twilio/voice/setup", authenticateUser, async (req, res) => {
       voice_enabled: true,
       twilio_voice_number: voiceNumber,
       twilio_subaccount_sid: twilioAccount.twilioSubaccountSid,
+      reused_existing_number:
+        Boolean(tenant.twilio_voice_number) ||
+        Boolean(
+          !tenant.twilio_voice_number &&
+          tenant.twilio_number
+        ),
     });
   } catch (error: any) {
     console.error("❌ Error en /api/twilio/voice/setup:", {
@@ -110,7 +151,7 @@ router.post("/api/twilio/voice/setup", authenticateUser, async (req, res) => {
       stack: error?.stack,
     });
 
-    return res.status(500).json({
+    return res.status(error?.status || 500).json({
       error: "Error activando voz",
       details: error?.message,
     });

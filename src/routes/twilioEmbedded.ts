@@ -63,12 +63,20 @@ router.post(
       // Cliente Twilio REAL de subcuenta
       const subClient = twilio(subaccountSid, subAuthToken);
 
-      // 2) Asegurar número Twilio (solo si numberType === 'twilio')
-      // Recomendación: elegir/asignar el número ANTES de abrir el popup.
-      let e164 = tenant.twilio_number;
+      // 2) Asegurar un único número Twilio para WhatsApp y Voice.
+      //
+      // Orden:
+      // 1. Mantener el número actual de WhatsApp, si ya existe.
+      // 2. Reutilizar el número de Voice, si WhatsApp todavía no tiene número.
+      // 3. Comprar un número nuevo con capacidad Voice + SMS.
+      let e164: string | null =
+        tenant.twilio_number ||
+        tenant.twilio_voice_number ||
+        null;
 
       if (numberType === "twilio" && !e164) {
         const available = await subClient.availablePhoneNumbers("US").local.list({
+          voiceEnabled: true,
           smsEnabled: true,
           limit: 1,
         });
@@ -76,7 +84,7 @@ router.post(
         if (!available.length) {
           return res.status(400).json({
             error:
-              "No hay números Twilio SMS-capable disponibles para compra automática en la subcuenta.",
+              "No hay números Twilio con capacidad Voice y SMS disponibles para compra automática en la subcuenta.",
           });
         }
 
@@ -85,11 +93,15 @@ router.post(
         });
 
         e164 = purchased.phoneNumber;
+      }
 
+      if (numberType === "twilio" && e164) {
         await pool.query(
-          `UPDATE tenants
-           SET twilio_number = $1
-           WHERE id = $2`,
+          `
+          UPDATE tenants
+          SET twilio_number = $1
+          WHERE id = $2
+          `,
           [e164, tenant.id]
         );
       }
