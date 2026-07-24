@@ -9,6 +9,10 @@ import {
 import type {
   FieldOperationResource,
 } from "../domain/fieldOperations.types";
+import {
+  checkRouteFeasibility,
+  type RouteViolation,
+} from "./routeFeasibility.service";
 
 const ACTIVE_ASSIGNMENT_STATUSES = [
   "assigned",
@@ -59,8 +63,12 @@ export type PlannedResourceCandidate = {
 
   rejectionReason:
     | "TIME_CONFLICT"
+    | "ROUTE_INFEASIBLE"
     | "INVALID_RESOURCE"
     | null;
+
+  routeFeasible: boolean | null;
+  routeViolations: RouteViolation[];
 
   score: ResourceCandidateScore;
 };
@@ -699,8 +707,14 @@ async function evaluateResourceCandidate(input: {
   if (conflict) {
     return {
       resource: input.resource,
+
       eligible: false,
-      rejectionReason: "TIME_CONFLICT",
+      rejectionReason:
+        "TIME_CONFLICT",
+
+      routeFeasible: null,
+      routeViolations: [],
+
       score: emptyScore(),
     };
   }
@@ -793,11 +807,91 @@ async function evaluateResourceCandidate(input: {
     workloadPenalty +
     continuityBonus;
 
+    const hasValidCoordinates =
+    input.latitude !== null &&
+    input.longitude !== null;
+
+  let routeFeasible:
+    boolean | null = null;
+
+  let routeViolations:
+    RouteViolation[] = [];
+
+  if (hasValidCoordinates) {
+    const routeResult =
+      await checkRouteFeasibility({
+        tenantId:
+          input.tenantId,
+
+        resourceId:
+          input.resource.id,
+
+        startAt:
+          input.startAt,
+
+        endAt:
+          input.endAt,
+
+        latitude:
+          input.latitude as number,
+
+        longitude:
+          input.longitude as number,
+
+        excludedAppointmentId:
+          input.excludedAppointmentId,
+      });
+
+    routeFeasible =
+      routeResult.feasible;
+
+    routeViolations =
+      routeResult.violations;
+
+    if (!routeResult.feasible) {
+      return {
+        resource:
+          input.resource,
+
+        eligible: false,
+
+        rejectionReason:
+          "ROUTE_INFEASIBLE",
+
+        routeFeasible: false,
+        routeViolations,
+
+        score: {
+          incrementalDistanceKm,
+          distancePenalty,
+
+          appointmentCount:
+            load.appointmentCount,
+
+          assignedMinutes:
+            load.assignedMinutes,
+
+          workloadPenalty,
+
+          previousCustomerResource,
+          continuityBonus,
+
+          totalScore:
+            Number.POSITIVE_INFINITY,
+        },
+      };
+    }
+  }
+
   return {
-    resource: input.resource,
+    resource:
+      input.resource,
 
     eligible: true,
     rejectionReason: null,
+
+    routeFeasible,
+    routeViolations,
 
     score: {
       incrementalDistanceKm,
