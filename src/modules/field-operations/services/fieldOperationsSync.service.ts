@@ -1,6 +1,7 @@
 // src/modules/field-operations/services/fieldOperationsSync.service.ts
 
 import {
+  assignResourceToAppointment,
   setAppointmentFieldLocation,
 } from "./appointmentFieldOperations.service";
 
@@ -12,6 +13,81 @@ import {
   automaticallyAssignBestResource,
 } from "./automaticResourceAssignment.service";
 
+async function persistPlannedResourceSafely(input: {
+  tenantId: string;
+  appointmentId: string;
+  resourceId: string;
+
+  metadata?: Record<
+    string,
+    unknown
+  > | null;
+}): Promise<boolean> {
+  try {
+    await assignResourceToAppointment({
+      tenantId:
+        input.tenantId,
+
+      appointmentId:
+        input.appointmentId,
+
+      resourceId:
+        input.resourceId,
+
+      assignmentRole:
+        "primary",
+
+      assignmentStatus:
+        "assigned",
+
+      metadata: {
+        assignmentSource:
+          "booking_planner",
+
+        assignedAt:
+          new Date().toISOString(),
+
+        ...(input.metadata ?? {}),
+      },
+    });
+
+    console.log(
+      "[FIELD_OPERATIONS][PLANNED_RESOURCE_ASSIGNMENT_COMPLETED]",
+      {
+        tenantId:
+          input.tenantId,
+
+        appointmentId:
+          input.appointmentId,
+
+        resourceId:
+          input.resourceId,
+      }
+    );
+
+    return true;
+  } catch (error) {
+    console.error(
+      "[FIELD_OPERATIONS][PLANNED_RESOURCE_ASSIGNMENT_FAILED]",
+      {
+        tenantId:
+          input.tenantId,
+
+        appointmentId:
+          input.appointmentId,
+
+        resourceId:
+          input.resourceId,
+
+        error:
+          normalizeError(error),
+      }
+    );
+
+    return false;
+  }
+}
+
 export type SyncAppointmentToFieldOperationsInput = {
   tenantId: string;
   appointmentId: string;
@@ -19,6 +95,19 @@ export type SyncAppointmentToFieldOperationsInput = {
   address?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+
+  /**
+   * Recurso seleccionado antes de crear el booking.
+   *
+   * Cuando existe, se persiste directamente y no se vuelve
+   * a ejecutar una elección diferente después del booking.
+   */
+  plannedResourceId?: string | null;
+
+  plannedResourceMetadata?: Record<
+    string,
+    unknown
+  > | null;
 
   answersBySlot: Record<
     string,
@@ -104,6 +193,9 @@ async function assignBestResourceSafely(input: {
 export async function syncAppointmentToFieldOperations(
   input: SyncAppointmentToFieldOperationsInput
 ): Promise<void> {
+  const plannedResourceId =
+    clean(input.plannedResourceId);
+
   const address =
     clean(input.address) ??
     clean(input.answersBySlot.address) ??
@@ -137,10 +229,32 @@ export async function syncAppointmentToFieldOperations(
       }
     );
 
-    await assignBestResourceSafely({
-      tenantId: input.tenantId,
-      appointmentId: input.appointmentId,
-    });
+    const plannedAssignmentPersisted =
+      plannedResourceId
+        ? await persistPlannedResourceSafely({
+            tenantId:
+              input.tenantId,
+
+            appointmentId:
+              input.appointmentId,
+
+            resourceId:
+              plannedResourceId,
+
+            metadata:
+              input.plannedResourceMetadata,
+          })
+        : false;
+
+    if (!plannedAssignmentPersisted) {
+      await assignBestResourceSafely({
+        tenantId:
+          input.tenantId,
+
+        appointmentId:
+          input.appointmentId,
+      });
+    }
 
     return;
   }
@@ -231,10 +345,32 @@ export async function syncAppointmentToFieldOperations(
   }
 
   // Assignment runs after geocoding so distance scoring can use coordinates.
-  await assignBestResourceSafely({
-    tenantId: input.tenantId,
-    appointmentId: input.appointmentId,
-  });
+  const plannedAssignmentPersisted =
+    plannedResourceId
+      ? await persistPlannedResourceSafely({
+          tenantId:
+            input.tenantId,
+
+          appointmentId:
+            input.appointmentId,
+
+          resourceId:
+            plannedResourceId,
+
+          metadata:
+            input.plannedResourceMetadata,
+        })
+      : false;
+
+  if (!plannedAssignmentPersisted) {
+    await assignBestResourceSafely({
+      tenantId:
+        input.tenantId,
+
+      appointmentId:
+        input.appointmentId,
+    });
+  }
 
   console.log(
     "[FIELD_OPERATIONS][APPOINTMENT_SYNC_COMPLETED]",

@@ -17,6 +17,14 @@ import {
   validateFieldServiceArea,
 } from "../../modules/field-operations/services/fieldServiceArea.service";
 
+import {
+  planFieldServiceBooking,
+} from "../../modules/field-operations/services/bookingPlanning.service";
+
+import {
+  checkRouteFeasibility,
+} from "../../modules/field-operations/services/routeFeasibility.service";
+
 type AppointmentSettings = {
   default_duration_min: number;
   buffer_min: number;
@@ -259,11 +267,165 @@ export async function createAppointment(
 
   let providerPayload: CreateExternalBookingInput["providerPayload"] | undefined;
 
+  let plannedResourceId:
+    string | null = null;
+
+  let plannedResourceName:
+    string | null = null;
+
+  let plannedResourceMetadata:
+    Record<string, unknown> | null = null;
+
   const requestedStaffMemberId = cleanString(args.answersBySlot.staff_member_id);
   const requestedStaffMemberName = cleanString(args.answersBySlot.staff_member_name);
 
   const duration = args.settings.default_duration_min;
   const end = new Date(start.getTime() + duration * 60 * 1000);
+
+    if (isFieldServiceBooking) {
+    if (
+      fieldServiceLatitude === null ||
+      fieldServiceLongitude === null
+    ) {
+      throw new Error(
+        "FIELD_SERVICE_COORDINATES_REQUIRED_FOR_PLANNING"
+      );
+    }
+
+    const requestedInternalResourceId =
+      cleanString(
+        args.answersBySlot
+          .field_operation_resource_id
+      ) ||
+      cleanString(
+        args.answersBySlot.resource_id
+      ) ||
+      null;
+
+    const fieldPlanning =
+      await planFieldServiceBooking({
+        tenantId:
+          args.tenantId,
+
+        startAt:
+          start,
+
+        endAt:
+          end,
+
+        latitude:
+          fieldServiceLatitude,
+
+        longitude:
+          fieldServiceLongitude,
+
+        customerPhone:
+          customerPhone
+            ? String(customerPhone)
+            : null,
+
+        requestedResourceId:
+          requestedInternalResourceId,
+      });
+
+    if (!fieldPlanning.ok) {
+      const planningError =
+        new Error(
+          `FIELD_SERVICE_ROUTE_UNAVAILABLE:${fieldPlanning.error}`
+        ) as Error & {
+          code?: string;
+          suggestedStarts?: string[];
+          candidatesEvaluated?: number;
+          candidatesRejected?: number;
+          rejectedCandidates?: unknown[];
+        };
+
+      planningError.code =
+        "FIELD_SERVICE_ROUTE_UNAVAILABLE";
+
+      planningError.suggestedStarts = [];
+
+      planningError.candidatesEvaluated =
+        fieldPlanning.candidatesEvaluated;
+
+      planningError.candidatesRejected =
+        fieldPlanning.candidatesRejected;
+
+      planningError.rejectedCandidates =
+        fieldPlanning.rejectedCandidates;
+
+      throw planningError;
+    }
+
+    plannedResourceId =
+      fieldPlanning.resourceId;
+
+    plannedResourceName =
+      fieldPlanning.resourceName;
+
+    plannedResourceMetadata = {
+      planningVersion:
+        "route_feasibility_v1",
+
+      plannedAt:
+        new Date().toISOString(),
+
+      resourceName:
+        fieldPlanning.resourceName,
+
+      candidatesEvaluated:
+        fieldPlanning.candidatesEvaluated,
+
+      candidatesRejected:
+        fieldPlanning.candidatesRejected,
+
+      score:
+        Number.isFinite(
+          fieldPlanning.candidate
+            .score.totalScore
+        )
+          ? Number(
+              fieldPlanning.candidate
+                .score.totalScore
+                .toFixed(4)
+            )
+          : null,
+
+      routeFeasible:
+        fieldPlanning.candidate
+          .routeFeasible,
+
+      routeViolations:
+        fieldPlanning.candidate
+          .routeViolations,
+    };
+
+    console.log(
+      "[FIELD_OPERATIONS][BOOKING_RESOURCE_PLANNED]",
+      {
+        tenantId:
+          args.tenantId,
+
+        resourceId:
+          plannedResourceId,
+
+        resourceName:
+          plannedResourceName,
+
+        startISO:
+          start.toISOString(),
+
+        endISO:
+          end.toISOString(),
+
+        candidatesEvaluated:
+          fieldPlanning.candidatesEvaluated,
+
+        candidatesRejected:
+          fieldPlanning.candidatesRejected,
+      }
+    );
+  }
 
   const idempotencyKey =
     args.idempotencyKey ||
@@ -400,6 +562,63 @@ export async function createAppointment(
     minute: "2-digit",
   }).format(bookedAt);
 
+    if (
+    isFieldServiceBooking &&
+    plannedResourceId &&
+    fieldServiceLatitude !== null &&
+    fieldServiceLongitude !== null
+  ) {
+    const finalRouteValidation =
+      await checkRouteFeasibility({
+        tenantId:
+          args.tenantId,
+
+        resourceId:
+          plannedResourceId,
+
+        startAt:
+          start,
+
+        endAt:
+          end,
+
+        latitude:
+          fieldServiceLatitude,
+
+        longitude:
+          fieldServiceLongitude,
+
+        formattedAddress:
+          normalizedFieldServiceAddress ||
+          serviceAddress,
+      });
+
+    if (!finalRouteValidation.feasible) {
+      const stalePlanningError =
+        new Error(
+          "FIELD_SERVICE_ROUTE_CHANGED_BEFORE_BOOKING"
+        ) as Error & {
+          code?: string;
+          resourceId?: string;
+          violations?: unknown[];
+          suggestedStarts?: string[];
+        };
+
+      stalePlanningError.code =
+        "FIELD_SERVICE_ROUTE_CHANGED_BEFORE_BOOKING";
+
+      stalePlanningError.resourceId =
+        plannedResourceId;
+
+      stalePlanningError.violations =
+        finalRouteValidation.violations;
+
+      stalePlanningError.suggestedStarts = [];
+
+      throw stalePlanningError;
+    }
+  }
+
   const externalBooking = await orchestrator.createExternalBooking({
     tenantId: args.tenantId,
     summary: serviceName,
@@ -411,6 +630,9 @@ export async function createAppointment(
       customerPhone ? `Teléfono: ${customerPhone}` : null,
       customerEmail ? `Email: ${customerEmail}` : null,
       requestedStaffMemberName ? `Staff solicitado: ${requestedStaffMemberName}` : null,
+      plannedResourceName
+        ? `Recurso operativo: ${plannedResourceName}`
+        : null,
       ...extraDescriptionLines,
       `Booking creado: ${bookedAtLabel}`,
     ]
@@ -567,8 +789,11 @@ export async function createAppointment(
 
     if (isFieldServiceBooking) {
       await syncAppointmentToFieldOperations({
-        tenantId: args.tenantId,
-        appointmentId: appointment.id,
+        tenantId:
+          args.tenantId,
+
+        appointmentId:
+          appointment.id,
 
         address:
           normalizedFieldServiceAddress ||
@@ -579,6 +804,10 @@ export async function createAppointment(
 
         longitude:
           fieldServiceLongitude,
+
+        plannedResourceId,
+
+        plannedResourceMetadata,
 
         answersBySlot:
           args.answersBySlot,
