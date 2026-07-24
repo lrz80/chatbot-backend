@@ -406,12 +406,22 @@ export async function executeCanonicalBookingDatetimeStep(
   if (availabilityWindowResult.kind === "window_result") {
     const bookingDataWithWindowSuggestions = {
       ...currentBookingData,
+
       __datetime_reference_requested_at:
         availabilityWindowResult.referenceRequestedAtIso,
-      __datetime_reference_suggested_starts: JSON.stringify(
-        availabilityWindowResult.suggestedStarts
-      ),
-      __datetime_reference_window_key: availabilityWindowResult.windowKey,
+
+      __datetime_reference_suggested_starts:
+        JSON.stringify(
+          availabilityWindowResult.suggestedStarts
+        ),
+
+      __datetime_planned_slots:
+        JSON.stringify(
+          availabilityWindowResult.plannedSlots
+        ),
+
+      __datetime_reference_window_key:
+        availabilityWindowResult.windowKey,
     };
 
     const nextState = {

@@ -38,6 +38,14 @@ type ResolveVoiceAvailabilityWindowParams = {
   requestedResourceId?: string | null;
 };
 
+export type VoicePlannedAvailabilitySlot = {
+  startISO: string;
+  endISO: string;
+
+  resourceId: string | null;
+  resourceName: string | null;
+};
+
 type ResolveVoiceAvailabilityWindowResult =
   | {
       kind: "not_window_request";
@@ -50,6 +58,7 @@ type ResolveVoiceAvailabilityWindowResult =
       suggestedStarts: string[];
       referenceRequestedAtIso: string;
       timeZone: string;
+      plannedSlots: VoicePlannedAvailabilitySlot[];
     };
 
 type TimeZoneDateParts = {
@@ -443,7 +452,7 @@ async function getBookableStarts(params: {
 
   customerPhone?: string | null;
   requestedResourceId?: string | null;
-}): Promise<string[]> {
+}): Promise<VoicePlannedAvailabilitySlot[]> {
   const startedAt = Date.now();
 
   const orchestrator = new BookingProviderOrchestrator();
@@ -572,11 +581,14 @@ async function getBookableStarts(params: {
         params.maxSuggestions,
     });
 
-  const bookable =
+  const bookable: VoicePlannedAvailabilitySlot[] =
     routeAwareResult.ok
-      ? routeAwareResult.slots.map(
-          (slot) => slot.startISO
-        )
+      ? routeAwareResult.slots.map((slot) => ({
+          startISO: slot.startISO,
+          endISO: slot.endISO,
+          resourceId: slot.resourceId,
+          resourceName: slot.resourceName,
+        }))
       : [];
 
   console.log(
@@ -706,7 +718,7 @@ export async function resolveVoiceAvailabilityWindow(
     timeZone,
   });
 
-  const suggestedStarts =
+  const plannedSlots =
     await getBookableStarts({
       tenantId:
         params.tenantId,
@@ -750,6 +762,9 @@ export async function resolveVoiceAvailabilityWindow(
         params.requestedResourceId,
     });
 
+  const suggestedStarts =
+    plannedSlots.map((slot) => slot.startISO);
+
   const suggestedTimesText = formatSuggestedStarts({
     starts: suggestedStarts,
     locale: params.locale,
@@ -787,7 +802,9 @@ export async function resolveVoiceAvailabilityWindow(
     windowKey,
     prompt,
     suggestedStarts,
-    referenceRequestedAtIso: referenceRequestedAt.toISOString(),
+    plannedSlots,
+    referenceRequestedAtIso:
+      referenceRequestedAt.toISOString(),
     timeZone,
   };
 }
