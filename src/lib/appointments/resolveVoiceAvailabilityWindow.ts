@@ -5,6 +5,9 @@ import { parseVoiceRequestedDate } from "./parseVoiceRequestedDate";
 import { validateServiceScheduleForDate } from "./validateServiceScheduleForDate";
 import { BookingProviderOrchestrator } from "./booking/providers/orchestrator";
 import type { VoiceLocale } from "../voice/types";
+import {
+  filterRouteAwareAvailability,
+} from "../../modules/field-operations/services/routeAwareAvailability.service";
 
 type TimeWindowConfig = {
   labels?: Record<string, string[]>;
@@ -24,6 +27,15 @@ type ResolveVoiceAvailabilityWindowParams = {
   timeZone?: string | null;
   referenceRequestedAt?: string | null;
   referenceSuggestedStarts?: string[];
+  fieldServiceAreaEnabled?: boolean;
+
+  serviceAddress?: string | null;
+  serviceLatitude?: number | null;
+  serviceLongitude?: number | null;
+  serviceFormattedAddress?: string | null;
+
+  customerPhone?: string | null;
+  requestedResourceId?: string | null;
 };
 
 type ResolveVoiceAvailabilityWindowResult =
@@ -421,6 +433,16 @@ async function getBookableStarts(params: {
   incrementMin: number;
   maxSuggestions: number;
   baseDate: Date;
+
+  fieldServiceAreaEnabled: boolean;
+
+  serviceAddress?: string | null;
+  serviceLatitude?: number | null;
+  serviceLongitude?: number | null;
+  serviceFormattedAddress?: string | null;
+
+  customerPhone?: string | null;
+  requestedResourceId?: string | null;
 }): Promise<string[]> {
   const startedAt = Date.now();
 
@@ -447,7 +469,10 @@ async function getBookableStarts(params: {
     candidateStarts.push(start);
   }
 
-  const bookable: string[] = [];
+  const providerBookable: Array<{
+    startISO: string;
+    endISO: string;
+  }> = [];
 
   /**
    * Keep this conservative.
@@ -499,43 +524,91 @@ async function getBookableStarts(params: {
           return null;
         }
 
-        return start.toISOString();
+        return {
+          startISO: start.toISOString(),
+          endISO: end.toISOString(),
+        };
       })
     );
 
-    for (const startISO of batchResults) {
-      if (!startISO) {
+    for (const candidate of batchResults) {
+      if (!candidate) {
         continue;
       }
 
-      bookable.push(startISO);
-
-      if (bookable.length >= params.maxSuggestions) {
-        console.log("[VOICE][AVAILABILITY_WINDOW_FAST_RESULT]", {
-          tenantId: params.tenantId,
-          serviceName: params.serviceName,
-          checkedCandidates: Math.min(
-            batchStartIndex + concurrency,
-            candidateStarts.length
-          ),
-          totalCandidates: candidateStarts.length,
-          found: bookable.length,
-          durationMs: Date.now() - startedAt,
-        });
-
-        return bookable;
-      }
+      providerBookable.push(candidate);
     }
   }
 
-  console.log("[VOICE][AVAILABILITY_WINDOW_RESULT]", {
-    tenantId: params.tenantId,
-    serviceName: params.serviceName,
-    checkedCandidates: candidateStarts.length,
-    totalCandidates: candidateStarts.length,
-    found: bookable.length,
-    durationMs: Date.now() - startedAt,
-  });
+  const routeAwareResult =
+    await filterRouteAwareAvailability({
+      tenantId: params.tenantId,
+
+      fieldServiceAreaEnabled:
+        params.fieldServiceAreaEnabled,
+
+      address:
+        params.serviceAddress,
+
+      latitude:
+        params.serviceLatitude,
+
+      longitude:
+        params.serviceLongitude,
+
+      formattedAddress:
+        params.serviceFormattedAddress,
+
+      customerPhone:
+        params.customerPhone,
+
+      requestedResourceId:
+        params.requestedResourceId,
+
+      candidates:
+        providerBookable,
+
+      maxResults:
+        params.maxSuggestions,
+    });
+
+  const bookable =
+    routeAwareResult.ok
+      ? routeAwareResult.slots.map(
+          (slot) => slot.startISO
+        )
+      : [];
+
+  console.log(
+    "[VOICE][AVAILABILITY_WINDOW_RESULT]",
+    {
+      tenantId:
+        params.tenantId,
+
+      serviceName:
+        params.serviceName,
+
+      checkedCandidates:
+        candidateStarts.length,
+
+      providerBookable:
+        providerBookable.length,
+
+      routeBookable:
+        bookable.length,
+
+      routeFilteringApplied:
+        params.fieldServiceAreaEnabled,
+
+      routeFilterError:
+        routeAwareResult.ok
+          ? null
+          : routeAwareResult.error,
+
+      durationMs:
+        Date.now() - startedAt,
+    }
+  );
 
   return bookable;
 }
@@ -633,21 +706,49 @@ export async function resolveVoiceAvailabilityWindow(
     timeZone,
   });
 
-  const suggestedStarts = await getBookableStarts({
-    tenantId: params.tenantId,
-    serviceName: params.serviceName,
-    channel: params.channel || "voice",
-    timeZone,
-    durationMin,
-    bufferMin,
-    minLeadMinutes,
-    dateParts,
-    windowStartMin,
-    windowEndMin,
-    incrementMin,
-    maxSuggestions,
-    baseDate,
-  });
+  const suggestedStarts =
+    await getBookableStarts({
+      tenantId:
+        params.tenantId,
+
+      serviceName:
+        params.serviceName,
+
+      channel:
+        params.channel || "voice",
+
+      timeZone,
+      durationMin,
+      bufferMin,
+      minLeadMinutes,
+      dateParts,
+      windowStartMin,
+      windowEndMin,
+      incrementMin,
+      maxSuggestions,
+      baseDate,
+
+      fieldServiceAreaEnabled:
+        params.fieldServiceAreaEnabled === true,
+
+      serviceAddress:
+        params.serviceAddress,
+
+      serviceLatitude:
+        params.serviceLatitude,
+
+      serviceLongitude:
+        params.serviceLongitude,
+
+      serviceFormattedAddress:
+        params.serviceFormattedAddress,
+
+      customerPhone:
+        params.customerPhone,
+
+      requestedResourceId:
+        params.requestedResourceId,
+    });
 
   const suggestedTimesText = formatSuggestedStarts({
     starts: suggestedStarts,

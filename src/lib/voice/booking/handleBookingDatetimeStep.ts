@@ -368,19 +368,40 @@ export async function executeCanonicalBookingDatetimeStep(
   const fieldServiceAreaEnabled =
     Boolean(serviceAddress);
 
-  const availabilityWindowResult = await resolveVoiceAvailabilityWindow({
-    tenantId,
-    serviceName,
-    raw: rawDatetime,
-    locale: currentLocale,
-    channel: "voice",
-    referenceRequestedAt: clean(
-      currentBookingData.__datetime_reference_requested_at
-    ),
-    referenceSuggestedStarts: parseJsonStringArray(
-      currentBookingData.__datetime_reference_suggested_starts
-    ),
-  });
+  const availabilityWindowResult =
+    await resolveVoiceAvailabilityWindow({
+      tenantId,
+      serviceName,
+
+      raw:
+        rawDatetime,
+
+      locale:
+        currentLocale,
+
+      channel:
+        "voice",
+
+      referenceRequestedAt:
+        clean(
+          currentBookingData
+            .__datetime_reference_requested_at
+        ),
+
+      referenceSuggestedStarts:
+        parseJsonStringArray(
+          currentBookingData
+            .__datetime_reference_suggested_starts
+        ),
+
+      fieldServiceAreaEnabled,
+
+      serviceAddress,
+
+      customerPhone,
+
+      requestedResourceId,
+    });
 
   if (availabilityWindowResult.kind === "window_result") {
     const bookingDataWithWindowSuggestions = {
