@@ -674,11 +674,9 @@ export async function executeCanonicalBookingDatetimeStep(
       promptTemplate.includes("{available_times}");
 
     const safePromptTemplate =
-      isUnavailableReason &&
-      unavailablePromptNeedsSuggestedTimes &&
-      !hasSuggestedOrAvailableTimes
-        ? localizedRetryBase
-        : promptTemplate;
+      isUnavailableReason
+        ? unavailablePrompt
+        : localizedRetryBase;
 
     const retryPromptResolved = resolveBookingFlowSpeech({
       baseText: safePromptTemplate,

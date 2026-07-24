@@ -622,14 +622,89 @@ export async function resolveVoiceScheduleValidation(
     !routeValidation.ok ||
     routeValidation.slots.length === 0
   ) {
+    /*
+    * El horario solicitado puede estar libre en Google/Square
+    * pero ser físicamente imposible por la ruta.
+    *
+    * En ese caso scheduleValidation normalmente no contiene
+    * sugerencias porque, desde el punto de vista del horario
+    * comercial, la hora sí era válida.
+    *
+    * Generamos candidatos cercanos usando el mismo motor de
+    * schedule y después los filtramos por:
+    *
+    *   provider + Field Operations + ruta.
+    */
+    const alternativeScheduleValidation =
+      await validateServiceScheduleForDate({
+        tenantId: params.tenantId,
+        serviceName: params.serviceName,
+
+        requestedAt: addMinutes(
+          parsed.requestedAt,
+          15
+        ),
+
+        channel:
+          params.channel || "voice",
+
+        timeZone,
+
+        durationMin:
+          defaultDurationMin,
+
+        bufferMin,
+
+        includeBufferInClosingBoundary:
+          true,
+      });
+
     const rawAlternativeStarts =
-      normalizeSuggestedStarts(
-        (
-          scheduleValidation as {
-            suggestedStarts?: unknown;
-          }
-        ).suggestedStarts
-      );
+      dedupeStringArray([
+        ...normalizeSuggestedStarts(
+          (
+            alternativeScheduleValidation as {
+              suggestedStarts?: unknown;
+            }
+          ).suggestedStarts
+        ),
+
+        ...(
+          alternativeScheduleValidation.ok
+            ? [
+                addMinutes(
+                  parsed.requestedAt,
+                  15
+                ).toISOString(),
+
+                addMinutes(
+                  parsed.requestedAt,
+                  30
+                ).toISOString(),
+
+                addMinutes(
+                  parsed.requestedAt,
+                  45
+                ).toISOString(),
+
+                addMinutes(
+                  parsed.requestedAt,
+                  60
+                ).toISOString(),
+
+                addMinutes(
+                  parsed.requestedAt,
+                  75
+                ).toISOString(),
+
+                addMinutes(
+                  parsed.requestedAt,
+                  90
+                ).toISOString(),
+              ]
+            : []
+        ),
+      ]);
 
     const suggestedStarts =
       (
@@ -672,6 +747,33 @@ export async function resolveVoiceScheduleValidation(
             params.requestedResourceId,
         })
       ).slice(0, 3);
+
+    console.log(
+      "[VOICE][ROUTE_SLOT_UNAVAILABLE]",
+      {
+        tenantId:
+          params.tenantId,
+
+        serviceName:
+          params.serviceName,
+
+        requestedAt:
+          parsed.requestedAt.toISOString(),
+
+        routeValidationOk:
+          routeValidation.ok,
+
+        routeRejected:
+          routeValidation.ok
+            ? routeValidation.rejected
+            : routeValidation.error,
+
+        generatedCandidates:
+          rawAlternativeStarts,
+
+        suggestedStarts,
+      }
+    );
 
     return {
       ok: false,
