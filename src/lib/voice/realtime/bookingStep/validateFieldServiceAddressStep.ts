@@ -253,6 +253,119 @@ export async function validateFieldServiceAddressStep(
         submittedAddress,
     });
 
+  const hasStreetNumber =
+    geocodedAddress.addressComponents.some(
+      (component) =>
+        component.types.includes(
+          "street_number"
+        )
+    );
+
+  const hasRoute =
+    geocodedAddress.addressComponents.some(
+      (component) =>
+        component.types.includes(
+          "route"
+        )
+    );
+
+  const isPreciseLocation =
+    geocodedAddress.locationType ===
+      "ROOFTOP" ||
+    geocodedAddress.locationType ===
+      "RANGE_INTERPOLATED";
+
+  const hasReliableAddressMatch =
+    geocodedAddress.partialMatch !== true &&
+    hasStreetNumber &&
+    hasRoute &&
+    isPreciseLocation;
+
+  if (!hasReliableAddressMatch) {
+    const bookingState =
+      params.buildRealtimeBookingState({
+        steps:
+          params.steps,
+
+        state:
+          params.state,
+
+        explicitCurrentIndex:
+          params.currentIndex,
+      });
+
+    console.warn(
+      "[VOICE_REALTIME][FIELD_SERVICE_ADDRESS_AMBIGUOUS]",
+      {
+        callSid:
+          params.callSid,
+
+        tenantId:
+          params.tenantId,
+
+        submittedAddress,
+
+        formattedAddress:
+          geocodedAddress.formattedAddress,
+
+        partialMatch:
+          geocodedAddress.partialMatch,
+
+        locationType:
+          geocodedAddress.locationType,
+
+        hasStreetNumber,
+        hasRoute,
+      }
+    );
+
+    return {
+      handled: true,
+
+      result: {
+        ok: false,
+
+        error:
+          "FIELD_SERVICE_ADDRESS_AMBIGUOUS",
+
+        booking_outcome:
+          "requires_customer_action",
+
+        customer_action_required:
+          true,
+
+        instructions:
+          JSON.stringify({
+            event:
+              "FIELD_SERVICE_ADDRESS_AMBIGUOUS",
+
+            response_behavior: {
+              request_service_address_again:
+                true,
+
+              explain_address_could_not_be_verified:
+                true,
+
+              use_active_conversation_language:
+                true,
+
+              do_not_continue_booking:
+                true,
+
+              do_not_mention_internal_error:
+                true,
+            },
+          }),
+
+        booking_state:
+          bookingState,
+
+        next_required_step:
+          null,
+      },
+    };
+  }
+
   const areaValidation =
     await validateFieldServiceArea({
       tenantId:

@@ -32,6 +32,16 @@ export type GeocodeFieldServiceBaseAddressResult = {
   formattedAddress: string;
   latitude: number;
   longitude: number;
+
+  placeId: string | null;
+  partialMatch: boolean;
+  locationType: string | null;
+
+  addressComponents: Array<{
+    longName: string;
+    shortName: string;
+    types: string[];
+  }>;
 };
 
 function parseCoordinate(
@@ -187,10 +197,24 @@ export async function geocodeFieldServiceBaseAddress(
   return {
     formattedAddress:
       geocoding.formattedAddress,
+
     latitude:
       geocoding.latitude,
+
     longitude:
       geocoding.longitude,
+
+    placeId:
+      geocoding.placeId,
+
+    partialMatch:
+      geocoding.partialMatch,
+
+    locationType:
+      geocoding.locationType,
+
+    addressComponents:
+      geocoding.addressComponents,
   };
 }
 
