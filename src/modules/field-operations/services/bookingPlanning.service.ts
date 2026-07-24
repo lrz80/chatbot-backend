@@ -180,6 +180,42 @@ export async function planFieldServiceBooking(
     };
   }
 
+  console.log(
+    "[FIELD_OPERATIONS][BOOKING_PLANNING_CANDIDATES]",
+    {
+      tenantId,
+
+      startAt:
+        new Date(input.startAt).toISOString(),
+
+      endAt:
+        new Date(input.endAt).toISOString(),
+
+      candidates:
+        planning.candidates.map(
+          (candidate) => ({
+            resourceId:
+              candidate.resource.id,
+
+            resourceName:
+              candidate.resource.name,
+
+            eligible:
+              candidate.eligible,
+
+            rejectionReason:
+              candidate.rejectionReason,
+
+            routeFeasible:
+              candidate.routeFeasible,
+
+            routeViolations:
+              candidate.routeViolations,
+          })
+        ),
+    }
+  );
+
   if (!planning.bestCandidate) {
     return {
       ok: false,
