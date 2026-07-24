@@ -90,6 +90,22 @@ export async function createConfirmedVoiceAppointment(params: {
       answersBySlot.datetime_display = rawBookingData.datetime_display.trim();
     }
 
+    if (
+      typeof rawBookingData.field_operation_resource_id === "string" &&
+      rawBookingData.field_operation_resource_id.trim()
+    ) {
+      answersBySlot.field_operation_resource_id =
+        rawBookingData.field_operation_resource_id.trim();
+    }
+
+    if (
+      typeof rawBookingData.field_operation_resource_name === "string" &&
+      rawBookingData.field_operation_resource_name.trim()
+    ) {
+      answersBySlot.field_operation_resource_name =
+        rawBookingData.field_operation_resource_name.trim();
+    }
+
     const appointment = await createAppointmentFromVoice({
       tenantId: tenant.id,
       answersBySlot,
