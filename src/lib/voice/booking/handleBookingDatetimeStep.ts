@@ -228,6 +228,63 @@ function parseJsonStringArray(value: unknown): string[] {
   }
 }
 
+type StoredPlannedSlot = {
+  startISO: string;
+  endISO: string;
+  resourceId: string | null;
+  resourceName: string | null;
+};
+
+function parseStoredPlannedSlots(
+  value: unknown
+): StoredPlannedSlot[] {
+  if (typeof value !== "string" || !value.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map((item): StoredPlannedSlot | null => {
+        if (!item || typeof item !== "object") {
+          return null;
+        }
+
+        const record = item as Record<string, unknown>;
+
+        const startISO = clean(record.startISO);
+        const endISO = clean(record.endISO);
+
+        if (
+          !startISO ||
+          !endISO ||
+          Number.isNaN(new Date(startISO).getTime()) ||
+          Number.isNaN(new Date(endISO).getTime())
+        ) {
+          return null;
+        }
+
+        return {
+          startISO,
+          endISO,
+          resourceId: clean(record.resourceId) || null,
+          resourceName: clean(record.resourceName) || null,
+        };
+      })
+      .filter(
+        (item): item is StoredPlannedSlot =>
+          item !== null
+      );
+  } catch {
+    return [];
+  }
+}
+
 export async function executeCanonicalBookingDatetimeStep(
   params: CanonicalBookingDatetimeStepParams
 ): Promise<CanonicalBookingDatetimeStepResult> {
@@ -671,6 +728,27 @@ export async function executeCanonicalBookingDatetimeStep(
 
   const resolvedDatetimeIso = scheduleValidation.requestedAt.toISOString();
 
+  const storedPlannedSlots =
+    parseStoredPlannedSlots(
+      currentBookingData.__datetime_planned_slots
+    );
+
+  const matchingPlannedSlot =
+    storedPlannedSlots.find(
+      (slot) =>
+        new Date(slot.startISO).getTime() ===
+        scheduleValidation.requestedAt.getTime()
+    ) || null;
+
+  const selectedResourceId =
+    matchingPlannedSlot?.resourceId ||
+    requestedResourceId ||
+    null;
+
+  const selectedResourceName =
+    matchingPlannedSlot?.resourceName ||
+    null;
+
   const resolvedDatetimeDisplay =
     formatSuggestedStartForVoice(
       resolvedDatetimeIso,
@@ -680,11 +758,24 @@ export async function executeCanonicalBookingDatetimeStep(
 
   const nextBookingData = {
     ...currentBookingData,
+
     [currentStep.step_key]: rawDatetime,
+
     datetime: rawDatetime,
     datetime_iso: resolvedDatetimeIso,
     datetime_display: resolvedDatetimeDisplay,
-    __datetime_reference_suggested_starts: JSON.stringify([]),
+
+    field_operation_resource_id:
+      selectedResourceId || "",
+
+    field_operation_resource_name:
+      selectedResourceName || "",
+
+    __datetime_reference_suggested_starts:
+      JSON.stringify([]),
+
+    __datetime_planned_slots:
+      JSON.stringify([]),
   };
 
   const nextState: CallState = {
