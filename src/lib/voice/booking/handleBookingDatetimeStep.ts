@@ -335,6 +335,39 @@ export async function executeCanonicalBookingDatetimeStep(
     };
   }
 
+  const serviceAddress =
+    clean(currentBookingData.address) ||
+    clean(currentBookingData.service_address) ||
+    clean(currentBookingData.location) ||
+    clean(currentBookingData.property_address);
+
+  const requestedResourceId =
+    clean(
+      currentBookingData.field_operation_resource_id
+    ) ||
+    clean(
+      currentBookingData.resource_id
+    ) ||
+    null;
+
+  const customerPhone =
+    clean(
+      currentBookingData.customer_phone
+    ) ||
+    callerE164 ||
+    null;
+
+  /*
+  * En este punto todavía no veo que appointmentSettings
+  * esté garantizado dentro de CallState.
+  *
+  * Para no inventar propiedades ni romper TypeScript,
+  * activamos la validación de ruta cuando el flujo ya
+  * recopiló una dirección de servicio.
+  */
+  const fieldServiceAreaEnabled =
+    Boolean(serviceAddress);
+
   const availabilityWindowResult = await resolveVoiceAvailabilityWindow({
     tenantId,
     serviceName,
@@ -390,13 +423,22 @@ export async function executeCanonicalBookingDatetimeStep(
     };
   }
 
-  const scheduleValidation = await resolveVoiceScheduleValidation({
-    tenantId,
-    serviceName,
-    rawDatetime,
-    channel: "voice",
-    referenceSuggestedStarts,
-  });
+  const scheduleValidation =
+    await resolveVoiceScheduleValidation({
+      tenantId,
+      serviceName,
+      rawDatetime,
+      channel: "voice",
+      referenceSuggestedStarts,
+
+      fieldServiceAreaEnabled,
+
+      serviceAddress,
+
+      customerPhone,
+
+      requestedResourceId,
+    });
 
   const scheduleValidationReason = String(
     (scheduleValidation as any)?.reason || ""

@@ -3,6 +3,9 @@ import pool from "../db";
 import { parseVoiceRequestedDate } from "./parseVoiceRequestedDate";
 import { validateServiceScheduleForDate } from "./validateServiceScheduleForDate";
 import { BookingProviderOrchestrator } from "./booking/providers/orchestrator";
+import {
+  filterRouteAwareAvailability,
+} from "../../modules/field-operations/services/routeAwareAvailability.service";
 
 type ResolveVoiceScheduleValidationParams = {
   tenantId: string;
@@ -14,6 +17,17 @@ type ResolveVoiceScheduleValidationParams = {
   durationMin?: number;
   bufferMin?: number;
   referenceSuggestedStarts?: string[];
+
+  fieldServiceAreaEnabled?: boolean;
+
+  serviceAddress?: string | null;
+  serviceLatitude?: number | null;
+  serviceLongitude?: number | null;
+  serviceFormattedAddress?: string | null;
+
+  customerPhone?: string | null;
+
+  requestedResourceId?: string | null;
 };
 
 export type ResolveVoiceScheduleValidationResult =
@@ -90,42 +104,142 @@ async function filterBookableSuggestedStarts(params: {
   durationMin: number;
   bufferMin: number;
   timeZone: string;
-}): Promise<string[]> {
-  const orchestrator = new BookingProviderOrchestrator();
 
-  const uniqueCandidates = dedupeStringArray(params.candidateStarts);
+  fieldServiceAreaEnabled: boolean;
+
+  serviceAddress?: string | null;
+  serviceLatitude?: number | null;
+  serviceLongitude?: number | null;
+  serviceFormattedAddress?: string | null;
+
+  customerPhone?: string | null;
+  requestedResourceId?: string | null;
+}): Promise<string[]> {
+  const orchestrator =
+    new BookingProviderOrchestrator();
+
+  const uniqueCandidates =
+    dedupeStringArray(
+      params.candidateStarts
+    );
 
   if (!uniqueCandidates.length) {
     return [];
   }
 
-  const bookable: string[] = [];
+  const providerBookable:
+    Array<{
+      startISO: string;
+      endISO: string;
+    }> = [];
 
-  for (const startISO of uniqueCandidates) {
-    const start = new Date(startISO);
+  for (
+    const startISO of uniqueCandidates
+  ) {
+    const start =
+      new Date(startISO);
 
-    if (Number.isNaN(start.getTime())) {
+    if (
+      Number.isNaN(
+        start.getTime()
+      )
+    ) {
       continue;
     }
 
-    const end = addMinutes(start, params.durationMin);
+    const end =
+      addMinutes(
+        start,
+        params.durationMin
+      );
 
-    const availability = await orchestrator.checkAvailability({
-      tenantId: params.tenantId,
-      summary: params.serviceName,
-      startISO: start.toISOString(),
-      endISO: end.toISOString(),
-      timeZone: params.timeZone,
-      bufferMin: params.bufferMin,
-      calendarId: null,
-    });
+    const availability =
+      await orchestrator.checkAvailability({
+        tenantId:
+          params.tenantId,
 
-    if (availability.ok) {
-      bookable.push(start.toISOString());
+        summary:
+          params.serviceName,
+
+        startISO:
+          start.toISOString(),
+
+        endISO:
+          end.toISOString(),
+
+        timeZone:
+          params.timeZone,
+
+        bufferMin:
+          params.bufferMin,
+
+        calendarId: null,
+      });
+
+    if (!availability.ok) {
+      continue;
     }
+
+    providerBookable.push({
+      startISO:
+        start.toISOString(),
+
+      endISO:
+        end.toISOString(),
+    });
   }
 
-  return bookable;
+  const routeAware =
+    await filterRouteAwareAvailability({
+      tenantId:
+        params.tenantId,
+
+      fieldServiceAreaEnabled:
+        params.fieldServiceAreaEnabled,
+
+      address:
+        params.serviceAddress,
+
+      latitude:
+        params.serviceLatitude,
+
+      longitude:
+        params.serviceLongitude,
+
+      formattedAddress:
+        params.serviceFormattedAddress,
+
+      customerPhone:
+        params.customerPhone,
+
+      requestedResourceId:
+        params.requestedResourceId,
+
+      candidates:
+        providerBookable,
+
+      maxResults: 3,
+    });
+
+  if (!routeAware.ok) {
+    console.warn(
+      "[VOICE][ROUTE_AWARE_SUGGESTIONS_UNAVAILABLE]",
+      {
+        tenantId:
+          params.tenantId,
+
+        error:
+          routeAware.error,
+      }
+    );
+
+    return [];
+  }
+
+  return routeAware.slots.map(
+    (slot) =>
+      slot.startISO
+  );
 }
 
 export async function resolveVoiceScheduleValidation(
@@ -256,6 +370,26 @@ export async function resolveVoiceScheduleValidation(
           durationMin: defaultDurationMin,
           bufferMin,
           timeZone,
+          fieldServiceAreaEnabled:
+            params.fieldServiceAreaEnabled === true,
+
+          serviceAddress:
+            params.serviceAddress,
+
+          serviceLatitude:
+            params.serviceLatitude,
+
+          serviceLongitude:
+            params.serviceLongitude,
+
+          serviceFormattedAddress:
+            params.serviceFormattedAddress,
+
+          customerPhone:
+            params.customerPhone,
+
+          requestedResourceId:
+            params.requestedResourceId,
         })
       ).slice(0, 3);
 
@@ -309,6 +443,26 @@ export async function resolveVoiceScheduleValidation(
         durationMin: defaultDurationMin,
         bufferMin,
         timeZone,
+        fieldServiceAreaEnabled:
+          params.fieldServiceAreaEnabled === true,
+
+        serviceAddress:
+          params.serviceAddress,
+
+        serviceLatitude:
+          params.serviceLatitude,
+
+        serviceLongitude:
+          params.serviceLongitude,
+
+        serviceFormattedAddress:
+          params.serviceFormattedAddress,
+
+        customerPhone:
+          params.customerPhone,
+
+        requestedResourceId:
+          params.requestedResourceId,
       })
     ).slice(0, 3);
 
@@ -379,6 +533,26 @@ export async function resolveVoiceScheduleValidation(
             durationMin: defaultDurationMin,
             bufferMin,
             timeZone,
+            fieldServiceAreaEnabled:
+              params.fieldServiceAreaEnabled === true,
+
+            serviceAddress:
+              params.serviceAddress,
+
+            serviceLatitude:
+              params.serviceLatitude,
+
+            serviceLongitude:
+              params.serviceLongitude,
+
+            serviceFormattedAddress:
+              params.serviceFormattedAddress,
+
+            customerPhone:
+              params.customerPhone,
+
+            requestedResourceId:
+              params.requestedResourceId,
           })
         ).slice(0, 3)
       : [];
@@ -405,6 +579,117 @@ export async function resolveVoiceScheduleValidation(
     };
   }
 
+    const routeValidation =
+    await filterRouteAwareAvailability({
+      tenantId:
+        params.tenantId,
+
+      fieldServiceAreaEnabled:
+        params.fieldServiceAreaEnabled === true,
+
+      address:
+        params.serviceAddress,
+
+      latitude:
+        params.serviceLatitude,
+
+      longitude:
+        params.serviceLongitude,
+
+      formattedAddress:
+        params.serviceFormattedAddress,
+
+      customerPhone:
+        params.customerPhone,
+
+      requestedResourceId:
+        params.requestedResourceId,
+
+      candidates: [
+        {
+          startISO:
+            parsed.requestedAt.toISOString(),
+
+          endISO:
+            requestedEndAt.toISOString(),
+        },
+      ],
+
+      maxResults: 1,
+    });
+
+  if (
+    !routeValidation.ok ||
+    routeValidation.slots.length === 0
+  ) {
+    const rawAlternativeStarts =
+      normalizeSuggestedStarts(
+        (
+          scheduleValidation as {
+            suggestedStarts?: unknown;
+          }
+        ).suggestedStarts
+      );
+
+    const suggestedStarts =
+      (
+        await filterBookableSuggestedStarts({
+          tenantId:
+            params.tenantId,
+
+          serviceName:
+            params.serviceName,
+
+          candidateStarts:
+            rawAlternativeStarts,
+
+          durationMin:
+            defaultDurationMin,
+
+          bufferMin,
+
+          timeZone,
+
+          fieldServiceAreaEnabled:
+            params.fieldServiceAreaEnabled === true,
+
+          serviceAddress:
+            params.serviceAddress,
+
+          serviceLatitude:
+            params.serviceLatitude,
+
+          serviceLongitude:
+            params.serviceLongitude,
+
+          serviceFormattedAddress:
+            params.serviceFormattedAddress,
+
+          customerPhone:
+            params.customerPhone,
+
+          requestedResourceId:
+            params.requestedResourceId,
+        })
+      ).slice(0, 3);
+
+    return {
+      ok: false,
+
+      reason:
+        "schedule_not_available",
+
+      requestedAt:
+        parsed.requestedAt,
+
+      availableTimes: [],
+
+      suggestedStarts,
+
+      timeZone,
+    };
+  }
+  
   return {
     ok: true,
     requestedAt: parsed.requestedAt,
