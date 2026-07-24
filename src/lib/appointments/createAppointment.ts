@@ -92,6 +92,11 @@ function buildExtraBookingDescriptionLines(
     "datetime_reference_suggested_starts",
     "__datetime_reference_suggested_starts",
     "__booking_busy_suggested_starts",
+    "field_operation_resource_id",
+    "field_operation_resource_name",
+    "resource_id",
+    "__datetime_planned_slots",
+    "__datetime_reference_window_key",
   ]);
 
   return Object.entries(answersBySlot || {})
