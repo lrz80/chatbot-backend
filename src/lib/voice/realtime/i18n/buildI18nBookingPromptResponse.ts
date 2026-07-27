@@ -2,6 +2,7 @@
 
 import { clean } from "../utils/clean";
 import { buildExactRealtimeSpeechResponse } from "../buildExactRealtimeSpeechResponse";
+import { buildVoiceSpeechIdentity } from "../voiceSpeechIdentity";
 
 export function buildI18nBookingPromptResponse(params: {
   prompt: string;
@@ -40,9 +41,11 @@ export function buildI18nBookingPromptResponse(params: {
     conversation: "none",
     tool_choice: "none",
     instructions: [
-      "You are a speech renderer for a live phone booking flow.",
+      buildVoiceSpeechIdentity({
+        activeLanguage: effectiveLockedLanguage,
+      }),
       "",
-      "Booking language lock rule:",
+      "BOOKING LANGUAGE LOCK:",
       "- The booking flow language is locked until the booking flow ends.",
       "- Use the locked booking language for every booking question, retry, unavailable message, confirmation, and booking follow-up.",
       "- Do not switch language during the booking flow even if the caller speaks another language.",

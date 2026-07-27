@@ -1,6 +1,7 @@
 // src/lib/voice/realtime/bookingSpeechRenderer.ts
 
 import type { VoiceLocale } from "../types";
+import { buildVoiceSpeechIdentity } from "./voiceSpeechIdentity";
 
 export type BookingSpeechMode = "exact" | "natural";
 
@@ -43,7 +44,11 @@ export function buildBookingSpeechResponse(
         step_key: stepKey,
       },
       instructions: [
-        "You are a speech renderer for a live phone booking flow.",
+        buildVoiceSpeechIdentity({
+          activeLanguage: params.currentLocale,
+        }),
+        "",
+        "SPEECH TASK:",
         "Speak exactly the booking prompt provided in the input.",
         "Do not use conversation history.",
         "Do not reason.",
@@ -79,7 +84,11 @@ export function buildBookingSpeechResponse(
       locale: params.currentLocale,
     },
     instructions: [
-      "You are a speech renderer for a live phone booking flow.",
+      buildVoiceSpeechIdentity({
+        activeLanguage: params.currentLocale,
+      }),
+      "",
+      "SPEECH TASK:",
       "Your only job is to say the next booking question naturally.",
       "Use the same language the caller is currently using.",
       "Support any caller language.",

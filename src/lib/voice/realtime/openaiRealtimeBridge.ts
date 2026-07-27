@@ -50,6 +50,7 @@ import {
   buildReturningCustomerGreetingInput,
   resolveReturningCustomer,
 } from "../returningCustomer";
+import { buildVoiceSpeechIdentity } from "./voiceSpeechIdentity";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -594,6 +595,11 @@ export async function createOpenAiRealtimeBridge({
           },
 
           instructions: [
+            buildVoiceSpeechIdentity({
+              activeLanguage: greetingInput.language,
+            }),
+            "",
+            "GREETING TASK:",
             "You are producing the first spoken greeting for a live business phone call.",
 
             `The caller's stored language is: ${greetingInput.language}.`,
@@ -706,7 +712,11 @@ export async function createOpenAiRealtimeBridge({
           },
 
           instructions: [
-            "You are a speech renderer for a live phone call.",
+            buildVoiceSpeechIdentity({
+              activeLanguage: currentLocale,
+            }),
+            "",
+            "GREETING TASK:",
             "Speak exactly the greeting provided in the input.",
             "Do not use conversation history.",
             "Do not reason.",
@@ -1279,8 +1289,12 @@ export async function createOpenAiRealtimeBridge({
                     conversation: "none",
                     tool_choice: "auto",
                     instructions: [
+                      buildVoiceSpeechIdentity({
+                        activeLanguage: currentLocale,
+                      }),
+                      "",
+                      "POST-BOOKING TASK:",
                       "You are handling a post-booking live phone turn.",
-                      "Use the caller's active language.",
 
                       "The booking flow has already completed successfully.",
                       "The appointment has already been confirmed.",
@@ -1329,6 +1343,11 @@ export async function createOpenAiRealtimeBridge({
                 : {
                   tool_choice: "auto",
                   instructions: [
+                    buildVoiceSpeechIdentity({
+                      activeLanguage: currentLocale,
+                    }),
+                    "",
+                    "CONVERSATION TASK:",
                     "You are handling a live phone call for the configured tenant business.",
 
                     `Business name: ${
@@ -1493,7 +1512,11 @@ export async function createOpenAiRealtimeBridge({
                 expected_prompt: retryExactPrompt,
               },
               instructions: [
-                "You are a speech renderer for a live phone booking flow.",
+                buildVoiceSpeechIdentity({
+                  activeLanguage: currentLocale,
+                }),
+                "",
+                "SPEECH TASK:",
                 "Speak exactly the booking prompt provided in the input.",
                 "Do not use conversation history.",
                 "Do not reason.",
@@ -1697,7 +1720,11 @@ export async function createOpenAiRealtimeBridge({
               expected_prompt: retryExactPrompt,
             },
             instructions: [
-              "You are a speech renderer for a live phone booking flow.",
+              buildVoiceSpeechIdentity({
+                activeLanguage: currentLocale,
+              }),
+              "",
+              "SPEECH TASK:",
               "Speak exactly the booking prompt provided in the input.",
               "Do not use conversation history.",
               "Do not reason.",

@@ -1,5 +1,6 @@
 //src/lib/voice/realtime/buildRealtimeVoiceSession.ts
 import { resolveVoiceProviderVoice } from "../resolveVoiceProviderVoice";
+import { buildVoiceSpeechIdentity } from "./voiceSpeechIdentity";
 
 export type BuildRealtimeVoiceSessionParams = {
   businessName: string;
@@ -55,9 +56,13 @@ export function buildRealtimeVoiceSession({
   const voice = configuredVoice || String(fallbackVoice || "marin");
 
   const instructions = `
-You are Aamy, a live phone assistant for ${businessName}.
+  You are Aamy, a live phone assistant for ${businessName}.
 
-${buildLanguageInstruction()}
+  ${buildVoiceSpeechIdentity({
+    activeLanguage: normalizedLocale,
+  })}
+
+  ${buildLanguageInstruction()}
 
 CORE BEHAVIOR:
 - Speak naturally.
