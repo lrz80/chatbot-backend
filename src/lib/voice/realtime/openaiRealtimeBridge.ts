@@ -50,6 +50,9 @@ import {
   buildReturningCustomerGreetingInput,
   resolveReturningCustomer,
 } from "../returningCustomer";
+import {
+  resolveVoiceIntentFromUtterance,
+} from "../resolveVoiceIntentFromUtterance";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -1236,6 +1239,14 @@ export async function createOpenAiRealtimeBridge({
             !hangupRequestedByTool;
 
           if (shouldWakeModelForFreeUserTranscript) {
+            const resolvedVoiceIntent =
+              resolveVoiceIntentFromUtterance(
+                lastUserTranscript
+              );
+
+            const explicitBookingIntent =
+              resolvedVoiceIntent === "booking";
+
             console.log("[VOICE_REALTIME][FREE_USER_TRANSCRIPT_MODEL_WAKE_REQUESTED]", {
               callSid,
               lastUserTranscript,
@@ -1310,7 +1321,12 @@ export async function createOpenAiRealtimeBridge({
                     ],
                   }
                 : {
-                  tool_choice: "auto",
+                  tool_choice: explicitBookingIntent
+                    ? {
+                        type: "function",
+                        name: "get_booking_flow",
+                      }
+                    : "auto",
                   instructions: [
                     "You are handling a live phone call for the configured tenant business.",
 
