@@ -136,14 +136,7 @@ function extractExactBookingPromptFromInstructions(
 }
 
 function isExactBookingPromptResponseSource(source: unknown): boolean {
-  const value = clean(source);
-
-  return (
-    value === "tool_followup:get_booking_flow" ||
-    value === "tool_followup:submit_booking_step" ||
-    value === "tool_followup:submit_booking_step:retry" ||
-    value === "tool_followup:submit_booking_step:exact_retry"
-  );
+  return clean(source) === "tool_followup:submit_booking_step:exact_retry";
 }
 
 function isAssistantTranscriptCompatibleWithExpectedPrompt(params: {

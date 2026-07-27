@@ -127,16 +127,23 @@ function resolveStructuredAddressProtocolValue(params: {
         continue;
       }
 
-      const status = clean((parsed as any).status).toLowerCase();
-      const normalized = clean((parsed as any).normalized);
+      const status = clean(
+        (parsed as any).status
+      ).toLowerCase();
+
+      const normalized = clean(
+        (parsed as any).normalized
+      );
 
       if (status === "unknown") {
         return {
           ok: false,
           error: "INCOMPATIBLE_ADDRESS_VALUE",
           value: "",
-          rawTranscriptValue: params.rawTranscriptValue,
-          modelValue: params.modelValue,
+          rawTranscriptValue:
+            params.rawTranscriptValue,
+          modelValue:
+            params.modelValue,
           source: "none",
         };
       }
@@ -148,8 +155,10 @@ function resolveStructuredAddressProtocolValue(params: {
       return {
         ok: true,
         value: normalized,
-        rawTranscriptValue: params.rawTranscriptValue,
-        modelValue: params.modelValue,
+        rawTranscriptValue:
+          params.rawTranscriptValue,
+        modelValue:
+          params.modelValue,
         source: "model",
       };
     } catch {
@@ -157,12 +166,30 @@ function resolveStructuredAddressProtocolValue(params: {
     }
   }
 
+  const directValue =
+    clean(params.value) ||
+    clean(params.rawTranscriptValue);
+
+  if (directValue) {
+    return {
+      ok: true,
+      value: directValue,
+      rawTranscriptValue:
+        params.rawTranscriptValue,
+      modelValue:
+        params.modelValue,
+      source: "transcript",
+    };
+  }
+
   return {
     ok: false,
     error: "INCOMPATIBLE_ADDRESS_VALUE",
     value: "",
-    rawTranscriptValue: params.rawTranscriptValue,
-    modelValue: params.modelValue,
+    rawTranscriptValue:
+      params.rawTranscriptValue,
+    modelValue:
+      params.modelValue,
     source: "none",
   };
 }
