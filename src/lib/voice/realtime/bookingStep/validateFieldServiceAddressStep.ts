@@ -242,7 +242,7 @@ export async function validateFieldServiceAddressStep(
           bookingState,
 
         next_required_step:
-          null,
+          params.currentStep,
       },
     };
   }
@@ -361,7 +361,7 @@ export async function validateFieldServiceAddressStep(
           bookingState,
 
         next_required_step:
-          null,
+          params.currentStep,
       },
     };
   }
