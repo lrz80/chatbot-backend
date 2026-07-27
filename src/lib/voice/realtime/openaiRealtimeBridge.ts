@@ -970,12 +970,28 @@ export async function createOpenAiRealtimeBridge({
       const responseState = responseController.getState();
       const activeResponseSource = clean(responseState.activeResponseSource || "");
 
-      const fallbackExpectedPrompt = clean(
-        (realtimeState as any).pendingBookingStepPrompt || ""
-      );
+      const isRetryBookingPromptResponse =
+        activeResponseSource ===
+          "tool_followup:submit_booking_step:retry";
+
+      const isExactRetryBookingPromptResponse =
+        activeResponseSource ===
+          "tool_followup:submit_booking_step:exact_retry";
+
+      const fallbackExpectedPrompt =
+        !isRetryBookingPromptResponse &&
+        !isExactRetryBookingPromptResponse
+          ? clean(
+              (realtimeState as any)
+                .pendingBookingStepPrompt || ""
+            )
+          : "";
 
       const expectedPrompt =
-        expectedAssistantPromptForActiveResponse || fallbackExpectedPrompt;
+        clean(
+          expectedAssistantPromptForActiveResponse
+        ) ||
+        fallbackExpectedPrompt;
 
       const shouldEnforceExactPrompt =
         isExactBookingPromptResponseSource(activeResponseSource) &&
