@@ -443,6 +443,8 @@ async function getBookableStarts(params: {
   maxSuggestions: number;
   baseDate: Date;
 
+  notBefore?: Date | null;
+
   fieldServiceAreaEnabled: boolean;
 
   serviceAddress?: string | null;
@@ -456,8 +458,16 @@ async function getBookableStarts(params: {
   const startedAt = Date.now();
 
   const orchestrator = new BookingProviderOrchestrator();
-  const earliestAllowedAt = addMinutes(params.baseDate, params.minLeadMinutes);
+  const leadTimeBoundary = addMinutes(
+    params.baseDate,
+    params.minLeadMinutes
+  );
 
+const earliestAllowedAt =
+  params.notBefore &&
+  params.notBefore.getTime() > leadTimeBoundary.getTime()
+    ? params.notBefore
+    : leadTimeBoundary;
   const candidateStarts: Date[] = [];
 
   for (
@@ -623,6 +633,148 @@ async function getBookableStarts(params: {
   );
 
   return bookable;
+}
+
+export async function resolveVoiceBookableStartsForDate(params: {
+  tenantId: string;
+  serviceName: string;
+
+  targetDate: Date;
+  notBefore?: Date | null;
+
+  channel?: string;
+  baseDate?: Date;
+  timeZone?: string | null;
+
+  fieldServiceAreaEnabled?: boolean;
+
+  serviceAddress?: string | null;
+  serviceLatitude?: number | null;
+  serviceLongitude?: number | null;
+  serviceFormattedAddress?: string | null;
+
+  customerPhone?: string | null;
+  requestedResourceId?: string | null;
+}): Promise<VoicePlannedAvailabilitySlot[]> {
+  const baseDate =
+    params.baseDate instanceof Date
+      ? params.baseDate
+      : new Date();
+
+  const { rows } = await pool.query(
+    `
+      SELECT
+        timezone,
+        default_duration_min,
+        buffer_min,
+        min_lead_minutes,
+        slot_increment_min,
+        max_window_suggestions
+      FROM appointment_settings
+      WHERE tenant_id = $1
+      LIMIT 1
+    `,
+    [params.tenantId]
+  );
+
+  const settings = rows[0];
+
+  if (!settings) {
+    return [];
+  }
+
+  const timeZone =
+    clean(params.timeZone) ||
+    clean(settings.timezone) ||
+    "America/New_York";
+
+  const durationMin =
+    toPositiveInt(
+      settings.default_duration_min,
+      30
+    );
+
+  const bufferMin =
+    toPositiveInt(
+      settings.buffer_min,
+      0
+    );
+
+  const minLeadMinutes =
+    toPositiveInt(
+      settings.min_lead_minutes,
+      0
+    );
+
+  const incrementMin =
+    toPositiveInt(
+      settings.slot_increment_min,
+      15
+    );
+
+  const maxSuggestions =
+    toPositiveInt(
+      settings.max_window_suggestions,
+      3
+    );
+
+  const dateParts =
+    getDatePartsInTimeZone(
+      params.targetDate,
+      timeZone
+    );
+
+  return getBookableStarts({
+    tenantId:
+      params.tenantId,
+
+    serviceName:
+      params.serviceName,
+
+    channel:
+      params.channel || "voice",
+
+    timeZone,
+
+    durationMin,
+    bufferMin,
+    minLeadMinutes,
+
+    dateParts,
+
+    // Día completo. El horario real lo decide
+    // validateServiceScheduleForDate().
+    windowStartMin: 0,
+    windowEndMin: 24 * 60,
+
+    incrementMin,
+    maxSuggestions,
+    baseDate,
+
+    notBefore:
+      params.notBefore || null,
+
+    fieldServiceAreaEnabled:
+      params.fieldServiceAreaEnabled === true,
+
+    serviceAddress:
+      params.serviceAddress,
+
+    serviceLatitude:
+      params.serviceLatitude,
+
+    serviceLongitude:
+      params.serviceLongitude,
+
+    serviceFormattedAddress:
+      params.serviceFormattedAddress,
+
+    customerPhone:
+      params.customerPhone,
+
+    requestedResourceId:
+      params.requestedResourceId,
+  });
 }
 
 export async function resolveVoiceAvailabilityWindow(

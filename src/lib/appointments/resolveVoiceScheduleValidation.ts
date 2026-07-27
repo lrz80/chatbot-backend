@@ -6,6 +6,9 @@ import { BookingProviderOrchestrator } from "./booking/providers/orchestrator";
 import {
   filterRouteAwareAvailability,
 } from "../../modules/field-operations/services/routeAwareAvailability.service";
+import {
+  resolveVoiceBookableStartsForDate,
+} from "./resolveVoiceAvailabilityWindow";
 
 type ResolveVoiceScheduleValidationParams = {
   tenantId: string;
@@ -83,163 +86,8 @@ function dedupeStringArray(values: string[]): string[] {
   );
 }
 
-function normalizeSuggestedStarts(input: unknown): string[] {
-  if (!Array.isArray(input)) {
-    return [];
-  }
-
-  return dedupeStringArray(
-    input.filter((value): value is string => typeof value === "string")
-  );
-}
-
 function addMinutes(date: Date, minutes: number): Date {
   return new Date(date.getTime() + minutes * 60 * 1000);
-}
-
-async function filterBookableSuggestedStarts(params: {
-  tenantId: string;
-  serviceName: string;
-  candidateStarts: string[];
-  durationMin: number;
-  bufferMin: number;
-  timeZone: string;
-
-  fieldServiceAreaEnabled: boolean;
-
-  serviceAddress?: string | null;
-  serviceLatitude?: number | null;
-  serviceLongitude?: number | null;
-  serviceFormattedAddress?: string | null;
-
-  customerPhone?: string | null;
-  requestedResourceId?: string | null;
-}): Promise<string[]> {
-  const orchestrator =
-    new BookingProviderOrchestrator();
-
-  const uniqueCandidates =
-    dedupeStringArray(
-      params.candidateStarts
-    );
-
-  if (!uniqueCandidates.length) {
-    return [];
-  }
-
-  const providerBookable:
-    Array<{
-      startISO: string;
-      endISO: string;
-    }> = [];
-
-  for (
-    const startISO of uniqueCandidates
-  ) {
-    const start =
-      new Date(startISO);
-
-    if (
-      Number.isNaN(
-        start.getTime()
-      )
-    ) {
-      continue;
-    }
-
-    const end =
-      addMinutes(
-        start,
-        params.durationMin
-      );
-
-    const availability =
-      await orchestrator.checkAvailability({
-        tenantId:
-          params.tenantId,
-
-        summary:
-          params.serviceName,
-
-        startISO:
-          start.toISOString(),
-
-        endISO:
-          end.toISOString(),
-
-        timeZone:
-          params.timeZone,
-
-        bufferMin:
-          params.bufferMin,
-
-        calendarId: null,
-      });
-
-    if (!availability.ok) {
-      continue;
-    }
-
-    providerBookable.push({
-      startISO:
-        start.toISOString(),
-
-      endISO:
-        end.toISOString(),
-    });
-  }
-
-  const routeAware =
-    await filterRouteAwareAvailability({
-      tenantId:
-        params.tenantId,
-
-      fieldServiceAreaEnabled:
-        params.fieldServiceAreaEnabled,
-
-      address:
-        params.serviceAddress,
-
-      latitude:
-        params.serviceLatitude,
-
-      longitude:
-        params.serviceLongitude,
-
-      formattedAddress:
-        params.serviceFormattedAddress,
-
-      customerPhone:
-        params.customerPhone,
-
-      requestedResourceId:
-        params.requestedResourceId,
-
-      candidates:
-        providerBookable,
-
-      maxResults: 3,
-    });
-
-  if (!routeAware.ok) {
-    console.warn(
-      "[VOICE][ROUTE_AWARE_SUGGESTIONS_UNAVAILABLE]",
-      {
-        tenantId:
-          params.tenantId,
-
-        error:
-          routeAware.error,
-      }
-    );
-
-    return [];
-  }
-
-  return routeAware.slots.map(
-    (slot) =>
-      slot.startISO
-  );
 }
 
 export async function resolveVoiceScheduleValidation(
@@ -339,37 +187,31 @@ export async function resolveVoiceScheduleValidation(
       ? bufferMinRaw
       : 0;
 
-  if (minLeadMinutes > 0) {
-    const earliestAllowedAt = addMinutes(
-      params.baseDate instanceof Date ? params.baseDate : new Date(),
-      minLeadMinutes
-    );
+  const findAlternatives =
+    async (
+      notBefore: Date
+    ): Promise<string[]> => {
+      const slots =
+        await resolveVoiceBookableStartsForDate({
+          tenantId:
+            params.tenantId,
 
-    if (parsed.requestedAt.getTime() < earliestAllowedAt.getTime()) {
-      const fallbackSuggestionValidation = await validateServiceScheduleForDate({
-        tenantId: params.tenantId,
-        serviceName: params.serviceName,
-        requestedAt: earliestAllowedAt,
-        channel: params.channel || "voice",
-        timeZone,
-        durationMin: defaultDurationMin,
-        bufferMin,
-        includeBufferInClosingBoundary: true,
-      });
+          serviceName:
+            params.serviceName,
 
-      const rawSuggestedStarts = normalizeSuggestedStarts(
-        (fallbackSuggestionValidation as { suggestedStarts?: unknown })
-          .suggestedStarts
-      );
+          targetDate:
+            parsed.requestedAt,
 
-      const suggestedStarts = (
-        await filterBookableSuggestedStarts({
-          tenantId: params.tenantId,
-          serviceName: params.serviceName,
-          candidateStarts: rawSuggestedStarts,
-          durationMin: defaultDurationMin,
-          bufferMin,
+          notBefore,
+
+          channel:
+            params.channel || "voice",
+
+          baseDate:
+            params.baseDate,
+
           timeZone,
+
           fieldServiceAreaEnabled:
             params.fieldServiceAreaEnabled === true,
 
@@ -390,13 +232,38 @@ export async function resolveVoiceScheduleValidation(
 
           requestedResourceId:
             params.requestedResourceId,
-        })
-      ).slice(0, 3);
+        });
+
+      return slots.map(
+        (slot) => slot.startISO
+      );
+    };
+
+  if (minLeadMinutes > 0) {
+    const earliestAllowedAt =
+      addMinutes(
+        params.baseDate instanceof Date
+          ? params.baseDate
+          : new Date(),
+
+        minLeadMinutes
+      );
+
+    if (
+      parsed.requestedAt.getTime() <
+      earliestAllowedAt.getTime()
+    ) {
+      const suggestedStarts =
+        await findAlternatives(
+          earliestAllowedAt
+        );
 
       return {
         ok: false,
-        reason: "lead_time_not_met",
-        requestedAt: parsed.requestedAt,
+        reason:
+          "lead_time_not_met",
+        requestedAt:
+          parsed.requestedAt,
         availableTimes: [],
         suggestedStarts,
         timeZone,
@@ -425,51 +292,26 @@ export async function resolveVoiceScheduleValidation(
   });
 
   if (!scheduleValidation.ok) {
-    const availableTimes = dedupeStringArray(
-      Array.isArray(scheduleValidation.availableTimes)
-        ? scheduleValidation.availableTimes
-        : []
-    );
+    const availableTimes =
+      dedupeStringArray(
+        Array.isArray(
+          scheduleValidation.availableTimes
+        )
+          ? scheduleValidation.availableTimes
+          : []
+      );
 
-    const rawSuggestedStarts = normalizeSuggestedStarts(
-      (scheduleValidation as { suggestedStarts?: unknown }).suggestedStarts
-    );
-
-    const suggestedStarts = (
-      await filterBookableSuggestedStarts({
-        tenantId: params.tenantId,
-        serviceName: params.serviceName,
-        candidateStarts: rawSuggestedStarts,
-        durationMin: defaultDurationMin,
-        bufferMin,
-        timeZone,
-        fieldServiceAreaEnabled:
-          params.fieldServiceAreaEnabled === true,
-
-        serviceAddress:
-          params.serviceAddress,
-
-        serviceLatitude:
-          params.serviceLatitude,
-
-        serviceLongitude:
-          params.serviceLongitude,
-
-        serviceFormattedAddress:
-          params.serviceFormattedAddress,
-
-        customerPhone:
-          params.customerPhone,
-
-        requestedResourceId:
-          params.requestedResourceId,
-      })
-    ).slice(0, 3);
+    const suggestedStarts =
+      await findAlternatives(
+        parsed.requestedAt
+      );
 
     return {
       ok: false,
-      reason: "schedule_not_available",
-      requestedAt: parsed.requestedAt,
+      reason:
+        "schedule_not_available",
+      requestedAt:
+        parsed.requestedAt,
       availableTimes,
       suggestedStarts,
       timeZone,
@@ -506,56 +348,20 @@ export async function resolveVoiceScheduleValidation(
       .trim()
       .toUpperCase();
 
-    const rawProviderSuggestedStarts = normalizeSuggestedStarts(
-      (requestedAvailability as { suggestedStarts?: unknown }).suggestedStarts
-    );
-
-    const rawScheduleSuggestedStarts = normalizeSuggestedStarts(
-      (scheduleValidation as { suggestedStarts?: unknown }).suggestedStarts
-    );
-
-    const rawSuggestedStarts = dedupeStringArray([
-      ...rawProviderSuggestedStarts,
-      ...rawScheduleSuggestedStarts,
-    ]);
-
     const shouldResolveSuggestions =
-      providerError === "SLOT_UNAVAILABLE" ||
-      providerError === "SLOT_BUSY" ||
-      providerError === "TIME_SLOT_UNAVAILABLE";
+      providerError ===
+        "SLOT_UNAVAILABLE" ||
+      providerError ===
+        "SLOT_BUSY" ||
+      providerError ===
+        "TIME_SLOT_UNAVAILABLE";
 
-    const suggestedStarts = shouldResolveSuggestions
-      ? (
-          await filterBookableSuggestedStarts({
-            tenantId: params.tenantId,
-            serviceName: params.serviceName,
-            candidateStarts: rawSuggestedStarts,
-            durationMin: defaultDurationMin,
-            bufferMin,
-            timeZone,
-            fieldServiceAreaEnabled:
-              params.fieldServiceAreaEnabled === true,
-
-            serviceAddress:
-              params.serviceAddress,
-
-            serviceLatitude:
-              params.serviceLatitude,
-
-            serviceLongitude:
-              params.serviceLongitude,
-
-            serviceFormattedAddress:
-              params.serviceFormattedAddress,
-
-            customerPhone:
-              params.customerPhone,
-
-            requestedResourceId:
-              params.requestedResourceId,
-          })
-        ).slice(0, 3)
-      : [];
+    const suggestedStarts =
+      shouldResolveSuggestions
+        ? await findAlternatives(
+            parsed.requestedAt
+          )
+        : [];
 
     return {
       ok: false,
@@ -622,131 +428,10 @@ export async function resolveVoiceScheduleValidation(
     !routeValidation.ok ||
     routeValidation.slots.length === 0
   ) {
-    /*
-    * El horario solicitado puede estar libre en Google/Square
-    * pero ser físicamente imposible por la ruta.
-    *
-    * En ese caso scheduleValidation normalmente no contiene
-    * sugerencias porque, desde el punto de vista del horario
-    * comercial, la hora sí era válida.
-    *
-    * Generamos candidatos cercanos usando el mismo motor de
-    * schedule y después los filtramos por:
-    *
-    *   provider + Field Operations + ruta.
-    */
-    const alternativeScheduleValidation =
-      await validateServiceScheduleForDate({
-        tenantId: params.tenantId,
-        serviceName: params.serviceName,
-
-        requestedAt: addMinutes(
-          parsed.requestedAt,
-          15
-        ),
-
-        channel:
-          params.channel || "voice",
-
-        timeZone,
-
-        durationMin:
-          defaultDurationMin,
-
-        bufferMin,
-
-        includeBufferInClosingBoundary:
-          true,
-      });
-
-    const rawAlternativeStarts =
-      dedupeStringArray([
-        ...normalizeSuggestedStarts(
-          (
-            alternativeScheduleValidation as {
-              suggestedStarts?: unknown;
-            }
-          ).suggestedStarts
-        ),
-
-        ...(
-          alternativeScheduleValidation.ok
-            ? [
-                addMinutes(
-                  parsed.requestedAt,
-                  15
-                ).toISOString(),
-
-                addMinutes(
-                  parsed.requestedAt,
-                  30
-                ).toISOString(),
-
-                addMinutes(
-                  parsed.requestedAt,
-                  45
-                ).toISOString(),
-
-                addMinutes(
-                  parsed.requestedAt,
-                  60
-                ).toISOString(),
-
-                addMinutes(
-                  parsed.requestedAt,
-                  75
-                ).toISOString(),
-
-                addMinutes(
-                  parsed.requestedAt,
-                  90
-                ).toISOString(),
-              ]
-            : []
-        ),
-      ]);
-
     const suggestedStarts =
-      (
-        await filterBookableSuggestedStarts({
-          tenantId:
-            params.tenantId,
-
-          serviceName:
-            params.serviceName,
-
-          candidateStarts:
-            rawAlternativeStarts,
-
-          durationMin:
-            defaultDurationMin,
-
-          bufferMin,
-
-          timeZone,
-
-          fieldServiceAreaEnabled:
-            params.fieldServiceAreaEnabled === true,
-
-          serviceAddress:
-            params.serviceAddress,
-
-          serviceLatitude:
-            params.serviceLatitude,
-
-          serviceLongitude:
-            params.serviceLongitude,
-
-          serviceFormattedAddress:
-            params.serviceFormattedAddress,
-
-          customerPhone:
-            params.customerPhone,
-
-          requestedResourceId:
-            params.requestedResourceId,
-        })
-      ).slice(0, 3);
+      await findAlternatives(
+        parsed.requestedAt
+      );
 
     console.log(
       "[VOICE][ROUTE_SLOT_UNAVAILABLE]",
@@ -767,9 +452,6 @@ export async function resolveVoiceScheduleValidation(
           routeValidation.ok
             ? routeValidation.rejected
             : routeValidation.error,
-
-        generatedCandidates:
-          rawAlternativeStarts,
 
         suggestedStarts,
       }
