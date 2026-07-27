@@ -603,11 +603,21 @@ export async function createOpenAiRealtimeBridge({
 
             `Address the caller using only this first name: ${greetingInput.firstName}.`,
             "Do not say the caller's last name.",
-            "Sound warm, familiar, and conversational, like a helpful receptionist who recognizes a returning customer.",
-            "Do not sound formal, scripted, robotic, or overly enthusiastic.",
-            "Naturally acknowledge that it is good to speak with the caller again.",
-            "Use a conversational transition such as the equivalent of 'Cuéntame' or 'Dime' in the caller's stored language.",
-            "Ask naturally what the caller would like help with today.",
+
+            "Generate the greeting naturally. Do not follow or repeat a fixed greeting template.",
+            "Use a warm, polished, professional tone appropriate for a real business receptionist.",
+            "Sound conversational and human while maintaining professional customer-service language.",
+            "The caller is a returning customer. Naturally convey recognition, without explaining how you recognize them or referring to records, history, or prior interactions.",
+            "Vary the wording naturally between calls.",
+            "Keep the greeting concise and fluid.",
+
+            "Avoid slang, regional idioms, playful wording, and expressions that sound overly casual or familiar.",
+            "Avoid colloquial, idiomatic, or overly casual ways of offering help, even if they are common in everyday speech.",
+            "Do not use commands or casual conversational openers such as 'Cuéntame', 'Dime', or their equivalents.",
+            "Do not sound stiff, ceremonial, corporate, scripted, robotic, or overly enthusiastic.",
+
+            "Naturally invite the caller to explain how you can assist them.",
+            "Do not force a specific phrase for that invitation; choose wording appropriate to the caller's language and a professional business setting.",
 
             "Use no more than two short conversational sentences.",
             "Do not mention CRM, records, call history, reservations, appointments, or previous services.",
@@ -628,8 +638,6 @@ export async function createOpenAiRealtimeBridge({
                       greetingInput.intent,
                     firstName:
                       greetingInput.firstName,
-                    businessName:
-                      greetingInput.businessName,
                     language:
                       greetingInput.language,
                   }),
