@@ -50,7 +50,7 @@ function buildRealtimeTurnDetection(): Record<string, unknown> {
 
     threshold: numberFromEnv({
       key: "OPENAI_REALTIME_VAD_THRESHOLD",
-      fallback: 0.94,
+      fallback: 0.6,
       min: 0.5,
       max: 0.98,
     }),
@@ -64,12 +64,12 @@ function buildRealtimeTurnDetection(): Record<string, unknown> {
 
     silence_duration_ms: numberFromEnv({
       key: "OPENAI_REALTIME_VAD_SILENCE_DURATION_MS",
-      fallback: 900,
+      fallback: 700,
       min: 500,
       max: 2500,
     }),
 
-    interrupt_response: false,
+    interrupt_response: true,
 
     create_response: booleanFromEnv({
       key: "OPENAI_REALTIME_VAD_CREATE_RESPONSE",
