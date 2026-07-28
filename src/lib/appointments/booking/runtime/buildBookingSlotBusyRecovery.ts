@@ -117,24 +117,264 @@ function resolveLocalizedValidationText(params: {
     : "";
 }
 
-function formatSuggestedStart(
-  dateISO: string,
-  locale: VoiceLocale,
-  timeZone: string
-): string {
-  const date = new Date(dateISO);
+type LocalDateParts = {
+  year: number;
+  month: number;
+  day: number;
+};
 
-  if (Number.isNaN(date.getTime())) {
+function getLocalDateParts(
+  date: Date,
+  timeZone: string
+): LocalDateParts | null {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = Number(
+    parts.find((part) => part.type === "year")?.value
+  );
+
+  const month = Number(
+    parts.find((part) => part.type === "month")?.value
+  );
+
+  const day = Number(
+    parts.find((part) => part.type === "day")?.value
+  );
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day)
+  ) {
+    return null;
+  }
+
+  return {
+    year,
+    month,
+    day,
+  };
+}
+
+function buildLocalDateKey(
+  parts: LocalDateParts
+): string {
+  return [
+    String(parts.year).padStart(4, "0"),
+    String(parts.month).padStart(2, "0"),
+    String(parts.day).padStart(2, "0"),
+  ].join("-");
+}
+
+function getCalendarDayDifference(
+  target: LocalDateParts,
+  reference: LocalDateParts
+): number {
+  const targetUtc = Date.UTC(
+    target.year,
+    target.month - 1,
+    target.day
+  );
+
+  const referenceUtc = Date.UTC(
+    reference.year,
+    reference.month - 1,
+    reference.day
+  );
+
+  return Math.round(
+    (targetUtc - referenceUtc) /
+      (24 * 60 * 60 * 1000)
+  );
+}
+
+function capitalizeFirst(value: string): string {
+  if (!value) {
     return "";
   }
 
-  return new Intl.DateTimeFormat(locale, {
-    weekday: "long",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-    timeZone,
-  }).format(date);
+  return (
+    value.charAt(0).toLocaleUpperCase() +
+    value.slice(1)
+  );
+}
+
+function formatLocalizedList(
+  values: string[],
+  locale: VoiceLocale
+): string {
+  const cleanValues = values
+    .map((value) => clean(value))
+    .filter(Boolean);
+
+  if (cleanValues.length === 0) {
+    return "";
+  }
+
+  if (cleanValues.length === 1) {
+    return cleanValues[0];
+  }
+
+  const language =
+    clean(locale)
+      .split("-")[0]
+      ?.toLowerCase() || "en";
+
+  const conjunction =
+    language === "es"
+      ? "o"
+      : language === "pt"
+        ? "ou"
+        : "or";
+
+  if (cleanValues.length === 2) {
+    return `${cleanValues[0]} ${conjunction} ${cleanValues[1]}`;
+  }
+
+  return `${cleanValues
+    .slice(0, -1)
+    .join(", ")} ${conjunction} ${
+    cleanValues[cleanValues.length - 1]
+  }`;
+}
+
+function formatSuggestedStarts(params: {
+  suggestedStarts: string[];
+  locale: VoiceLocale;
+  timeZone: string;
+  now?: Date;
+  limit?: number;
+}): string {
+  const locale =
+    clean(params.locale) || "en-US";
+
+  const now = params.now || new Date();
+
+  const limit =
+    typeof params.limit === "number" &&
+    params.limit > 0
+      ? Math.floor(params.limit)
+      : 3;
+
+  const referenceDateParts =
+    getLocalDateParts(now, params.timeZone);
+
+  if (!referenceDateParts) {
+    return "";
+  }
+
+  const timeFormatter =
+    new Intl.DateTimeFormat(locale, {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: params.timeZone,
+    });
+
+  const weekdayFormatter =
+    new Intl.DateTimeFormat(locale, {
+      weekday: "long",
+      timeZone: params.timeZone,
+    });
+
+  const relativeDayFormatter =
+    new Intl.RelativeTimeFormat(locale, {
+      numeric: "auto",
+    });
+
+  const groups = new Map<
+    string,
+    {
+      date: Date;
+      dateParts: LocalDateParts;
+      times: string[];
+    }
+  >();
+
+  for (
+    const dateISO of params.suggestedStarts.slice(
+      0,
+      limit
+    )
+  ) {
+    const date = new Date(dateISO);
+
+    if (Number.isNaN(date.getTime())) {
+      continue;
+    }
+
+    const dateParts = getLocalDateParts(
+      date,
+      params.timeZone
+    );
+
+    if (!dateParts) {
+      continue;
+    }
+
+    const dateKey =
+      buildLocalDateKey(dateParts);
+
+    const timeText =
+      timeFormatter.format(date);
+
+    const existingGroup =
+      groups.get(dateKey);
+
+    if (existingGroup) {
+      if (
+        !existingGroup.times.includes(timeText)
+      ) {
+        existingGroup.times.push(timeText);
+      }
+
+      continue;
+    }
+
+    groups.set(dateKey, {
+      date,
+      dateParts,
+      times: [timeText],
+    });
+  }
+
+  const formattedGroups = Array.from(
+    groups.values()
+  ).map((group) => {
+    const dayDifference =
+      getCalendarDayDifference(
+        group.dateParts,
+        referenceDateParts
+      );
+
+    const dayLabel =
+      dayDifference === 0 ||
+      dayDifference === 1
+        ? relativeDayFormatter.format(
+            dayDifference,
+            "day"
+          )
+        : weekdayFormatter.format(
+            group.date
+          );
+
+    const timesText =
+      formatLocalizedList(
+        group.times,
+        params.locale
+      );
+
+    return `${capitalizeFirst(
+      dayLabel
+    )}: ${timesText}`;
+  });
+
+  return formattedGroups.join(". ");
 }
 
 export function buildBookingSlotBusyRecovery(
@@ -179,20 +419,14 @@ export function buildBookingSlotBusyRecovery(
         null,
     });
 
-  const formattedSuggestedTimes =
-    params.suggestedStarts
-      .map((iso) =>
-        formatSuggestedStart(
-          iso,
-          params.currentLocale,
-          params.timeZone
-        )
-      )
-      .filter(Boolean)
-      .slice(0, 3);
-
   const suggestedTimesText =
-    formattedSuggestedTimes.join(", ");
+    formatSuggestedStarts({
+      suggestedStarts:
+        params.suggestedStarts,
+      locale: params.currentLocale,
+      timeZone: params.timeZone,
+      limit: 3,
+    });
 
   const serviceName =
     clean(
