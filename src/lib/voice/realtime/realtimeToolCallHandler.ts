@@ -1328,6 +1328,7 @@ export async function handleRealtimeToolCall(
 
       requestRealtimeResponse(
         buildI18nBookingPromptResponse({
+          faithful: true,
           stepKey: retryStepKey,
           prompt: retryPrompt,
           currentLocale,
@@ -1382,6 +1383,7 @@ export async function handleRealtimeToolCall(
 
       requestRealtimeResponse(
         buildI18nBookingPromptResponse({
+          faithful: true,
           stepKey: nextRequiredStepKey,
           prompt: nextRequiredPrompt,
           currentLocale,
@@ -1430,6 +1432,7 @@ export async function handleRealtimeToolCall(
       if (shouldSpeakExactBookingPrompt) {
         requestRealtimeResponse(
           buildI18nBookingPromptResponse({
+            faithful: true,
             stepKey: nextRequiredStepKey || retryStepKey,
             prompt: deterministicBookingPrompt,
             currentLocale,

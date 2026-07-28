@@ -4,17 +4,8 @@ import { clean } from "../utils/clean";
 import { buildExactRealtimeSpeechResponse } from "../buildExactRealtimeSpeechResponse";
 import { buildVoiceSpeechIdentity } from "../voiceSpeechIdentity";
 
-function requiresFaithfulTranslation(stepKey: string): boolean {
-  const normalizedStepKey = clean(stepKey).toLowerCase();
-
-  return (
-    normalizedStepKey === "confirm" ||
-    normalizedStepKey === "phone" ||
-    normalizedStepKey === "offer_booking_sms"
-  );
-}
-
 export function buildI18nBookingPromptResponse(params: {
+  faithful?: boolean;
   stepKey: string;
   prompt: string;
   currentLocale: string;
@@ -59,7 +50,7 @@ export function buildI18nBookingPromptResponse(params: {
    * but their content, structure and appointment details must not be
    * rewritten or paraphrased.
    */
-  if (requiresFaithfulTranslation(stepKey)) {
+  if (params.faithful === true) {
     return {
       conversation: "none",
       tool_choice: "none",
