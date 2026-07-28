@@ -250,6 +250,14 @@ function formatSuggestedStarts(params: {
   now?: Date;
   limit?: number;
 }): string {
+  console.log("[FORMAT_SUGGESTED_STARTS_V2]", {
+    file: __filename,
+    now: (params.now || new Date()).toISOString(),
+    timeZone: params.timeZone,
+    locale: params.locale,
+    suggestedStarts: params.suggestedStarts,
+  });
+
   const locale =
     clean(params.locale) || "en-US";
 
@@ -374,7 +382,14 @@ function formatSuggestedStarts(params: {
     )}: ${timesText}`;
   });
 
-  return formattedGroups.join(". ");
+  const result = formattedGroups.join(". ");
+
+  console.log("[FORMAT_SUGGESTED_STARTS_V2_RESULT]", {
+    referenceDateParts,
+    result,
+  });
+
+  return result;
 }
 
 export function buildBookingSlotBusyRecovery(
