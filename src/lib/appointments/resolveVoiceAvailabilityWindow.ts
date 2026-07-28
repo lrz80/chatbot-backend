@@ -400,23 +400,107 @@ function formatSuggestedStarts(params: {
   locale: VoiceLocale;
   timeZone: string;
 }): string {
-  return params.starts
-    .map((iso) => {
-      const date = new Date(iso);
+  const locale = clean(params.locale) || "en-US";
+  const now = new Date();
 
-      if (Number.isNaN(date.getTime())) {
-        return "";
+  const dateFormatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: params.timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+
+  const timeFormatter = new Intl.DateTimeFormat(locale, {
+    timeZone: params.timeZone,
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  const weekdayFormatter = new Intl.DateTimeFormat(locale, {
+    timeZone: params.timeZone,
+    weekday: "long",
+  });
+
+  const relativeDayFormatter = new Intl.RelativeTimeFormat(locale, {
+    numeric: "auto",
+  });
+
+  const todayKey = dateFormatter.format(now);
+
+  const tomorrow = new Date(
+    now.getTime() + 24 * 60 * 60 * 1000
+  );
+
+  const tomorrowKey =
+    dateFormatter.format(tomorrow);
+
+  const groups = new Map<
+    string,
+    {
+      date: Date;
+      times: string[];
+    }
+  >();
+
+  for (const iso of params.starts) {
+    const date = new Date(iso);
+
+    if (Number.isNaN(date.getTime())) {
+      continue;
+    }
+
+    const dateKey =
+      dateFormatter.format(date);
+
+    const timeText =
+      timeFormatter.format(date);
+
+    const existing =
+      groups.get(dateKey);
+
+    if (existing) {
+      if (!existing.times.includes(timeText)) {
+        existing.times.push(timeText);
       }
 
-      return new Intl.DateTimeFormat(params.locale, {
-        timeZone: params.timeZone,
-        weekday: "long",
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(date);
+      continue;
+    }
+
+    groups.set(dateKey, {
+      date,
+      times: [timeText],
+    });
+  }
+
+  return Array.from(groups.entries())
+    .map(([dateKey, group]) => {
+      let dayLabel: string;
+
+      if (dateKey === todayKey) {
+        dayLabel =
+          relativeDayFormatter.format(
+            0,
+            "day"
+          );
+      } else if (dateKey === tomorrowKey) {
+        dayLabel =
+          relativeDayFormatter.format(
+            1,
+            "day"
+          );
+      } else {
+        dayLabel =
+          weekdayFormatter.format(
+            group.date
+          );
+      }
+
+      const timesText =
+        group.times.join(", ");
+
+      return `${dayLabel}: ${timesText}`;
     })
-    .filter(Boolean)
-    .join(", ");
+    .join(". ");
 }
 
 function renderTemplate(
