@@ -1328,6 +1328,7 @@ export async function handleRealtimeToolCall(
 
       requestRealtimeResponse(
         buildI18nBookingPromptResponse({
+          stepKey: retryStepKey,
           prompt: retryPrompt,
           currentLocale,
           lastAssistantTranscript:
@@ -1381,6 +1382,7 @@ export async function handleRealtimeToolCall(
 
       requestRealtimeResponse(
         buildI18nBookingPromptResponse({
+          stepKey: nextRequiredStepKey,
           prompt: nextRequiredPrompt,
           currentLocale,
           lastAssistantTranscript:
@@ -1420,10 +1422,16 @@ export async function handleRealtimeToolCall(
         Boolean(nextRequiredPrompt) ||
         (toolName === "submit_booking_step" && Boolean(retryPrompt));
 
+      const deterministicBookingPrompt =
+        nextRequiredPrompt ||
+        retryPrompt ||
+        deterministicFollowupInstructions;
+
       if (shouldSpeakExactBookingPrompt) {
         requestRealtimeResponse(
           buildI18nBookingPromptResponse({
-            prompt: deterministicFollowupInstructions,
+            stepKey: nextRequiredStepKey || retryStepKey,
+            prompt: deterministicBookingPrompt,
             currentLocale,
             lastAssistantTranscript:
               clean((realtimeState as any).lastAssistantTranscript || ""),
