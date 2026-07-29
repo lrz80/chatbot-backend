@@ -284,28 +284,34 @@ export function sanitizeForSay(value: string): string {
     .slice(0, 1500);
 }
 
-export function twoSentencesMax(value: string): string {
-  const dotToken = "__VOICE_DOT__";
+export function twoSentencesMax(
+  value: string,
+  locale?: VoiceLocale
+): string {
+  const text = normalizeWhitespace(value);
 
-  const protectedText = normalizeWhitespace(value)
-    .replace(/\bSt\./g, `St${dotToken}`)
-    .replace(/\bAve\./g, `Ave${dotToken}`)
-    .replace(/\bBlvd\./g, `Blvd${dotToken}`)
-    .replace(/\bRd\./g, `Rd${dotToken}`)
-    .replace(/\bDr\./g, `Dr${dotToken}`)
-    .replace(/\bLn\./g, `Ln${dotToken}`)
-    .replace(/\bCt\./g, `Ct${dotToken}`)
-    .replace(/\bCir\./g, `Cir${dotToken}`)
-    .replace(/\bPl\./g, `Pl${dotToken}`)
-    .replace(/\bPkwy\./g, `Pkwy${dotToken}`)
-    .replace(/\bHwy\./g, `Hwy${dotToken}`);
+  if (!text) {
+    return "";
+  }
 
-  const parts = protectedText.split(/(?<=[.?!])\s+/);
+  if (typeof Intl.Segmenter !== "function") {
+    return text;
+  }
 
-  return parts
-    .slice(0, 2)
-    .join(" ")
-    .split(dotToken)
-    .join(".")
-    .trim();
+  const resolvedLocale = String(locale || "").trim() || undefined;
+
+  const segmenter = new Intl.Segmenter(resolvedLocale, {
+    granularity: "sentence",
+  });
+
+  const sentences = Array.from(
+    segmenter.segment(text),
+    ({ segment }) => normalizeWhitespace(segment)
+  ).filter(Boolean);
+
+  if (sentences.length <= 2) {
+    return text;
+  }
+
+  return sentences.slice(0, 2).join(" ").trim();
 }

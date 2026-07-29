@@ -326,7 +326,8 @@ export async function executeCanonicalBookingDatetimeStep(
         text: retryPromptResolved,
         stepKey: currentStep.step_key,
         field: currentStep.retry_prompt ? "retry_prompt" : "prompt",
-      })
+      }),
+      currentLocale
     );
 
     return {
@@ -648,18 +649,21 @@ export async function executeCanonicalBookingDatetimeStep(
 
     const retryPromptFinal = retryPromptResolved;
 
-    const retryPrompt = twoSentencesMax(
-      assertNonEmptyBookingSpeech({
-        text: retryPromptFinal,
-        stepKey: currentStep.step_key,
-        field:
-          isUnavailableReason && unavailablePrompt
-            ? "unavailable_prompt"
-            : currentStep.retry_prompt
-              ? "retry_prompt"
-              : "prompt",
-      })
-    );
+    const validatedRetryPrompt = assertNonEmptyBookingSpeech({
+      text: retryPromptFinal,
+      stepKey: currentStep.step_key,
+      field:
+        isUnavailableReason && unavailablePrompt
+          ? "unavailable_prompt"
+          : currentStep.retry_prompt
+            ? "retry_prompt"
+            : "prompt",
+    });
+
+    const retryPrompt =
+      isUnavailableReason
+        ? validatedRetryPrompt
+        : twoSentencesMax(validatedRetryPrompt, currentLocale);
 
     return {
       kind: "retry",

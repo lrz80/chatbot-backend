@@ -1,12 +1,19 @@
 {
   "compilerOptions": {
     "target": "es2020",
+    "lib": [
+      "ES2020",
+      "ES2022.Intl"
+    ],
     "typeRoots": ["./node_modules/@types", "./types"],
     "module": "commonjs",
     "rootDir": "./src",
     "outDir": "./dist",
-    "baseUrl": "./src",                          // 👈 AGREGA ESTO
-    "paths": { "@/*": ["*"] },                   // 👈 Y ESTO TAMBIÉN
+    "baseUrl": "./src",
+    "paths": {
+      "@/*": ["*"]
+    },
+    "ignoreDeprecations": "6.0",
     "esModuleInterop": true,
     "strict": true,
     "skipLibCheck": true,
