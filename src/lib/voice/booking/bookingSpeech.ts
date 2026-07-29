@@ -54,49 +54,79 @@ export function buildExtraBookingFields(
 export function formatSuggestedStartForVoice(
   dateISO: string,
   locale: VoiceLocale,
-  timeZone: string
-) {
-  const date = new Date(dateISO);
+  timeZone: string,
+  referenceDate: Date = new Date()
+): string {
+  const targetDate = new Date(dateISO);
 
-  if (Number.isNaN(date.getTime())) {
+  if (Number.isNaN(targetDate.getTime())) {
     return "";
   }
 
-  if (locale.startsWith("es")) {
-    const weekday = new Intl.DateTimeFormat("es-ES", {
-      weekday: "long",
-      timeZone,
-    }).format(date);
+  const resolvedLocale = String(locale || "en-US").trim() || "en-US";
 
+  function getCalendarDayValue(date: Date): number {
     const parts = new Intl.DateTimeFormat("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
       timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
     }).formatToParts(date);
 
-    const hour = parts.find((part) => part.type === "hour")?.value || "";
-    const minute = parts.find((part) => part.type === "minute")?.value || "00";
-    const dayPeriod = (
-      parts.find((part) => part.type === "dayPeriod")?.value || ""
-    ).toLowerCase();
+    const year = Number(
+      parts.find((part) => part.type === "year")?.value
+    );
 
-    const spokenPeriod = dayPeriod === "am" ? "de la mañana" : "de la tarde";
+    const month = Number(
+      parts.find((part) => part.type === "month")?.value
+    );
 
-    if (minute === "00") {
-      return `${weekday}, ${hour} ${spokenPeriod}`;
+    const day = Number(
+      parts.find((part) => part.type === "day")?.value
+    );
+
+    if (
+      !Number.isInteger(year) ||
+      !Number.isInteger(month) ||
+      !Number.isInteger(day)
+    ) {
+      throw new Error(
+        `BOOKING_SPEECH_INVALID_CALENDAR_DATE:${date.toISOString()}`
+      );
     }
 
-    return `${weekday}, ${hour}:${minute} ${spokenPeriod}`;
+    return Date.UTC(year, month - 1, day);
   }
 
-  return new Intl.DateTimeFormat("en-US", {
+  const targetCalendarDay = getCalendarDayValue(targetDate);
+  const referenceCalendarDay = getCalendarDayValue(referenceDate);
+
+  const dayDifference = Math.round(
+    (targetCalendarDay - referenceCalendarDay) / 86_400_000
+  );
+
+  const timeText = new Intl.DateTimeFormat(resolvedLocale, {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone,
+  }).format(targetDate);
+
+  if (dayDifference >= -1 && dayDifference <= 1) {
+    const relativeDayText = new Intl.RelativeTimeFormat(resolvedLocale, {
+      numeric: "auto",
+    }).format(dayDifference, "day");
+
+    return `${relativeDayText}, ${timeText}`;
+  }
+
+  return new Intl.DateTimeFormat(resolvedLocale, {
     weekday: "long",
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
     timeZone,
-  }).format(date);
+  }).format(targetDate);
 }
 
 export function buildBusyAlternativesPrompt(params: {

@@ -9,6 +9,7 @@ import {
 import { twoSentencesMax } from "../speechFormatting";
 import { upsertVoiceCallState } from "../upsertVoiceCallState";
 import { resolveVoiceAvailabilityWindow } from "../../appointments/resolveVoiceAvailabilityWindow";
+import { formatSuggestedStartForVoice } from "./bookingSpeech";
 
 type BookingStepLike = {
   step_key: string;
@@ -108,54 +109,6 @@ function assertNonEmptyBookingSpeech(input: {
   }
 
   return value;
-}
-
-function formatSuggestedStartForVoice(
-  dateISO: string,
-  locale: VoiceLocale,
-  timeZone: string
-) {
-  const date = new Date(dateISO);
-
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  if (locale.startsWith("es")) {
-    const weekday = new Intl.DateTimeFormat("es-ES", {
-      weekday: "long",
-      timeZone,
-    }).format(date);
-
-    const parts = new Intl.DateTimeFormat("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-      timeZone,
-    }).formatToParts(date);
-
-    const hour = parts.find((part) => part.type === "hour")?.value || "";
-    const minute = parts.find((part) => part.type === "minute")?.value || "00";
-    const dayPeriod = (
-      parts.find((part) => part.type === "dayPeriod")?.value || ""
-    ).toLowerCase();
-
-    const spokenPeriod = dayPeriod === "am" ? "de la mañana" : "de la tarde";
-
-    if (minute === "00") {
-      return `${weekday}, ${hour} ${spokenPeriod}`;
-    }
-
-    return `${weekday}, ${hour}:${minute} ${spokenPeriod}`;
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-    timeZone,
-  }).format(date);
 }
 
 function clean(value: unknown): string {
@@ -652,26 +605,28 @@ export async function executeCanonicalBookingDatetimeStep(
       .map((value: unknown) => String(value || "").trim())
       .filter((value): value is string => Boolean(value));
 
+    const scheduleTimeZone = String(
+      (scheduleValidation as any).timeZone || ""
+    ).trim();
+
+    if (suggestedStarts.length > 0 && !scheduleTimeZone) {
+      throw new Error(
+        `BOOKING_SCHEDULE_TIME_ZONE_MISSING:${tenantId}:${currentStep.step_key}`
+      );
+    }
+
     const formattedSuggestedTimes: string[] = suggestedStarts
       .map((iso: string) =>
         formatSuggestedStartForVoice(
           iso,
           currentLocale,
-          String((scheduleValidation as any).timeZone || "").trim() || "America/New_York"
+          scheduleTimeZone
         )
       )
       .filter((value): value is string => Boolean(value))
       .slice(0, 3);
 
     const suggestedTimesText = formattedSuggestedTimes.join(", ");
-
-    const hasSuggestedOrAvailableTimes = Boolean(
-      suggestedTimesText || availableTimesText
-    );
-
-    const unavailablePromptNeedsSuggestedTimes =
-      promptTemplate.includes("{suggested_times}") ||
-      promptTemplate.includes("{available_times}");
 
     const safePromptTemplate =
       isUnavailableReason
@@ -726,6 +681,16 @@ export async function executeCanonicalBookingDatetimeStep(
 
   const resolvedDatetimeIso = scheduleValidation.requestedAt.toISOString();
 
+  const scheduleTimeZone = String(
+    scheduleValidation.timeZone || ""
+  ).trim();
+
+  if (!scheduleTimeZone) {
+    throw new Error(
+      `BOOKING_SCHEDULE_TIME_ZONE_MISSING:${tenantId}:${currentStep.step_key}`
+    );
+  }
+
   const storedPlannedSlots =
     parseStoredPlannedSlots(
       currentBookingData.__datetime_planned_slots
@@ -751,7 +716,7 @@ export async function executeCanonicalBookingDatetimeStep(
     formatSuggestedStartForVoice(
       resolvedDatetimeIso,
       currentLocale,
-      String(scheduleValidation.timeZone || "").trim() || "America/New_York"
+      scheduleTimeZone
     ) || rawDatetime;
 
   const nextBookingData = {
