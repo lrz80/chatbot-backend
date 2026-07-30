@@ -495,8 +495,10 @@ function formatSuggestedStarts(params: {
           );
       }
 
-      const timesText =
-        group.times.join(", ");
+      const timesText = new Intl.ListFormat(locale, {
+        style: "long",
+        type: "disjunction",
+      }).format(group.times);
 
       return `${dayLabel}: ${timesText}`;
     })
@@ -507,9 +509,16 @@ function renderTemplate(
   template: string,
   values: Record<string, string>
 ): string {
-  return clean(template).replace(/\{([a-zA-Z0-9_]+)\}/g, (_, key) => {
-    return values[key] ?? "";
-  });
+  const rendered = clean(template).replace(
+    /\{([a-zA-Z0-9_]+)\}/g,
+    (_, key: string) => clean(values[key])
+  );
+
+  return rendered
+    .replace(/\.{2,}/g, ".")
+    .replace(/\s+([,.;!?])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function getBookableStarts(params: {
