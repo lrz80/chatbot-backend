@@ -10,6 +10,7 @@ import { twoSentencesMax } from "../speechFormatting";
 import { upsertVoiceCallState } from "../upsertVoiceCallState";
 import { resolveVoiceAvailabilityWindow } from "../../appointments/resolveVoiceAvailabilityWindow";
 import { formatSuggestedStartForVoice } from "./bookingSpeech";
+import { formatSuggestedStartsForVoice } from "../../appointments/formatSuggestedStartsForVoice";
 
 type BookingStepLike = {
   step_key: string;
@@ -616,18 +617,12 @@ export async function executeCanonicalBookingDatetimeStep(
       );
     }
 
-    const formattedSuggestedTimes: string[] = suggestedStarts
-      .map((iso: string) =>
-        formatSuggestedStartForVoice(
-          iso,
-          currentLocale,
-          scheduleTimeZone
-        )
-      )
-      .filter((value): value is string => Boolean(value))
-      .slice(0, 3);
-
-    const suggestedTimesText = formattedSuggestedTimes.join(", ");
+    const suggestedTimesText = formatSuggestedStartsForVoice({
+      starts: suggestedStarts,
+      locale: currentLocale,
+      timeZone: scheduleTimeZone,
+      limit: 3,
+    });
 
     const safePromptTemplate =
       isUnavailableReason
@@ -647,7 +642,10 @@ export async function executeCanonicalBookingDatetimeStep(
       callerE164,
     });
 
-    const retryPromptFinal = retryPromptResolved;
+    const retryPromptFinal = retryPromptResolved
+      .replace(/\.{2,}/g, ".")
+      .replace(/\s+([,.;!?])/g, "$1")
+      .trim();
 
     const validatedRetryPrompt = assertNonEmptyBookingSpeech({
       text: retryPromptFinal,
