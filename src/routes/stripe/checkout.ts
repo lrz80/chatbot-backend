@@ -1,22 +1,30 @@
 // src/routes/stripe/checkout.ts
-import express from "express";
+import express, { Response } from "express";
 import Stripe from "stripe";
-import jwt from "jsonwebtoken";
 import pool from "../../lib/db";
+import {
+  authenticateUser,
+  AuthenticatedRequest,
+} from "../../middleware/auth";
 
 const LEGAL_VERSION = "aamy_voice_pro_v1_2026_05_11";
 
 const router = express.Router();
 
-router.post("/checkout", async (req, res) => {
-  const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-  if (!STRIPE_SECRET_KEY) return res.status(500).json({ error: "Config Stripe faltante" });
+router.post(
+  "/checkout",
+  authenticateUser,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+
+    if (!STRIPE_SECRET_KEY) {
+      return res.status(500).json({
+        error: "Config Stripe faltante",
+      });
+    }
 
   const FRONTEND_URL = process.env.FRONTEND_URL || "https://www.aamy.ai";
   const stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2022-11-15" });
-
-  const token = req.cookies?.token;
-  if (!token) return res.status(401).json({ error: "No autorizado" });
 
   // ✅ NUEVO: priceId (modo dinámico)
   const priceIdRaw = (req.body?.priceId || req.query?.priceId) as string | undefined;
@@ -41,23 +49,20 @@ router.post("/checkout", async (req, res) => {
   const PRICE_TEST_0 = process.env.STRIPE_PRICE_TEST_0;
 
   try {
-    const decoded: any = jwt.verify(token, process.env.JWT_SECRET!);
-    const tenantId: string = decoded.tenant_id || decoded.uid;
-    if (!tenantId) return res.status(401).json({ error: "No tenant_id en token" });
+    const tenantId = req.user?.tenant_id;
+    const email = req.user?.email;
 
-    // Email del usuario
-    const u = await pool.query(
-      `
-      SELECT email
-      FROM users
-      WHERE tenant_id::text = $1 OR uid::text = $1
-      LIMIT 1
-      `,
-      [tenantId]
-    );
+    if (!tenantId) {
+      return res.status(401).json({
+        error: "No se pudo determinar el negocio activo.",
+      });
+    }
 
-    const email: string | undefined = u.rows[0]?.email;
-    if (!email) return res.status(404).json({ error: "Usuario no encontrado" });
+    if (!email) {
+      return res.status(401).json({
+        error: "No se pudo determinar el usuario autenticado.",
+      });
+    }
 
     const ipAddress =
       req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() ||
@@ -280,16 +285,17 @@ router.post("/checkout", async (req, res) => {
     });
 
     return res.json({ url: session.url });
-  } catch (err) {
-    console.error("❌ Stripe checkout session creation failed:", {
-      message: err instanceof Error ? err.message : String(err),
-      err,
-    });
+    } catch (err) {
+      console.error("❌ Stripe checkout session creation failed:", {
+        message: err instanceof Error ? err.message : String(err),
+        err,
+      });
 
-    return res.status(500).json({
-      error: "Failed to create checkout session.",
-    });
+      return res.status(500).json({
+        error: "Failed to create checkout session.",
+      });
+    }
   }
-});
+);
 
 export default router;
