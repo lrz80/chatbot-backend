@@ -258,7 +258,7 @@ export function buildOpenAiRealtimeSessionUpdate(
             type: "audio/pcmu",
           },
           transcription: {
-            model: "gpt-4o-mini-transcribe",
+            model: "gpt-live-transcribe",
           },
           turn_detection: buildRealtimeTurnDetection(),
         },
