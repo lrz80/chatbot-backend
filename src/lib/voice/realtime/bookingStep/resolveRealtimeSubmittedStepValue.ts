@@ -279,6 +279,13 @@ function resolveStructuredDatetimeProtocolValue(params: {
       const hour24 = (parsed as any).hour_24;
       const minute = (parsed as any).minute;
 
+      const requestMode = clean(
+        (parsed as any).request_mode
+      ).toLowerCase();
+
+      const isAvailabilityWindow =
+        requestMode === "availability_window";
+
       const hasCanonicalTime =
         typeof hour24 === "number" &&
         Number.isInteger(hour24) &&
@@ -300,7 +307,17 @@ function resolveStructuredDatetimeProtocolValue(params: {
         (dateKind === "calendar_date" &&
           /^\d{4}-\d{2}-\d{2}$/.test(dateIso));
 
-      if (hasCanonicalDate && hasCanonicalTime) {
+      const hasValidRequestMode =
+        !requestMode || isAvailabilityWindow;
+
+      if (!hasValidRequestMode) {
+        continue;
+      }
+
+      if (
+        hasCanonicalDate &&
+        (hasCanonicalTime || isAvailabilityWindow)
+      ) {
         return {
           ok: true,
           value: candidate,
