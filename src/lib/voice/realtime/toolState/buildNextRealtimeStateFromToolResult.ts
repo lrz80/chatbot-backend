@@ -69,31 +69,96 @@ export function buildNextRealtimeStateFromToolResult(
   const resolvedPendingBookingStepKey =
     clean(nextRequiredStep?.step_key || "") || undefined;
 
-  const resolvedPendingBookingStepSlot = clean(nextRequiredStep?.slot || "");
+  const previousPendingBookingStepKey = clean(
+    realtimeState.pendingBookingStepKey || ""
+  );
 
-  const resolvedPendingBookingStepExpectedType = clean(
+  const isRetryingSamePendingStep =
+    toolName === "submit_booking_step" &&
+    toolResult?.ok === false &&
+    Boolean(resolvedPendingBookingStepKey) &&
+    Boolean(previousPendingBookingStepKey) &&
+    resolvedPendingBookingStepKey === previousPendingBookingStepKey;
+
+  const returnedPendingBookingStepSlot = clean(
+    nextRequiredStep?.slot || ""
+  );
+
+  const returnedPendingBookingStepExpectedType = clean(
     nextRequiredStep?.expected_type || ""
   );
 
-  const resolvedPendingBookingStepRequired =
-    nextRequiredStep?.required === true;
-
-  const resolvedPendingBookingStepValidationConfig =
+  const returnedPendingBookingStepValidationConfig =
     nextRequiredStep?.validation_config &&
     typeof nextRequiredStep.validation_config === "object"
       ? nextRequiredStep.validation_config
-      : {};
+      : null;
+
+  const returnedPendingBookingStepPrompt = clean(
+    nextRequiredStep?.prompt || ""
+  );
+
+  const resolvedPendingBookingStepSlot =
+    returnedPendingBookingStepSlot ||
+    (
+      isRetryingSamePendingStep
+        ? clean((realtimeState as any).pendingBookingStepSlot || "")
+        : ""
+    );
+
+  const resolvedPendingBookingStepExpectedType =
+    returnedPendingBookingStepExpectedType ||
+    (
+      isRetryingSamePendingStep
+        ? clean(
+            (realtimeState as any).pendingBookingStepExpectedType || ""
+          )
+        : ""
+    );
+
+  const resolvedPendingBookingStepRequired =
+    typeof nextRequiredStep?.required === "boolean"
+      ? nextRequiredStep.required === true
+      : isRetryingSamePendingStep
+        ? (realtimeState as any).pendingBookingStepRequired === true
+        : false;
+
+  const resolvedPendingBookingStepValidationConfig =
+    returnedPendingBookingStepValidationConfig ??
+    (
+      isRetryingSamePendingStep
+        ? (
+            (realtimeState as any).pendingBookingStepValidationConfig &&
+            typeof (realtimeState as any).pendingBookingStepValidationConfig ===
+              "object"
+              ? (realtimeState as any).pendingBookingStepValidationConfig
+              : {}
+          )
+        : {}
+    );
+
+  const resolvedPendingBookingStepPrompt =
+    returnedPendingBookingStepPrompt ||
+    (
+      isRetryingSamePendingStep
+        ? clean((realtimeState as any).pendingBookingStepPrompt || "")
+        : ""
+    );
 
   const nextStepExpectsUserInput =
     Boolean(resolvedPendingBookingStepKey) &&
-    (resolvedPendingBookingStepRequired ||
+    (
+      resolvedPendingBookingStepRequired ||
       resolvedPendingBookingStepExpectedType === "confirmation" ||
       resolvedPendingBookingStepExpectedType === "phone" ||
       resolvedPendingBookingStepExpectedType === "datetime" ||
       resolvedPendingBookingStepExpectedType === "number" ||
       resolvedPendingBookingStepExpectedType === "staff" ||
-      (resolvedPendingBookingStepExpectedType === "text" &&
-        resolvedPendingBookingStepSlot !== "none"));
+      (
+        resolvedPendingBookingStepExpectedType === "text" &&
+        resolvedPendingBookingStepSlot !== "none"
+      )
+    );
 
   const shouldClearPendingBookingStep =
     toolName === "send_booking_sms" ||
@@ -140,7 +205,7 @@ export function buildNextRealtimeStateFromToolResult(
     pendingBookingStepRequired:
       shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
         ? undefined
-        : nextRequiredStep?.required === true,
+        : resolvedPendingBookingStepRequired,
 
     pendingBookingStepSlot:
       shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
@@ -160,7 +225,7 @@ export function buildNextRealtimeStateFromToolResult(
     pendingBookingStepPrompt:
       shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
         ? undefined
-        : clean(nextRequiredStep?.prompt || "") || undefined,
+        : resolvedPendingBookingStepPrompt || undefined,
 
     pendingBookingStepPromptAnchorTranscript:
       shouldClearPendingBookingStep || !resolvedPendingBookingStepKey
