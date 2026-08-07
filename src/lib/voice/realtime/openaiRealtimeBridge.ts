@@ -51,6 +51,7 @@ import {
   resolveReturningCustomer,
 } from "../returningCustomer";
 import { buildVoiceSpeechIdentity } from "./voiceSpeechIdentity";
+import { resolveFreeConversationBookingIntent } from "../runtime/resolveFreeConversationBookingIntent";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -1202,7 +1203,7 @@ export async function createOpenAiRealtimeBridge({
         lastAssistantTranscript,
         minMsAfterAssistantAudio: isBargeInTranscript ? 0 : 800,
       })
-        .then((transcriptResult) => {
+        .then(async (transcriptResult) => {
           if (!transcriptResult.consumed) {
             return;
           }
@@ -1282,6 +1283,63 @@ export async function createOpenAiRealtimeBridge({
             const postBookingBusinessInfo =
               clean((realtimeTenant as any)?.info_clave) ||
               clean((realtimeCfg as any)?.info_clave);
+
+            if (
+              !isAwaitingPostBookingClosure &&
+              !bookingFlowLoaded
+            ) {
+              const freeConversationBookingIntent =
+                await resolveFreeConversationBookingIntent({
+                  callerTranscript: lastUserTranscript,
+                  previousAssistantTranscript:
+                    lastAssistantTranscript,
+                  locale: currentLocale,
+                });
+
+              console.log(
+                "[VOICE_REALTIME][FREE_CONVERSATION_BOOKING_INTENT_RESOLVED]",
+                {
+                  callSid,
+                  tenantId,
+                  decision:
+                    freeConversationBookingIntent,
+                  callerTranscript:
+                    lastUserTranscript,
+                  previousAssistantTranscript:
+                    lastAssistantTranscript || null,
+                  transcriptSeq:
+                    lastUserTranscriptSeq,
+                  locale:
+                    currentLocale,
+                }
+              );
+
+              if (
+                freeConversationBookingIntent ===
+                "start_booking"
+              ) {
+                console.warn(
+                  "[VOICE_REALTIME][FREE_CONVERSATION_BOOKING_FLOW_START_REQUESTED]",
+                  {
+                    callSid,
+                    tenantId,
+                    callerTranscript:
+                      lastUserTranscript,
+                    previousAssistantTranscript:
+                      lastAssistantTranscript || null,
+                    transcriptSeq:
+                      lastUserTranscriptSeq,
+                  }
+                );
+
+                toolCallQueue.enqueueGetBookingFlowFromTranscript({
+                  source:
+                    "free_conversation_booking_intent",
+                });
+
+                return;
+              }
+            }
 
             requestRealtimeResponse(
               isAwaitingPostBookingClosure
