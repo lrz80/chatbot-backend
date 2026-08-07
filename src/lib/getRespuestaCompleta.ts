@@ -3,6 +3,7 @@ import { getPromptPorCanal, getBienvenidaPorCanal } from './getPromptPorCanal';
 import { normalizarTexto } from './normalizarTexto';
 import { traducirTexto } from './traducirTexto';
 import OpenAI from 'openai';
+import { AI_MODELS } from "./ai/models";
 
 function preservarLinks(texto: string): { textoSinLinks: string; links: string[] } {
   const links: string[] = [];
@@ -76,7 +77,7 @@ export async function getRespuestaCompleta({
     });
 
     const respuestaIA = await openai.chat.completions.create({
-      model: 'gpt-4',
+      model: AI_MODELS.standard,
       messages: [
         { role: 'system', content: prompt },
         { role: 'user', content: input },

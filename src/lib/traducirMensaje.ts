@@ -1,5 +1,6 @@
 // backend/src/lib/traducirMensaje.ts
 import OpenAI from "openai";
+import { AI_MODELS } from "./ai/models";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 
@@ -60,7 +61,7 @@ export async function traducirMensaje(
     const response = await openai.chat.completions.create({
       // si quieres dejar gpt-4, ok. Yo bajaría a gpt-4.1-mini para traducción,
       // pero NO es requisito para corregir el bug.
-      model: "gpt-4",
+      model: AI_MODELS.standard,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },

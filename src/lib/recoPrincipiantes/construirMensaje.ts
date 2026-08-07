@@ -1,6 +1,7 @@
 // src/lib/recoPrincipiantes/construirMensaje.ts
 import OpenAI from 'openai';
 import { TipoClase } from './tiposClases';
+import { AI_MODELS } from "../ai/models";
 
 function orderForBeginner(arr: TipoClase[]) {
   const ib = (x?: string) => x === 'baja' ? 0 : x === 'media' ? 1 : 2;
@@ -69,7 +70,7 @@ export async function buildBeginnerRecoMessage(
     const system = `${promptBase}\n\nActúa como el asistente del estudio. Escribe en ${idioma}. Responde en 2–3 frases, claro y amable, recomendando PRIMERA CLASE usando los datos (JSON) y manteniendo el tono de marca.`;
     const user = `Cliente: “¿Cuál recomiendas si nunca ha hecho ninguna?”\nDatos de clases (JSON): ${clasesJson}`;
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: AI_MODELS.fast,
       temperature: 0.3,
       max_tokens: 220,
       messages: [

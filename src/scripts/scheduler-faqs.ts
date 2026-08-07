@@ -1,6 +1,7 @@
 import pool from '../lib/db';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
+import { AI_MODELS } from "../lib/ai/models";
 
 dotenv.config();
 
@@ -29,7 +30,7 @@ const prompt = `Un cliente ha preguntado frecuentemente: "${p.pregunta}". ${esti
 
     try {
       const respuesta = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
+        model: AI_MODELS.fast,
         messages: [
           { role: 'system', content: "Eres un asistente de atención al cliente amigable y claro." },
           { role: 'user', content: prompt }

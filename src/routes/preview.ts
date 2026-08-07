@@ -9,6 +9,7 @@ import {
   buscarRespuestaDesdeFlowsTraducido,
 } from '../lib/respuestasTraducidas';
 import { procesarMensajeWhatsApp } from './webhook/whatsapp';
+import { AI_MODELS } from "../lib/ai/models";
 
 const router = Router();
 
@@ -154,7 +155,7 @@ async function handlePreview(
         : `Eres un asistente virtual de ${tenant.name}. Si el cliente pregunta por precios u otros detalles y no tienes información, indícale amablemente que contacte directamente a ${contacto}. No inventes datos.`;
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: AI_MODELS.fast,
       messages: [
         { role: 'system', content: promptFinal },
         { role: 'user', content: message },
