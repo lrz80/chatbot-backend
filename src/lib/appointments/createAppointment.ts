@@ -25,6 +25,16 @@ import {
   checkRouteFeasibility,
 } from "../../modules/field-operations/services/routeFeasibility.service";
 
+import {
+  buildRoutePlan,
+} from "../../modules/field-operations/services/routePlanBuilder.service";
+
+import {
+  optimizeRoutePlan,
+} from "../../modules/field-operations/services/routeOptimization.service";
+
+import { getIO } from "../socket";
+
 type AppointmentSettings = {
   default_duration_min: number;
   buffer_min: number;
@@ -139,6 +149,135 @@ function parseIsoDate(value: string | null | undefined): Date | null {
 
 function cleanString(value: unknown): string {
   return String(value || "").trim();
+}
+
+function resolveLocalServiceDate(
+  date: Date,
+  timeZone: string
+): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year =
+    parts.find((part) => part.type === "year")?.value;
+
+  const month =
+    parts.find((part) => part.type === "month")?.value;
+
+  const day =
+    parts.find((part) => part.type === "day")?.value;
+
+  if (!year || !month || !day) {
+    throw new Error(
+      "FIELD_OPERATIONS_SERVICE_DATE_RESOLUTION_FAILED"
+    );
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
+async function rebuildFieldOperationsRouteSafely(input: {
+  tenantId: string;
+  resourceId: string;
+  serviceDate: string;
+}): Promise<void> {
+  try {
+    const buildResult = await buildRoutePlan({
+      tenantId: input.tenantId,
+      resourceId: input.resourceId,
+      serviceDate: input.serviceDate,
+      geocodeMissingLocations: true,
+    });
+
+    if (buildResult.stops.length > 0) {
+      await optimizeRoutePlan({
+        tenantId: input.tenantId,
+        routePlanId: buildResult.routePlan.id,
+        routeStartAt: null,
+        stops: buildResult.stops,
+
+        options: {
+          preserveScheduledOrder: true,
+          returnToStart: false,
+        },
+
+        metadata: {
+          source: "appointment_created",
+          automaticRebuild: true,
+          skippedAppointments:
+            buildResult.skippedAppointments,
+        },
+      });
+    }
+
+    console.log(
+      "[FIELD_OPERATIONS][ROUTE_AUTO_REBUILD_COMPLETED]",
+      {
+        tenantId: input.tenantId,
+        resourceId: input.resourceId,
+        serviceDate: input.serviceDate,
+        routePlanId: buildResult.routePlan.id,
+        stops: buildResult.stops.length,
+        skippedAppointments:
+          buildResult.skippedAppointments.length,
+      }
+    );
+
+    try {
+      const io = getIO();
+
+      io.emit(
+        "field_operations:route_updated",
+        {
+          tenantId: input.tenantId,
+          resourceId: input.resourceId,
+          serviceDate: input.serviceDate,
+          routePlanId: buildResult.routePlan.id,
+          reason: "appointment_created",
+        }
+      );
+
+      console.log(
+        "[FIELD_OPERATIONS][ROUTE_SOCKET_EVENT_EMITTED]",
+        {
+          tenantId: input.tenantId,
+          resourceId: input.resourceId,
+          serviceDate: input.serviceDate,
+          routePlanId: buildResult.routePlan.id,
+        }
+      );
+    } catch (socketError) {
+      console.error(
+        "[FIELD_OPERATIONS][ROUTE_SOCKET_EMIT_FAILED]",
+        {
+          tenantId: input.tenantId,
+          resourceId: input.resourceId,
+          serviceDate: input.serviceDate,
+          error:
+            socketError instanceof Error
+              ? socketError.message
+              : String(socketError),
+        }
+      );
+    }
+  } catch (error) {
+    console.error(
+      "[FIELD_OPERATIONS][ROUTE_AUTO_REBUILD_FAILED]",
+      {
+        tenantId: input.tenantId,
+        resourceId: input.resourceId,
+        serviceDate: input.serviceDate,
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error),
+      }
+    );
+  }
 }
 
 export async function createAppointment(
@@ -793,30 +932,66 @@ export async function createAppointment(
     const appointment = rows[0];
 
     if (isFieldServiceBooking) {
-      await syncAppointmentToFieldOperations({
-        tenantId:
-          args.tenantId,
+      const fieldOperationsSync =
+        await syncAppointmentToFieldOperations({
+          tenantId:
+            args.tenantId,
 
-        appointmentId:
-          appointment.id,
+          appointmentId:
+            appointment.id,
 
-        address:
-          normalizedFieldServiceAddress ||
-          serviceAddress,
+          address:
+            normalizedFieldServiceAddress ||
+            serviceAddress,
 
-        latitude:
-          fieldServiceLatitude,
+          latitude:
+            fieldServiceLatitude,
 
-        longitude:
-          fieldServiceLongitude,
+          longitude:
+            fieldServiceLongitude,
 
-        plannedResourceId,
+          plannedResourceId,
 
-        plannedResourceMetadata,
+          plannedResourceMetadata,
 
-        answersBySlot:
-          args.answersBySlot,
-      });
+          answersBySlot:
+            args.answersBySlot,
+        });
+
+      const assignedResourceId =
+        fieldOperationsSync.resourceId;
+
+      if (assignedResourceId) {
+        const serviceDate =
+          resolveLocalServiceDate(
+            start,
+            timeZone
+          );
+
+        await rebuildFieldOperationsRouteSafely({
+          tenantId:
+            args.tenantId,
+
+          resourceId:
+            assignedResourceId,
+
+          serviceDate,
+        });
+      } else {
+        console.warn(
+          "[FIELD_OPERATIONS][ROUTE_AUTO_REBUILD_SKIPPED]",
+          {
+            tenantId:
+              args.tenantId,
+
+            appointmentId:
+              appointment.id,
+
+            reason:
+              "RESOURCE_NOT_ASSIGNED",
+          }
+        );
+      }
     }
 
     return appointment;

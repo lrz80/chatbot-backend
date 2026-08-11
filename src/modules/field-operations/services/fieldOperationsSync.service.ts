@@ -155,7 +155,7 @@ function validCoordinate(
 async function assignBestResourceSafely(input: {
   tenantId: string;
   appointmentId: string;
-}): Promise<void> {
+}): Promise<string | null> {
   try {
     const result = await automaticallyAssignBestResource({
       tenantId: input.tenantId,
@@ -172,12 +172,12 @@ async function assignBestResourceSafely(input: {
         resourceName: result.resourceName,
         score: result.score,
         reason: result.reason,
-        candidatesEvaluated:
-          result.candidatesEvaluated,
-        candidatesRejected:
-          result.candidatesRejected,
+        candidatesEvaluated: result.candidatesEvaluated,
+        candidatesRejected: result.candidatesRejected,
       }
     );
+
+    return clean(result.resourceId);
   } catch (error) {
     console.error(
       "[FIELD_OPERATIONS][AUTOMATIC_RESOURCE_ASSIGNMENT_FAILED]",
@@ -187,12 +187,18 @@ async function assignBestResourceSafely(input: {
         error: normalizeError(error),
       }
     );
+
+    return null;
   }
 }
 
+export type SyncAppointmentToFieldOperationsResult = {
+  resourceId: string | null;
+};
+
 export async function syncAppointmentToFieldOperations(
   input: SyncAppointmentToFieldOperationsInput
-): Promise<void> {
+): Promise<SyncAppointmentToFieldOperationsResult> {
   const plannedResourceId =
     clean(input.plannedResourceId);
 
@@ -232,31 +238,29 @@ export async function syncAppointmentToFieldOperations(
     const plannedAssignmentPersisted =
       plannedResourceId
         ? await persistPlannedResourceSafely({
-            tenantId:
-              input.tenantId,
-
-            appointmentId:
-              input.appointmentId,
-
-            resourceId:
-              plannedResourceId,
-
-            metadata:
-              input.plannedResourceMetadata,
+            tenantId: input.tenantId,
+            appointmentId: input.appointmentId,
+            resourceId: plannedResourceId,
+            metadata: input.plannedResourceMetadata,
           })
         : false;
 
-    if (!plannedAssignmentPersisted) {
-      await assignBestResourceSafely({
-        tenantId:
-          input.tenantId,
+    let resolvedResourceId: string | null =
+      plannedAssignmentPersisted
+        ? plannedResourceId
+        : null;
 
-        appointmentId:
-          input.appointmentId,
-      });
+    if (!plannedAssignmentPersisted) {
+      resolvedResourceId =
+        await assignBestResourceSafely({
+          tenantId: input.tenantId,
+          appointmentId: input.appointmentId,
+        });
     }
 
-    return;
+    return {
+      resourceId: resolvedResourceId,
+    };
   }
 
   console.log(
@@ -348,28 +352,24 @@ export async function syncAppointmentToFieldOperations(
   const plannedAssignmentPersisted =
     plannedResourceId
       ? await persistPlannedResourceSafely({
-          tenantId:
-            input.tenantId,
-
-          appointmentId:
-            input.appointmentId,
-
-          resourceId:
-            plannedResourceId,
-
-          metadata:
-            input.plannedResourceMetadata,
+          tenantId: input.tenantId,
+          appointmentId: input.appointmentId,
+          resourceId: plannedResourceId,
+          metadata: input.plannedResourceMetadata,
         })
       : false;
 
-  if (!plannedAssignmentPersisted) {
-    await assignBestResourceSafely({
-      tenantId:
-        input.tenantId,
+  let resolvedResourceId: string | null =
+    plannedAssignmentPersisted
+      ? plannedResourceId
+      : null;
 
-      appointmentId:
-        input.appointmentId,
-    });
+  if (!plannedAssignmentPersisted) {
+    resolvedResourceId =
+      await assignBestResourceSafely({
+        tenantId: input.tenantId,
+        appointmentId: input.appointmentId,
+      });
   }
 
   console.log(
@@ -377,6 +377,11 @@ export async function syncAppointmentToFieldOperations(
     {
       tenantId: input.tenantId,
       appointmentId: input.appointmentId,
+      resourceId: resolvedResourceId,
     }
   );
+
+  return {
+    resourceId: resolvedResourceId,
+  };
 }
