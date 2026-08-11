@@ -33,7 +33,9 @@ import {
   optimizeRoutePlan,
 } from "../../modules/field-operations/services/routeOptimization.service";
 
-import { getIO } from "../socket";
+import {
+  emitToTenant,
+} from "../socket";
 
 type AppointmentSettings = {
   default_duration_min: number;
@@ -228,9 +230,8 @@ async function rebuildFieldOperationsRouteSafely(input: {
     );
 
     try {
-      const io = getIO();
-
-      io.emit(
+      emitToTenant(
+        input.tenantId,
         "field_operations:route_updated",
         {
           tenantId: input.tenantId,
