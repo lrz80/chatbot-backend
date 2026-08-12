@@ -202,6 +202,30 @@ export async function createOpenAiRealtimeBridge({
 
   let hardCallTimeoutTimer: NodeJS.Timeout | null = null;
 
+  let idleWarningTimer: NodeJS.Timeout | null = null;
+  let idleHangupTimer: NodeJS.Timeout | null = null;
+  let idleWarningActive = false;
+
+  const IDLE_WARNING_MS = (() => {
+    const configured = Number(process.env.REALTIME_IDLE_WARNING_MS);
+
+    if (Number.isFinite(configured) && configured >= 5000) {
+      return configured;
+    }
+
+    return 20_000;
+  })();
+
+  const IDLE_HANGUP_MS = (() => {
+    const configured = Number(process.env.REALTIME_IDLE_HANGUP_MS);
+
+    if (Number.isFinite(configured) && configured >= 5000) {
+      return configured;
+    }
+
+    return 15_000;
+  })();
+
   const HARD_CALL_TIMEOUT_MS = (() => {
     const configured = Number(process.env.REALTIME_MAX_CALL_DURATION_MS);
 
@@ -362,8 +386,125 @@ export async function createOpenAiRealtimeBridge({
     }, HARD_CALL_TIMEOUT_MS);
   }
 
+  function clearIdleTimers(): void {
+    if (idleWarningTimer) {
+      clearTimeout(idleWarningTimer);
+      idleWarningTimer = null;
+    }
+
+    if (idleHangupTimer) {
+      clearTimeout(idleHangupTimer);
+      idleHangupTimer = null;
+    }
+
+    idleWarningActive = false;
+  }
+
+  function armIdleHangupAfterWarning(): void {
+    if (callEnding || hangupRequestedByTool) {
+      return;
+    }
+
+    if (idleHangupTimer) {
+      clearTimeout(idleHangupTimer);
+    }
+
+    idleHangupTimer = setTimeout(() => {
+      idleHangupTimer = null;
+
+      if (callEnding || hangupRequestedByTool) {
+        return;
+      }
+
+      console.warn("[VOICE_REALTIME][IDLE_HANGUP]", {
+        callSid,
+        streamSid,
+        idleHangupMs: IDLE_HANGUP_MS,
+        lastUserTranscriptSeq,
+        pendingBookingStepKey: clean(
+          (realtimeState as any).pendingBookingStepKey
+        ),
+        bookingTurnStatus: clean(
+          (realtimeState as any).bookingTurnStatus
+        ),
+      });
+
+      performTwilioHangup("idle_timeout");
+    }, IDLE_HANGUP_MS);
+  }
+
+  function armIdleWarning(): void {
+    if (callEnding || hangupRequestedByTool) {
+      return;
+    }
+
+    if (idleWarningTimer) {
+      clearTimeout(idleWarningTimer);
+    }
+
+    if (idleHangupTimer) {
+      clearTimeout(idleHangupTimer);
+      idleHangupTimer = null;
+    }
+
+    idleWarningActive = false;
+
+    idleWarningTimer = setTimeout(() => {
+      idleWarningTimer = null;
+
+      if (callEnding || hangupRequestedByTool) {
+        return;
+      }
+
+      const responseState = responseController.getState();
+
+      if (
+        responseState.activeResponseId ||
+        assistantSpeaking
+      ) {
+        armIdleWarning();
+        return;
+      }
+
+      idleWarningActive = true;
+
+      console.log("[VOICE_REALTIME][IDLE_WARNING_REQUESTED]", {
+        callSid,
+        streamSid,
+        idleWarningMs: IDLE_WARNING_MS,
+        currentLocale,
+        lastUserTranscriptSeq,
+      });
+
+      requestRealtimeResponse(
+        {
+          conversation: "none",
+          tool_choice: "none",
+          instructions: [
+            buildVoiceSpeechIdentity({
+              activeLanguage: currentLocale,
+            }),
+            "",
+            "IDLE CALL CHECK:",
+            "The caller has been silent for a while.",
+            "Briefly ask whether the caller is still there.",
+            "Speak only in the active conversation language.",
+            "Use one short natural sentence.",
+            "Do not restart the greeting.",
+            "Do not mention the business name unless naturally necessary.",
+            "Do not start booking.",
+            "Do not ask for any booking information.",
+            "Do not use tools.",
+          ].join("\n"),
+        },
+        "bridge:idle_warning"
+      );
+    }, IDLE_WARNING_MS);
+  }
+
   function performTwilioHangup(source: string): void {
     clearHardCallTimeout();
+    clearIdleTimers();
 
     if (goodbyeHangupFallbackTimer) {
       clearTimeout(goodbyeHangupFallbackTimer);
@@ -1256,6 +1397,8 @@ export async function createOpenAiRealtimeBridge({
             return;
           }
 
+          clearIdleTimers();
+
           lastUserTranscript = transcriptResult.lastUserTranscript;
           lastUserTranscriptSeq = transcriptResult.lastUserTranscriptSeq;
           currentLocale = transcriptResult.currentLocale;
@@ -1864,6 +2007,15 @@ export async function createOpenAiRealtimeBridge({
         didLogSuppressedAudioForActiveResponse = false;
       }
 
+      const responseSourceForIdle =
+        clean(completedResponseSource || "");
+
+      if (responseSourceForIdle === "bridge:idle_warning") {
+        armIdleHangupAfterWarning();
+      } else {
+        armIdleWarning();
+      }
+
       return;
     }
   });
@@ -1934,6 +2086,7 @@ export async function createOpenAiRealtimeBridge({
       callEnding = false;
       goodbyePlaybackMarkName = null;
 
+      clearIdleTimers();
       armHardCallTimeout();
 
       if (goodbyeHangupFallbackTimer) {
@@ -1996,6 +2149,7 @@ export async function createOpenAiRealtimeBridge({
 
     if (isTwilioStopEvent(event)) {
       clearHardCallTimeout();
+      clearIdleTimers();
 
       console.log("[VOICE_REALTIME][TWILIO_STOP]", {
         callSid,
@@ -2018,6 +2172,7 @@ export async function createOpenAiRealtimeBridge({
 
   twilioSocket.on("close", (code, reason) => {
     clearHardCallTimeout();
+    clearIdleTimers();
 
     console.log("[VOICE_REALTIME][TWILIO_CLOSED]", {
       callSid,
