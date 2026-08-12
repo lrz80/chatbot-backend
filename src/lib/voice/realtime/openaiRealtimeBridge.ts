@@ -200,6 +200,19 @@ export async function createOpenAiRealtimeBridge({
   let goodbyePlaybackMarkName: string | null = null;
   let goodbyeHangupFallbackTimer: NodeJS.Timeout | null = null;
 
+  let hardCallTimeoutTimer: NodeJS.Timeout | null = null;
+
+  const HARD_CALL_TIMEOUT_MS = (() => {
+    const configured = Number(process.env.REALTIME_MAX_CALL_DURATION_MS);
+
+    if (Number.isFinite(configured) && configured >= 60_000) {
+      return configured;
+    }
+
+    // Safety net global: 10 minutos.
+    return 10 * 60 * 1000;
+  })();
+
   let callEnding = false;
 
   let localeLocked = false;
@@ -316,7 +329,42 @@ export async function createOpenAiRealtimeBridge({
     requestRealtimeResponse,
   });
 
+  function clearHardCallTimeout(): void {
+    if (hardCallTimeoutTimer) {
+      clearTimeout(hardCallTimeoutTimer);
+      hardCallTimeoutTimer = null;
+    }
+  }
+
+  function armHardCallTimeout(): void {
+    clearHardCallTimeout();
+
+    hardCallTimeoutTimer = setTimeout(() => {
+      if (callEnding) {
+        return;
+      }
+
+      console.warn("[VOICE_REALTIME][HARD_CALL_TIMEOUT_REACHED]", {
+        callSid,
+        streamSid,
+        timeoutMs: HARD_CALL_TIMEOUT_MS,
+        timeoutMinutes: HARD_CALL_TIMEOUT_MS / 60_000,
+        lastUserTranscriptSeq,
+        pendingBookingStepKey: clean(
+          (realtimeState as any).pendingBookingStepKey
+        ),
+        bookingTurnStatus: clean(
+          (realtimeState as any).bookingTurnStatus
+        ),
+      });
+
+      performTwilioHangup("hard_call_timeout");
+    }, HARD_CALL_TIMEOUT_MS);
+  }
+
   function performTwilioHangup(source: string): void {
+    clearHardCallTimeout();
+
     if (goodbyeHangupFallbackTimer) {
       clearTimeout(goodbyeHangupFallbackTimer);
       goodbyeHangupFallbackTimer = null;
@@ -1886,6 +1934,8 @@ export async function createOpenAiRealtimeBridge({
       callEnding = false;
       goodbyePlaybackMarkName = null;
 
+      armHardCallTimeout();
+
       if (goodbyeHangupFallbackTimer) {
         clearTimeout(goodbyeHangupFallbackTimer);
         goodbyeHangupFallbackTimer = null;
@@ -1945,6 +1995,8 @@ export async function createOpenAiRealtimeBridge({
     }
 
     if (isTwilioStopEvent(event)) {
+      clearHardCallTimeout();
+
       console.log("[VOICE_REALTIME][TWILIO_STOP]", {
         callSid,
         streamSid,
@@ -1965,6 +2017,8 @@ export async function createOpenAiRealtimeBridge({
   });
 
   twilioSocket.on("close", (code, reason) => {
+    clearHardCallTimeout();
+
     console.log("[VOICE_REALTIME][TWILIO_CLOSED]", {
       callSid,
       streamSid,
