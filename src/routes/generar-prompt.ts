@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v21"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v22"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -173,13 +173,13 @@ function stripGeneratedPolicySections(text: string): string {
 
 function stripGenericAssistantIdentity(text: string): string {
   const genericIdentityPatterns = [
-    /^Eres (?:Aamy, )?(?:la |el )?asistente virtual de .+?\.\s*/i,
+    /^Eres (?:(?:Aamy|Amy), )?(?:la |el )?asistente virtual de .+?\.\s*/i,
     /^Respondes siempre con claridad, precisión y tono humano, sin inventar información\.\s*/i,
 
-    /^You are (?:Aamy, )?the virtual assistant for .+?\.\s*/i,
+    /^You are (?:(?:Aamy|Amy), )?the virtual assistant for .+?\.\s*/i,
     /^You always respond clearly, accurately, and in a human tone without inventing information\.\s*/i,
 
-    /^Você é (?:Aamy, )?a assistente virtual (?:da|do|de) .+?\.\s*/i,
+    /^Você é (?:(?:Aamy|Amy), )?a assistente virtual (?:da|do|de) .+?\.\s*/i,
     /^Você sempre responde com clareza, precisão e um tom humano, sem inventar informações\.\s*/i,
   ];
 
@@ -251,20 +251,20 @@ function classifyLinks(links: string[]) {
 function buildIdentity(idioma: Lang, businessName: string): string {
   if (idioma === "en") {
     return [
-      `You are Amy, the virtual assistant for ${businessName}.`,
+      `You are Aamy, the virtual assistant for ${businessName}.`,
       "You communicate with real customers in a professional, clear, accurate, and human manner.",
     ].join("\n");
   }
 
   if (idioma === "pt") {
     return [
-      `Você é Amy, a assistente virtual da ${businessName}.`,
+      `Você é Aamy, a assistente virtual da ${businessName}.`,
       "Você atende clientes reais e responde de forma profissional, clara, precisa e humana.",
     ].join("\n");
   }
 
   return [
-    `Eres Amy, la asistente virtual de ${businessName}.`,
+    `Eres Aamy, la asistente virtual de ${businessName}.`,
     "Atiendes conversaciones con clientes reales y respondes de forma profesional, clara, precisa y humana.",
   ].join("\n");
 }
