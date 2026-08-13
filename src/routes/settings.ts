@@ -152,16 +152,24 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     };
 
     // Conveniencias: ¿puede editar/usar por canal? (plan lo incluye + plan activo o trial)
+    const isAdmin = req.user?.is_admin === true;
+
     const plan_activo_o_trial = Boolean(
+      isAdmin ||
       tenant.membresia_activa ||
-      (tenant.es_trial && tenant.membresia_vigencia && new Date(tenant.membresia_vigencia) >= new Date())
+      (
+        tenant.es_trial &&
+        tenant.membresia_vigencia &&
+        new Date(tenant.membresia_vigencia) >= new Date()
+      )
     );
+
     const can_edit_by_channel = {
-      whatsapp: channel_flags.whatsapp && plan_activo_o_trial,
-      meta:     channel_flags.meta     && plan_activo_o_trial,
-      voice:    channel_flags.voice    && plan_activo_o_trial,
-      sms:      channel_flags.sms      && plan_activo_o_trial,
-      email:    channel_flags.email    && plan_activo_o_trial,
+      whatsapp: isAdmin || (channel_flags.whatsapp && plan_activo_o_trial),
+      meta:     isAdmin || (channel_flags.meta && plan_activo_o_trial),
+      voice:    isAdmin || (channel_flags.voice && plan_activo_o_trial),
+      sms:      isAdmin || (channel_flags.sms && plan_activo_o_trial),
+      email:    isAdmin || (channel_flags.email && plan_activo_o_trial),
     };
 
     // ====================== BLOQUE MEMBRESÍA / TRIAL ======================
@@ -175,14 +183,20 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     //  - NUNCA lo usó por email (trial_registry)
     //  - y además no tiene plan activo ni trial activo
     const trial_disponible = Boolean(
+      !isAdmin &&
       !trial_usado_por_email &&
       !tenant.trial_ever_claimed &&
       !tenant.membresia_activa &&
       !trial_activo
     );
 
-    // Puede editar si plan activo o trial activo
-    const can_edit = Boolean(tenant.membresia_activa || trial_activo);
+    // Admin siempre puede editar.
+    // Los demás usuarios requieren membresía o trial vigente.
+    const can_edit = Boolean(
+      isAdmin ||
+      tenant.membresia_activa ||
+      trial_activo
+    );
 
     // Texto UI (prioriza trial aunque membresía_activa sea true)
     let estado_membresia_texto = '🔴 Inactiva';
@@ -212,6 +226,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
 
       role: req.user?.role ?? user.role ?? "business_owner",
       is_admin: req.user?.is_admin === true,
+      subscription_required: !isAdmin,
 
       tenant_id,
       home_tenant_id: req.user?.home_tenant_id ?? user.home_tenant_id,

@@ -18,7 +18,7 @@ import {
   sortFlowSteps,
   type BookingFlowStepLike,
   type BookingState,
-} from "../../../voice/realtime/realtimeBookingFlowUtils";
+} from "./bookingFlowRuntimeUtils";
 
 import type {
   CallState,
