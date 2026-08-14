@@ -76,6 +76,9 @@ export type HandleBookingTurnArgs = {
   userInput: string;
   messageId: string | null;
 
+  tenant: any;
+  bookingConfig: any;
+
   ctx: any;
 
   bookingEnabled: boolean;
@@ -113,6 +116,8 @@ export async function handleBookingTurn(
 ): Promise<HandleBookingTurnResult> {
   const {
     tenantId,
+    tenant,
+    bookingConfig,
     canal,
     contactoNorm,
     idiomaDestino,
@@ -188,6 +193,9 @@ export async function handleBookingTurn(
         contactPhone,
         userInput,
         state: runtime.state,
+
+        tenant,
+        cfg: bookingConfig,
 
         persistState: async (
           nextState
@@ -325,6 +333,55 @@ export async function handleBookingTurn(
     };
   }
 
+  const initialBookingData: Record<string, string> = {};
+
+  /**
+   * Reutiliza información estructurada que el pipeline
+   * ya conoce antes de iniciar booking.
+   *
+   * No volvemos a interpretar userInput aquí.
+   */
+  const structuredService =
+    ctxLocal?.structuredService &&
+    typeof ctxLocal.structuredService === "object"
+      ? ctxLocal.structuredService
+      : null;
+
+  const knownService = clean(
+    structuredService?.name ||
+      structuredService?.service_name ||
+      structuredService?.serviceName ||
+      structuredService?.label ||
+      ctxLocal?.last_service_name ||
+      ctxLocal?.last_service_label
+  );
+
+  if (knownService) {
+    initialBookingData.service =
+      knownService;
+  }
+
+  const knownCustomerName = clean(
+    ctxLocal?.customer_name ||
+      ctxLocal?.customerName
+  );
+
+  if (knownCustomerName) {
+    initialBookingData.customer_name =
+      knownCustomerName;
+  }
+
+  const knownAddress = clean(
+    ctxLocal?.service_address ||
+      ctxLocal?.serviceAddress ||
+      ctxLocal?.address
+  );
+
+  if (knownAddress) {
+    initialBookingData.service_address =
+      knownAddress;
+  }
+
   const started =
     await startSharedBookingFlow({
       tenantId,
@@ -332,7 +389,10 @@ export async function handleBookingTurn(
       contactPhone,
       state: {
         lang: locale,
-        bookingData: {},
+
+        bookingData:
+          initialBookingData,
+
         bookingTurnStatus:
           "waiting_assistant_prompt",
       },

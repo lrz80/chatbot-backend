@@ -675,6 +675,85 @@ export async function procesarMensajeWhatsApp(
     );
   }
 
+  let bookingConfig: any = {};
+
+  try {
+    const bookingLocale =
+      String(idiomaDestino || "").trim();
+
+    let bookingConfigResult =
+      await queryWithTimeout(
+        `
+          SELECT *
+          FROM voice_configs
+          WHERE tenant_id = $1
+            AND lower(canal) = 'voice'
+            AND lower(idioma) = lower($2)
+          ORDER BY
+            updated_at DESC,
+            created_at DESC
+          LIMIT 1
+        `,
+        [
+          tenant.id,
+          bookingLocale,
+        ],
+        12000
+      );
+
+    bookingConfig =
+      bookingConfigResult.rows[0] || null;
+
+    if (!bookingConfig) {
+      bookingConfigResult =
+        await queryWithTimeout(
+          `
+            SELECT *
+            FROM voice_configs
+            WHERE tenant_id = $1
+              AND lower(canal) = 'voice'
+            ORDER BY
+              updated_at DESC,
+              created_at DESC
+            LIMIT 1
+          `,
+          [tenant.id],
+          12000
+        );
+
+      bookingConfig =
+        bookingConfigResult.rows[0] || {};
+    }
+
+    console.log(
+      "[MESSAGING][BOOKING_CONFIG_RESOLVED]",
+      {
+        tenantId: tenant.id,
+        channel: canal,
+        requestedLocale:
+          bookingLocale || null,
+        resolvedLocale:
+          bookingConfig?.idioma || null,
+        hasBookingConfig:
+          Boolean(
+            bookingConfig &&
+            Object.keys(bookingConfig).length
+          ),
+      }
+    );
+  } catch (e: any) {
+    bookingConfig = {};
+
+    console.warn(
+      "[MESSAGING][BOOKING_CONFIG_RESOLUTION_FAILED]",
+      {
+        tenantId: tenant.id,
+        channel: canal,
+        error: e?.message || e,
+      }
+    );
+  }
+
   function setReply(text: string, source: string, intent?: string | null) {
     replied = true;
     handled = true;
@@ -846,59 +925,81 @@ export async function procesarMensajeWhatsApp(
   // ===============================
   // 📅 BOOKING helper (usa módulo genérico)
   // ===============================
-  async function tryBooking(mode: "gate" | "guardrail", tag: string) {
-    const bookingRes = await handleBookingTurn({
-      pool,
-      tenantId: tenant.id,
-      canal,
-      contactoNorm,
-      idiomaDestino,
-      userInput,
-      messageId: messageId || null,
+  async function tryBooking(
+    mode: "gate" | "guardrail",
+    tag: string
+  ) {
+    const bookingRes =
+      await handleBookingTurn({
+        pool,
 
-      ctx: convoCtx,
+        tenantId: tenant.id,
 
-      bookingEnabled,
-      promptBase,
-      bookingLink: resolveTenantBookingLink(tenant),
+        tenant,
+        bookingConfig,
 
-      detectedIntent,
-      intentFallback:
-        INTENCION_FINAL_CANONICA,
+        canal,
+        contactoNorm,
+        idiomaDestino,
+        userInput,
+        messageId:
+          messageId || null,
 
-      bookingRequested:
-        detectedCommercial?.wantsBooking === true,
+        ctx: convoCtx,
 
-      mode,
-      sourceTag: tag,
+        bookingEnabled,
+        promptBase,
 
-      transition,
+        bookingLink:
+          resolveTenantBookingLink(
+            tenant
+          ),
 
-      persistState: async (nextCtx) => {
-        await setConversationStateCompat(
-          tenant.id,
-          canal,
-          contactoNorm,
-          {
-            activeFlow,
-            activeStep,
-            context: nextCtx,
-          }
-        );
+        detectedIntent,
 
-        convoCtx = nextCtx;
-      },
-    });
+        intentFallback:
+          INTENCION_FINAL_CANONICA,
 
-    // siempre sincronizamos el contexto local con el que devolvió booking
+        bookingRequested:
+          detectedCommercial
+            ?.wantsBooking === true,
+
+        mode,
+        sourceTag: tag,
+
+        transition,
+
+        persistState: async (
+          nextCtx
+        ) => {
+          await setConversationStateCompat(
+            tenant.id,
+            canal,
+            contactoNorm,
+            {
+              activeFlow,
+              activeStep,
+              context: nextCtx,
+            }
+          );
+
+          convoCtx = nextCtx;
+        },
+      });
+
     convoCtx = bookingRes.ctx;
 
-    if (bookingRes.handled && bookingRes.reply) {
+    if (
+      bookingRes.handled &&
+      bookingRes.reply
+    ) {
       await replyAndExit(
         bookingRes.reply,
-        bookingRes.source || "booking_pipeline",
+        bookingRes.source ||
+          "booking_pipeline",
         bookingRes.intent || null
       );
+
       return true;
     }
 

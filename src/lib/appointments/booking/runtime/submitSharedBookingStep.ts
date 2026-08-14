@@ -22,10 +22,9 @@ import {
   type BookingState,
 } from "./bookingFlowRuntimeUtils";
 
-import {
-  buildRealtimeNextRequiredStep,
-  type RealtimeMappedStep,
-} from "../../../voice/realtime/bookingStep/buildRealtimeNextRequiredStep";
+import type {
+  BookingRuntimeMappedStep,
+} from "./buildSharedNextRequiredStep";
 
 import {
   prepareRealtimeStepSubmission,
@@ -85,7 +84,7 @@ export type SubmitSharedBookingStepResult =
       ok: true;
       state: CallState;
       booking_state: BookingState;
-      next_required_step: RealtimeMappedStep | null;
+      next_required_step: BookingRuntimeMappedStep | null;
       assistant_prompt: string;
       action_required:
         | "awaiting_confirmation"
@@ -98,7 +97,7 @@ export type SubmitSharedBookingStepResult =
       error: string;
       state: CallState;
       booking_state: BookingState | null;
-      next_required_step: RealtimeMappedStep | null;
+      next_required_step: BookingRuntimeMappedStep | null;
       assistant_prompt: string;
 
       flow_complete: boolean;
@@ -250,7 +249,7 @@ function getCurrentPendingStep(params: {
 function applyPendingStepToState(params: {
   state: CallState;
   nextRequiredStep:
-    | RealtimeMappedStep
+    | BookingRuntimeMappedStep
     | null;
 }): CallState {
   const { state, nextRequiredStep } =
