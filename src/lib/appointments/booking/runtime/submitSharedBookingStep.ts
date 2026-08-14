@@ -42,6 +42,10 @@ import {
   resolveGlobalConfirmationIntent,
 } from "../../../voice/realtime/bookingStep/resolveGlobalConfirmationIntent";
 
+import {
+  normalizeSharedBookingStepValue,
+} from "./normalizeSharedBookingStepValue";
+
 export type SubmitSharedBookingStepParams = {
   tenantId: string;
 
@@ -302,43 +306,6 @@ function applyPendingStepToState(params: {
   };
 }
 
-async function resolveSubmissionValue(params: {
-  currentStep: BookingFlowStepLike;
-  userInput: string;
-  locale: VoiceLocale;
-}): Promise<string> {
-  const expectedType = clean(
-    params.currentStep.expected_type
-  ).toLowerCase();
-
-  const targetSlot = clean(
-    params.currentStep.validation_config
-      ?.slot
-  ).toLowerCase();
-
-  const isConfirmation =
-    expectedType === "confirmation" ||
-    targetSlot === "confirmation" ||
-    isConfirmationLikeStep(
-      params.currentStep
-    );
-
-  if (!isConfirmation) {
-    return params.userInput;
-  }
-
-  const confirmationIntent =
-    await resolveGlobalConfirmationIntent({
-      locale: params.locale,
-      values: [params.userInput],
-    });
-
-  return (
-    clean(confirmationIntent) ||
-    "unknown"
-  );
-}
-
 export async function submitSharedBookingStep(
   params: SubmitSharedBookingStepParams
 ): Promise<SubmitSharedBookingStepResult> {
@@ -397,11 +364,12 @@ export async function submitSharedBookingStep(
     };
   }
 
-  const submissionValue =
-    await resolveSubmissionValue({
-      currentStep: pending.currentStep,
-      userInput,
+  const normalizedSubmission =
+    await normalizeSharedBookingStepValue({
+      tenantId,
       locale: params.locale,
+      step: pending.currentStep,
+      userInput,
     });
 
   const prepared =
@@ -413,15 +381,20 @@ export async function submitSharedBookingStep(
           pending.currentStep.step_key
         ),
 
-        value: submissionValue,
+        value:
+          normalizedSubmission.value,
 
-        model_value: submissionValue,
+        model_value:
+          normalizedSubmission.modelValue,
 
-        transcript_value: userInput,
-        raw_transcript_value: userInput,
+        transcript_value:
+          userInput,
+
+        raw_transcript_value:
+          userInput,
 
         resolved_candidate_source:
-          "transcript",
+          normalizedSubmission.source,
       },
 
       bookingContext: {
