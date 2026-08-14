@@ -61,7 +61,6 @@ import { handleUserSignalsTurn } from "../../lib/channels/engine/turn/handleUser
 import { handleBookingTurn } from "../../lib/channels/engine/booking/handleBookingTurn";
 import { parseDatosCliente } from "../../lib/parseDatosCliente";
 
-import { runEstimateFlowTurn } from "../../lib/estimateFlow/runEstimateFlowTurn";
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { queryWithTimeout } from "../../lib/dbQuery";
 
@@ -961,8 +960,8 @@ export async function procesarMensajeWhatsApp(
           INTENCION_FINAL_CANONICA,
 
         bookingRequested:
-          detectedCommercial
-            ?.wantsBooking === true,
+          detectedCommercial?.wantsBooking === true ||
+          detectedCommercial?.wantsQuote === true,
 
         mode,
         sourceTag: tag,
@@ -989,16 +988,15 @@ export async function procesarMensajeWhatsApp(
 
     convoCtx = bookingRes.ctx;
 
-    if (
-      bookingRes.handled &&
-      bookingRes.reply
-    ) {
-      await replyAndExit(
-        bookingRes.reply,
-        bookingRes.source ||
-          "booking_pipeline",
-        bookingRes.intent || null
-      );
+    if (bookingRes.handled) {
+      if (bookingRes.reply) {
+        await replyAndExit(
+          bookingRes.reply,
+          bookingRes.source ||
+            "booking_pipeline",
+          bookingRes.intent || null
+        );
+      }
 
       return true;
     }
@@ -1482,40 +1480,6 @@ export async function procesarMensajeWhatsApp(
   }
 
   // ===============================
-  // 🏠 ESTIMATE FLOW
-  // ===============================
-  {
-    const estimateResult = await runEstimateFlowTurn({
-      pool,
-      tenant,
-      convoCtx,
-      userInput,
-      idiomaDestino,
-      canal,
-      contactoNorm,
-    });
-
-    if (estimateResult.handled) {
-      transition({
-        flow: "estimate_flow",
-        step: estimateResult.nextEstimateState.step,
-        patchCtx: {
-          estimateFlow: estimateResult.nextEstimateState,
-          estimate_flow_last_touch_at: Date.now(),
-          last_bot_action: "estimate_flow_turn",
-          last_reply_source: "estimate_flow",
-        },
-      });
-
-      return await replyAndExit(
-        estimateResult.finalReply,
-        "estimate_flow",
-        "estimate_flow"
-      );
-    }
-  }
-
-  // ===============================
   // ✅ POST-BOOKING COURTESY GUARD
   // Evita que después de agendar, un "gracias" dispare el saludo inicial.
   // ===============================
@@ -1754,39 +1718,6 @@ export async function procesarMensajeWhatsApp(
         }
       }
 
-      if (smTurn.activatedEstimate) {
-        const estimateResult = await runEstimateFlowTurn({
-          pool,
-          tenant,
-          convoCtx,
-          userInput,
-          idiomaDestino,
-          canal,
-          contactoNorm,
-        });
-
-        if (estimateResult.handled) {
-          transition({
-            flow: "estimate_flow",
-            step: estimateResult.nextEstimateState.step,
-            patchCtx: {
-              estimateFlow: estimateResult.nextEstimateState,
-              estimate_flow_last_touch_at: Date.now(),
-              last_bot_action: "estimate_flow_turn",
-              last_reply_source: "estimate_flow",
-            },
-          });
-
-          return await replyAndExit(
-            estimateResult.finalReply,
-            "estimate_flow",
-            "estimate_flow"
-          );
-        }
-
-        return;
-      }
-
       return;
     }
   } else {
@@ -1817,7 +1748,7 @@ export async function procesarMensajeWhatsApp(
 
   // ===============================
   // 🚫 SIN FALLBACK CONVERSACIONAL EN EL WEBHOOK
-  // El turno no fue resuelto por booking / estimate / fastpath / state machine.
+  // El turno no fue resuelto por booking / fastpath / state machine.
   // A partir de aquí, cualquier caso faltante se corrige en runFastpath,
   // no agregando otro motor de respuesta aquí.
   // ===============================
@@ -1855,15 +1786,7 @@ export async function procesarMensajeWhatsApp(
         activeStep,
       },
 
-      fallbackKind:
-        activeFlow === "estimate_flow" &&
-        activeStep === "scheduled" &&
-        (
-          INTENCION_FINAL_CANONICA === "saludo" ||
-          detectedIntent === "saludo"
-        )
-          ? "post_completion_courtesy"
-          : "default",
+      fallbackKind: "default",
     });
 
     if (fallback.ctxPatch) {
