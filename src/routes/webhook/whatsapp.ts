@@ -1446,7 +1446,8 @@ export async function procesarMensajeWhatsApp(
 
     if (
       engineMode === "simple_hybrid" &&
-      !hasActiveBooking
+      !hasActiveBooking &&
+      detectedCommercial?.wantsQuote !== true
     ) {
       const simpleResult = await runSimplePromptTurn({
         tenantId: tenant.id,
