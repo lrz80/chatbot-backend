@@ -268,7 +268,7 @@ export async function handleBookingTurn(
        * un mensaje fijo.
        */
       return {
-        handled: false,
+        handled: true,
         source:
           `${sourceTag}:shared_booking_created`,
         intent: "booking",
@@ -298,19 +298,36 @@ export async function handleBookingTurn(
       submitted.assistant_prompt
     );
 
-    if (reply) {
+    const retryReply = clean(
+      submitted.next_required_step
+        ?.retry_prompt ||
+      submitted.next_required_step
+        ?.prompt
+    );
+
+    const effectiveReply =
+      reply || retryReply;
+
+    if (effectiveReply) {
       return {
         handled: true,
-        reply,
+        reply: effectiveReply,
         source:
-          `${sourceTag}:shared_booking_submit`,
+          submitted.ok
+            ? `${sourceTag}:shared_booking_submit`
+            : `${sourceTag}:shared_booking_retry`,
         intent: "booking",
         ctx: ctxLocal,
       };
     }
 
+    /**
+     * Si el runtime de booking está activo,
+     * el turno pertenece exclusivamente al booking.
+     * Nunca debe caer al pipeline conversacional general.
+     */
     return {
-      handled: submitted.ok,
+      handled: true,
       source:
         `${sourceTag}:shared_booking_submit_no_prompt`,
       intent: "booking",
