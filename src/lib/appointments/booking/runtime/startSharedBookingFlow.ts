@@ -1,9 +1,12 @@
 // src/lib/appointments/booking/runtime/startSharedBookingFlow.ts
 
 import type {
-  CallState,
   VoiceLocale,
 } from "../../../voice/types";
+
+import type {
+  BookingRuntimeState,
+} from "./bookingRuntimeTypes";
 
 import {
   getSharedBookingFlow,
@@ -32,13 +35,13 @@ export type StartSharedBookingFlowParams = {
   tenantId: string;
   locale: VoiceLocale;
   contactPhone: string | null;
-  state?: CallState | null;
+  state?: BookingRuntimeState | null;
 };
 
 export type StartSharedBookingFlowResult =
   | {
       ok: true;
-      state: CallState;
+      state: BookingRuntimeState;
       booking_state: BookingState;
       next_required_step: RealtimeMappedStep | null;
       assistant_prompt: string;
@@ -49,7 +52,7 @@ export type StartSharedBookingFlowResult =
       error:
         | "BOOKING_FLOW_NOT_CONFIGURED"
         | "BOOKING_FLOW_CONFIGURATION_INVALID";
-      state: CallState;
+      state: BookingRuntimeState;
       booking_state: BookingState | null;
       next_required_step: null;
       assistant_prompt: string;
@@ -58,7 +61,7 @@ export type StartSharedBookingFlowResult =
 
 function buildSharedBookingState(params: {
   steps: BookingFlowStepLike[];
-  state: CallState;
+  state: BookingRuntimeState;
   explicitCurrentIndex?: number | null;
 }): BookingState {
   const answersBySlot =
@@ -112,10 +115,10 @@ function buildSharedBookingState(params: {
 }
 
 function buildPendingStepState(params: {
-  state: CallState;
+  state: BookingRuntimeState;
   currentIndex: number | null;
   nextStep: RealtimeMappedStep | null;
-}): CallState {
+}): BookingRuntimeState {
   const { state, currentIndex, nextStep } = params;
 
   if (!nextStep) {
@@ -173,11 +176,10 @@ export async function startSharedBookingFlow(
     )) as BookingFlowStepLike[]
   );
 
-  const baseState: CallState = {
-    ...(params.state || ({} as CallState)),
+  const baseState: BookingRuntimeState = {
+    ...(params.state || {}),
     bookingData: {
-      ...((params.state as CallState | null)
-        ?.bookingData || {}),
+      ...(params.state?.bookingData || {}),
     },
   };
 
