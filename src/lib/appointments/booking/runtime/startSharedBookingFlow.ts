@@ -27,9 +27,9 @@ import {
 } from "./bookingFlowRuntimeUtils";
 
 import {
-  buildRealtimeNextRequiredStep,
-  type RealtimeMappedStep,
-} from "../../../voice/realtime/bookingStep/buildRealtimeNextRequiredStep";
+  buildSharedNextRequiredStep,
+  type BookingRuntimeMappedStep,
+} from "./buildSharedNextRequiredStep";
 
 export type StartSharedBookingFlowParams = {
   tenantId: string;
@@ -43,7 +43,7 @@ export type StartSharedBookingFlowResult =
       ok: true;
       state: BookingRuntimeState;
       booking_state: BookingState;
-      next_required_step: RealtimeMappedStep | null;
+      next_required_step: BookingRuntimeMappedStep | null;
       assistant_prompt: string;
       flow_complete: boolean;
     }
@@ -117,7 +117,7 @@ function buildSharedBookingState(params: {
 function buildPendingStepState(params: {
   state: BookingRuntimeState;
   currentIndex: number | null;
-  nextStep: RealtimeMappedStep | null;
+  nextStep: BookingRuntimeMappedStep | null;
 }): BookingRuntimeState {
   const { state, currentIndex, nextStep } = params;
 
@@ -223,7 +223,7 @@ export async function startSharedBookingFlow(
   });
 
   const nextStepResult =
-    buildRealtimeNextRequiredStep({
+    buildSharedNextRequiredStep({
       steps,
       bookingState,
       locale: params.locale,

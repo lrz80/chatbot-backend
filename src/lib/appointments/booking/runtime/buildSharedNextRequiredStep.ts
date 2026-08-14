@@ -1,0 +1,279 @@
+//src/lib/appointments/booking/runtime/buildSharedNextRequiredStep.ts
+
+import type {
+  VoiceLocale,
+} from "../../../voice/types";
+
+import {
+  clean,
+  getStepSlot,
+  isConfirmationLikeStep,
+  buildBookingPromptTemplateValues,
+  renderBookingStepTemplateSafe,
+  type BookingFlowStepLike,
+  type BookingState,
+  type BookingTemplateRenderResult,
+} from "./bookingFlowRuntimeUtils";
+
+import {
+  resolveBookingPromptText,
+  resolveBookingRetryText,
+} from "../../../voice/voiceBookingHelpers";
+
+export type BookingRuntimeMappedStep = {
+  step_key: string;
+  step_order: number;
+  slot: string;
+  prompt: string;
+  expected_type: string;
+  required: boolean;
+  retry_prompt: string;
+  validation_config: Record<string, unknown> | null;
+  prompt_translations: Record<string, unknown> | null;
+  retry_prompt_translations: Record<string, unknown> | null;
+};
+
+export type BuildSharedNextRequiredStepResult =
+  | {
+      ok: true;
+      next_required_step: BookingRuntimeMappedStep | null;
+    }
+  | {
+      ok: false;
+      error: "BOOKING_STEP_TEMPLATE_INVALID";
+      step_key: string;
+      slot: string;
+      prompt_error: BookingTemplateRenderResult extends infer T
+        ? T extends { ok: false; error: infer E }
+          ? E
+          : never
+        : never;
+      retry_prompt_error: BookingTemplateRenderResult extends infer T
+        ? T extends { ok: false; error: infer E }
+          ? E
+          : never
+        : never;
+      next_required_step: null;
+    };
+
+function mapStepForBookingRuntime(
+  step: BookingFlowStepLike,
+  locale?: VoiceLocale
+): BookingRuntimeMappedStep {
+  const resolvedPrompt = locale
+    ? resolveBookingPromptText({
+        locale,
+        prompt: step.prompt || "",
+        promptTranslations:
+          (step.prompt_translations as Record<string, string> | null) || null,
+      })
+    : step.prompt || "";
+
+  const resolvedRetryPrompt = locale
+    ? resolveBookingRetryText({
+        locale,
+        retryPrompt: step.retry_prompt || "",
+        retryPromptTranslations:
+          (step.retry_prompt_translations as Record<string, string> | null) ||
+          null,
+        fallbackPrompt: step.prompt || "",
+        fallbackPromptTranslations:
+          (step.prompt_translations as Record<string, string> | null) || null,
+      })
+    : step.retry_prompt || "";
+
+  return {
+    step_key: clean(step.step_key),
+    step_order: Number(step.step_order || 0),
+    slot: getStepSlot(step),
+    prompt: resolvedPrompt,
+    expected_type: step.expected_type || "text",
+    required: step.required === true,
+    retry_prompt: resolvedRetryPrompt,
+    validation_config: step.validation_config || null,
+    prompt_translations: step.prompt_translations || null,
+    retry_prompt_translations: step.retry_prompt_translations || null,
+  };
+}
+
+function buildDisplayTemplateAliases(
+  values: Record<string, unknown>
+): Record<string, string> {
+  const output: Record<string, string> = {};
+
+  for (const [key, rawValue] of Object.entries(values || {})) {
+    const value = clean(rawValue);
+
+    if (!key || !value) continue;
+
+    output[key] = value;
+    output[`${key}_display`] = value;
+  }
+
+  return output;
+}
+
+function buildBookingRuntimeTemplateValues(
+  bookingState: BookingState
+): Record<string, string> {
+  const baseValues =
+    buildBookingPromptTemplateValues(bookingState);
+
+  const displayValues =
+    buildDisplayTemplateAliases(baseValues);
+
+  const datetimeValue =
+    resolveDatetimeDisplayValue(
+      displayValues.datetime
+    ) ||
+    resolveDatetimeDisplayValue(
+      displayValues.appointment_datetime
+    ) ||
+    resolveDatetimeDisplayValue(
+      displayValues.start_time
+    ) ||
+    resolveDatetimeDisplayValue(
+      displayValues.startTime
+    );
+
+  if (datetimeValue) {
+    displayValues.datetime = datetimeValue;
+    displayValues.datetime_display = datetimeValue;
+  }
+
+  return displayValues;
+}
+
+function resolveDatetimeDisplayValue(value: unknown): string {
+  const raw = clean(value);
+
+  if (!raw) {
+    return "";
+  }
+
+  if (!raw.startsWith("{")) {
+    return raw;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+
+    if (!parsed || typeof parsed !== "object") {
+      return raw;
+    }
+
+    const status = clean((parsed as any).status).toLowerCase();
+
+    if (status !== "resolved") {
+      return "";
+    }
+
+    return (
+      clean((parsed as any).raw) ||
+      [clean((parsed as any).date_text), clean((parsed as any).time_text)]
+        .filter(Boolean)
+        .join(" ")
+    );
+  } catch {
+    return raw;
+  }
+}
+
+export function buildSharedNextRequiredStep(params: {
+  steps: BookingFlowStepLike[];
+  bookingState: BookingState;
+  locale?: VoiceLocale;
+  overridePrompt?: string;
+}): BuildSharedNextRequiredStepResult {
+  const { steps, bookingState, locale, overridePrompt } = params;
+
+  if (!bookingState.current_step_key) {
+    return {
+      ok: true,
+      next_required_step: null,
+    };
+  }
+
+  const step = steps.find(
+    (candidate) =>
+      clean(candidate.step_key) === clean(bookingState.current_step_key)
+  );
+
+  if (!step) {
+    return {
+      ok: true,
+      next_required_step: null,
+    };
+  }
+
+  const mapped = mapStepForBookingRuntime(step, locale);
+  const templateValues =
+    buildBookingRuntimeTemplateValues(bookingState);
+
+  const requiresStrictTemplate =
+    mapped.slot === "confirmation" ||
+    isConfirmationLikeStep(step) ||
+    mapped.step_key === "success";
+
+  const promptRender = overridePrompt
+    ? {
+        ok: true as const,
+        text: clean(overridePrompt),
+      }
+    : renderBookingStepTemplateSafe({
+        template: mapped.prompt,
+        values: templateValues,
+        requireNonEmptyValues: requiresStrictTemplate,
+      });
+
+  const retryPromptRender = renderBookingStepTemplateSafe({
+    template: mapped.retry_prompt || mapped.prompt,
+    values: templateValues,
+    requireNonEmptyValues: requiresStrictTemplate,
+  });
+
+  if (!promptRender.ok && !retryPromptRender.ok) {
+    console.error("[BOOKING_RUNTIME][BOOKING_STEP_TEMPLATE_INVALID]", {
+      step_key: mapped.step_key,
+      slot: mapped.slot,
+      prompt_error: promptRender.error,
+      prompt_key: promptRender.key,
+      retry_prompt_error: retryPromptRender.error,
+      retry_prompt_key: retryPromptRender.key,
+    });
+
+    return {
+      ok: false,
+      error: "BOOKING_STEP_TEMPLATE_INVALID",
+      step_key: mapped.step_key,
+      slot: mapped.slot,
+      prompt_error: promptRender.error,
+      retry_prompt_error: retryPromptRender.error,
+      next_required_step: null,
+    };
+  }
+
+  const renderedPrompt = promptRender.ok
+    ? promptRender.text
+    : retryPromptRender.text;
+
+  const renderedRetryPrompt = retryPromptRender.ok
+    ? retryPromptRender.text
+    : renderedPrompt;
+
+  return {
+    ok: true,
+    next_required_step: {
+      step_key: mapped.step_key,
+      step_order: mapped.step_order,
+      slot: mapped.slot,
+      prompt: renderedPrompt,
+      expected_type: mapped.expected_type,
+      required: mapped.required,
+      retry_prompt: renderedRetryPrompt,
+      validation_config: mapped.validation_config,
+      prompt_translations: mapped.prompt_translations,
+      retry_prompt_translations: mapped.retry_prompt_translations,
+    },
+  };
+}
