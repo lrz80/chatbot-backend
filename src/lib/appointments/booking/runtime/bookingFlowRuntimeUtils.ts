@@ -1,4 +1,7 @@
 // src/lib/appointments/booking/runtime/bookingFlowRuntimeUtils.ts
+import type {
+  BookingRuntimeState,
+} from "./bookingRuntimeTypes";
 
 export type BookingFlowStepLike = {
   enabled?: boolean;
@@ -20,11 +23,6 @@ export type BookingState = {
   final_confirmation_granted: boolean;
   ready_to_create: boolean;
   collected_slots: Record<string, string>;
-};
-
-export type BookingRuntimeState = {
-  bookingData?: Record<string, string>;
-  bookingStepIndex?: number;
 };
 
 export type StepOptionCandidate = {
