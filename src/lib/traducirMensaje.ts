@@ -66,7 +66,6 @@ export async function traducirMensaje(
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-      temperature: 0, // clave: menos “creatividad” = menos inventos/redondeos
     });
 
     let out = response.choices[0]?.message?.content?.trim() || input;
