@@ -370,6 +370,7 @@ export async function submitSharedBookingStep(
       locale: params.locale,
       step: pending.currentStep,
       userInput,
+      contactPhone: params.contactPhone,
     });
 
   const prepared =

@@ -491,6 +491,83 @@ async function normalizeDatetimeStep(
     };
   }
 }
+function isPhoneStep(
+  step: BookingFlowStepLike
+): boolean {
+  const expectedType =
+    getExpectedType(step);
+
+  const slot =
+    getStepSlot(step).toLowerCase();
+
+  return (
+    expectedType === "phone" ||
+    slot === "customer_phone" ||
+    slot === "phone"
+  );
+}
+
+function getPhoneValidationMode(
+  step: BookingFlowStepLike
+): string {
+  return getValidationMode(step)
+    .trim()
+    .toLowerCase();
+}
+
+async function normalizePhoneStep(
+  params: {
+    step: BookingFlowStepLike;
+    userInput: string;
+    locale: VoiceLocale;
+    contactPhone: string | null;
+  }
+): Promise<
+  NormalizeSharedBookingStepValueResult
+> {
+  const validationMode =
+    getPhoneValidationMode(
+      params.step
+    );
+
+  if (
+    validationMode ===
+    "confirm_or_replace" &&
+    params.contactPhone
+  ) {
+    const confirmationIntent =
+      await resolveGlobalConfirmationIntent({
+        locale: params.locale,
+        values: [
+          params.userInput,
+        ],
+      });
+
+    const normalizedIntent =
+      clean(
+        confirmationIntent
+      ).toLowerCase();
+
+    if (
+      normalizedIntent === "confirm"
+    ) {
+      return {
+        value:
+          "__USE_CALLER_PHONE__",
+        modelValue:
+          "__USE_CALLER_PHONE__",
+        source: "model",
+      };
+    }
+  }
+
+  return {
+    value: params.userInput,
+    modelValue:
+      params.userInput,
+    source: "transcript",
+  };
+}
 
 export async function normalizeSharedBookingStepValue(
   params: {
@@ -498,6 +575,7 @@ export async function normalizeSharedBookingStepValue(
     locale: VoiceLocale;
     step: BookingFlowStepLike;
     userInput: string;
+    contactPhone: string | null;
   }
 ): Promise<
   NormalizeSharedBookingStepValueResult
@@ -536,6 +614,20 @@ export async function normalizeSharedBookingStepValue(
       modelValue: resolved,
       source: "model",
     };
+  }
+
+  if (
+    isPhoneStep(
+      params.step
+    )
+  ) {
+    return normalizePhoneStep({
+      step: params.step,
+      userInput,
+      locale: params.locale,
+      contactPhone:
+        params.contactPhone,
+    });
   }
 
   if (
