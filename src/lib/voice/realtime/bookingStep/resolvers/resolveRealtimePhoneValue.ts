@@ -64,8 +64,8 @@ function isUseCallerPhoneProtocol(value: string): boolean {
   const normalized = normalizeProtocolValue(value);
 
   return (
-    normalized === USE_CALLER_PHONE_TOKEN ||
-    normalized === PHONE_CONFIRM_USE_INBOUND
+    normalized === normalizeProtocolValue(USE_CALLER_PHONE_TOKEN) ||
+    normalized === normalizeProtocolValue(PHONE_CONFIRM_USE_INBOUND)
   );
 }
 
@@ -73,8 +73,8 @@ function isRejectOrUnknownPhoneProtocol(value: string): boolean {
   const normalized = normalizeProtocolValue(value);
 
   return (
-    normalized === PHONE_CONFIRM_REPLACE ||
-    normalized === PHONE_CONFIRM_UNKNOWN
+    normalized === normalizeProtocolValue(PHONE_CONFIRM_REPLACE) ||
+    normalized === normalizeProtocolValue(PHONE_CONFIRM_UNKNOWN)
   );
 }
 
