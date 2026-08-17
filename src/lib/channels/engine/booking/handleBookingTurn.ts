@@ -138,9 +138,6 @@ export async function handleBookingTurn(
   const bookingCanal =
     toBookingCanal(canal);
 
-  const locale =
-    idiomaDestino as VoiceLocale;
-
   const contactPhone =
     bookingCanal === "whatsapp"
       ? clean(contactoNorm) || null
@@ -151,6 +148,22 @@ export async function handleBookingTurn(
     tenantId,
     clean(contactoNorm),
   ].join(":");
+
+  const runtime =
+    readMessagingBookingRuntime(
+      ctxLocal
+    );
+
+  const lockedBookingLang = clean(
+    runtime.active
+      ? runtime.state?.lang
+      : ""
+  );
+
+  const locale = (
+    lockedBookingLang ||
+    idiomaDestino
+  ) as VoiceLocale;
 
   const persistRuntimeState =
     async (
@@ -172,11 +185,6 @@ export async function handleBookingTurn(
       await persistState(nextCtx);
       ctxLocal = nextCtx;
     };
-
-  const runtime =
-    readMessagingBookingRuntime(
-      ctxLocal
-    );
 
   /*
    * Un booking ya activo siempre tiene prioridad.
