@@ -7,6 +7,11 @@ import {
   type LangCode,
 } from "../../../i18n/lang";
 
+import {
+  isMessagingBookingActive,
+  readMessagingBookingRuntime,
+} from "../../../appointments/booking/runtime/messagingBookingState";
+
 type DetectIdiomaResult = {
   lang: unknown;
   confidence: number;
@@ -448,32 +453,45 @@ export async function resolveTurnLangClientFirst(
   }
 
   /*
-   * Lock durante booking.
-   *
-   * El idioma guardado en el booking
-   * tiene prioridad para impedir cambios
-   * accidentales por respuestas cortas,
-   * nombres, direcciones, teléfonos, etc.
-   */
-  const bookingStepLang =
-    (convoCtx as any)?.booking?.step;
+  * Lock durante booking.
+  *
+  * Messaging usa booking_runtime como estado canónico.
+  * Se conserva compatibilidad temporal con booking legacy.
+  */
+  const messagingRuntime =
+    readMessagingBookingRuntime(convoCtx);
 
-  const inBookingLang =
+  const messagingBookingActive =
+    isMessagingBookingActive(convoCtx);
+
+  const legacyBookingStep = String(
+    (convoCtx as any)?.booking?.step || ""
+  ).trim();
+
+  const legacyBookingActive =
     Boolean(
-      bookingStepLang &&
-      bookingStepLang !== "idle"
+      legacyBookingStep &&
+      legacyBookingStep !== "idle"
     );
 
+  const inBookingLang =
+    messagingBookingActive ||
+    legacyBookingActive;
+
   const rawLockedLang =
-    inBookingLang
+    messagingBookingActive
       ? (
-          (convoCtx as any)
-            ?.booking?.lang ||
-          (convoCtx as any)
-            ?.thread_lang ||
+          messagingRuntime.state?.lang ||
+          (convoCtx as any)?.thread_lang ||
           null
         )
-      : null;
+      : legacyBookingActive
+        ? (
+            (convoCtx as any)?.booking?.lang ||
+            (convoCtx as any)?.thread_lang ||
+            null
+          )
+        : null;
 
   const lockedLang =
     normalizeLang(

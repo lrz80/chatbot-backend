@@ -26,6 +26,10 @@ import {
   readMessagingBookingRuntime,
 } from "../../../appointments/booking/runtime/messagingBookingState";
 
+import {
+  classifySharedBookingStepAnswer,
+} from "../../../appointments/booking/runtime/classifySharedBookingStepAnswer";
+
 type TransitionFn = (params: {
   flow?: string;
   step?: string;
@@ -193,6 +197,66 @@ export async function handleBookingTurn(
    * wantsBooking en cada mensaje.
    */
   if (runtime.active) {
+    const pendingStepKey =
+      clean(
+        runtime.state
+          ?.pendingBookingStepKey
+      );
+
+    const pendingStepSlot =
+      clean(
+        runtime.state
+          ?.pendingBookingStepSlot
+      );
+
+    const pendingStepExpectedType =
+      clean(
+        runtime.state
+          ?.pendingBookingStepExpectedType
+      );
+
+    const pendingStepPrompt =
+      clean(
+        runtime.state
+          ?.pendingBookingStepPrompt
+      );
+
+    const stepAnswerDecision =
+      await classifySharedBookingStepAnswer({
+        userInput,
+        stepKey: pendingStepKey,
+        slot: pendingStepSlot,
+        expectedType:
+          pendingStepExpectedType,
+        prompt: pendingStepPrompt,
+      });
+
+    if (
+      !stepAnswerDecision.answersCurrentStep
+    ) {
+      console.log(
+        "[SHARED_BOOKING][NON_STEP_TURN_BLOCKED]",
+        {
+          tenantId,
+          channel: bookingCanal,
+          sessionId,
+          pendingStepKey,
+          pendingStepSlot,
+          pendingStepExpectedType,
+          userInput,
+        }
+      );
+
+      return {
+        handled: true,
+        reply: pendingStepPrompt || undefined,
+        source:
+          `${sourceTag}:shared_booking_non_step_turn`,
+        intent: "booking",
+        ctx: ctxLocal,
+      };
+    }
+
     const submitted =
       await submitSharedBookingStep({
         tenantId,
