@@ -1,5 +1,4 @@
 // src/lib/appointments/resolveVoiceAvailabilityWindow.ts
-
 import pool from "../db";
 import { parseVoiceRequestedDate } from "./parseVoiceRequestedDate";
 import { validateServiceScheduleForDate } from "./validateServiceScheduleForDate";
