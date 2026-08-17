@@ -172,8 +172,9 @@ export async function resolveVoiceScheduleValidation(
       : 0;
 
   const defaultDurationMinRaw = Number(
-    settingsRows?.[0]?.default_duration_min ?? params.durationMin ?? 30
+    params.durationMin ?? settingsRows?.[0]?.default_duration_min ?? 30
   );
+
   const defaultDurationMin =
     Number.isFinite(defaultDurationMinRaw) && defaultDurationMinRaw > 0
       ? defaultDurationMinRaw

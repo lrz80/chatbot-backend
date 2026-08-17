@@ -11,6 +11,7 @@ import { upsertVoiceCallState } from "../upsertVoiceCallState";
 import { resolveVoiceAvailabilityWindow } from "../../appointments/resolveVoiceAvailabilityWindow";
 import { formatSuggestedStartForVoice } from "./bookingSpeech";
 import { formatSuggestedStartsForVoice } from "../../appointments/formatSuggestedStartsForVoice";
+import { resolveTenantBookingProvider } from "../../appointments/booking/providers/resolveTenantBookingProvider";
 
 type BookingStepLike = {
   step_key: string;
@@ -466,6 +467,18 @@ export async function executeCanonicalBookingDatetimeStep(
     };
   }
 
+  const activeProvider = await resolveTenantBookingProvider(tenantId);
+
+  const squareDurationRaw =
+    activeProvider === "square"
+      ? Number((state as any)?.squareService?.durationMinutes)
+      : NaN;
+
+  const providerServiceDurationMin =
+    Number.isFinite(squareDurationRaw) && squareDurationRaw > 0
+      ? squareDurationRaw
+      : undefined;
+
   const scheduleValidation =
     await resolveVoiceScheduleValidation({
       tenantId,
@@ -473,6 +486,7 @@ export async function executeCanonicalBookingDatetimeStep(
       rawDatetime,
       channel: "voice",
       referenceSuggestedStarts,
+      durationMin: providerServiceDurationMin,
 
       fieldServiceAreaEnabled,
 
