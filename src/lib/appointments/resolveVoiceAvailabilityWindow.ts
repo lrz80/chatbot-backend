@@ -903,6 +903,37 @@ export async function resolveVoiceAvailabilityWindow(
     clean(settings.timezone) ||
     "America/New_York";
 
+  const explicitDatetime =
+    parseVoiceRequestedDate({
+      raw: params.raw,
+      baseDate,
+      timeZone,
+      referenceSuggestedStarts:
+        params.referenceSuggestedStarts,
+    });
+
+  if (
+    explicitDatetime.ok &&
+    explicitDatetime.hasExplicitDate === true &&
+    explicitDatetime.hasExplicitTime === true
+  ) {
+    console.log(
+      "[VOICE][AVAILABILITY_WINDOW_SKIPPED_EXPLICIT_DATETIME]",
+      {
+        tenantId: params.tenantId,
+        serviceName: params.serviceName,
+        raw: params.raw,
+        locale: params.locale,
+        requestedAt:
+          explicitDatetime.requestedAt.toISOString(),
+      }
+    );
+
+    return {
+      kind: "not_window_request",
+    };
+  }
+
   const timeWindows = parseJsonObject(settings.time_windows);
 
   let matchedWindowLabels: string[] = [];
