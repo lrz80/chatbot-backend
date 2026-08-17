@@ -405,27 +405,71 @@ export async function createAppointment(
 
   const activeProvider = await resolveTenantBookingProvider(args.tenantId);
 
-  const resolvedServiceId = await resolveAppointmentServiceId({
-    tenantId: args.tenantId,
-    serviceName,
-  });
+    const resolvedServiceId = await resolveAppointmentServiceId({
+      tenantId: args.tenantId,
+      serviceName,
+    });
 
-  let providerPayload: CreateExternalBookingInput["providerPayload"] | undefined;
+    let providerPayload: CreateExternalBookingInput["providerPayload"] | undefined;
 
-  let plannedResourceId:
-    string | null = null;
+    let plannedResourceId:
+      string | null = null;
 
-  let plannedResourceName:
-    string | null = null;
+    let plannedResourceName:
+      string | null = null;
 
-  let plannedResourceMetadata:
-    Record<string, unknown> | null = null;
+    let plannedResourceMetadata:
+      Record<string, unknown> | null = null;
 
-  const requestedStaffMemberId = cleanString(args.answersBySlot.staff_member_id);
-  const requestedStaffMemberName = cleanString(args.answersBySlot.staff_member_name);
+    const requestedStaffMemberId = cleanString(args.answersBySlot.staff_member_id);
+    const requestedStaffMemberName = cleanString(args.answersBySlot.staff_member_name);
 
-  const duration = args.settings.default_duration_min;
-  const end = new Date(start.getTime() + duration * 60 * 1000);
+    let squareMapping: any = null;
+
+    if (activeProvider === "square") {
+      const squareMappingResult =
+        await resolveSquareServiceMappingFromDbForTenant({
+          tenantId: args.tenantId,
+          internalServiceKey: serviceName,
+        });
+
+      if (!squareMappingResult.ok) {
+        throw new Error(
+          `SQUARE_SERVICE_MAPPING_FAILED:${squareMappingResult.error}`
+        );
+      }
+
+      squareMapping = squareMappingResult;
+    }
+
+    const dashboardDurationRaw = Number(
+      args.settings.default_duration_min
+    );
+
+    const dashboardDuration =
+      Number.isFinite(dashboardDurationRaw) &&
+      dashboardDurationRaw > 0
+        ? dashboardDurationRaw
+        : 30;
+
+    const squareDurationRaw =
+      activeProvider === "square"
+        ? Number(
+            squareMapping?.mapping?.externalMetadata?.durationMinutes ??
+            squareMapping?.service?.durationMinutes
+          )
+        : NaN;
+
+    const duration =
+      activeProvider === "square" &&
+      Number.isFinite(squareDurationRaw) &&
+      squareDurationRaw > 0
+        ? squareDurationRaw
+        : dashboardDuration;
+
+    const end = new Date(
+      start.getTime() + duration * 60 * 1000
+    );
 
     if (isFieldServiceBooking) {
     if (
@@ -582,15 +626,6 @@ export async function createAppointment(
     ].join(":");
 
   if (activeProvider === "square") {
-    const squareMapping = await resolveSquareServiceMappingFromDbForTenant({
-      tenantId: args.tenantId,
-      internalServiceKey: serviceName,
-    });
-
-    if (!squareMapping.ok) {
-      throw new Error(`SQUARE_SERVICE_MAPPING_FAILED:${squareMapping.error}`);
-    }
-
     const depositPolicy = resolveBookingDepositPolicyFromExternalMetadata(
       squareMapping.mapping.externalMetadata
     );
