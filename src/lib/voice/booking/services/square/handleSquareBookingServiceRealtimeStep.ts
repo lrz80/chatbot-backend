@@ -171,7 +171,9 @@ function buildSquareAmbiguousServicePrompt(params: {
     .map((option, index) => `${index + 1}. ${option}`)
     .join("\n");
 
-  return `${cleanBasePrompt}\n\nOpciones disponibles:\n${optionLines}`;
+  return [cleanBasePrompt, optionLines]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 export async function handleSquareBookingServiceRealtimeStep(

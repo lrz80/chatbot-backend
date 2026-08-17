@@ -187,14 +187,20 @@ export async function resolveSquareServiceWithCatalogContext(
             role: "system",
             content:
               "You classify a customer booking request against a provider service catalog. " +
-              "The customer may speak any language. First infer the customer's meaning in English internally, then compare it to the catalog. " +
+              "The customer may speak any language. Infer the customer's intended service semantically and compare it against the catalog. " +
               "Use only the provided catalog entries as the source of truth. " +
               "Each catalog entry has an exact name and searchable provider metadata. " +
-              "Return JSON only. Never invent services. " +
-              "Do not choose arbitrarily. " +
-              "If exactly one catalog entry is clearly compatible with the customer request, return resolution='resolved'. " +
-              "If more than one catalog entry is compatible with the customer request, return resolution='ambiguous'. " +
-              "If no catalog entry is compatible, return resolution='none'. " +
+              "Return JSON only. Never invent services or catalog names. " +
+              "Do not require literal word overlap between the customer request and the catalog. " +
+              "A customer may describe a broad service family while the catalog contains more specific services, variants, packages, levels, styles, or versions of that service. " +
+              "Treat those more specific catalog entries as compatible candidates when their metadata supports that relationship. " +
+              "For example, if the customer requests a general category and several catalog entries are different variants of that category, return resolution='ambiguous' and include the compatible entries in candidateNames. " +
+              "If the customer omits an attribute that is necessary to distinguish between multiple compatible catalog entries, return resolution='ambiguous', not 'none' and not an arbitrary resolved service. " +
+              "If exactly one catalog entry is clearly compatible with the customer's meaning, return resolution='resolved'. " +
+              "If two or more catalog entries are reasonably compatible, return resolution='ambiguous'. " +
+              "If no catalog entry is semantically compatible, return resolution='none'. " +
+              "When returning ambiguous, candidateNames must include every reasonably compatible catalog entry, up to 8 entries. " +
+              "Do not choose one candidate merely because it is the closest lexical match when other catalog entries belong to the same requested service family. " +
               "matchedName must be exactly one catalog entry name or null. " +
               "candidateNames must contain only exact catalog entry names.",
           },
