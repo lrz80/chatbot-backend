@@ -17,7 +17,7 @@ const EMBEDDED_SIGNUP_CONFIG_ID =
 const JWT_SECRET = process.env.JWT_SECRET || "";
 
 router.post(
-  "/start",
+  "/whatsapp-onboard/start",
   authenticateUser,
   async (req: Request, res: Response) => {
     try {
