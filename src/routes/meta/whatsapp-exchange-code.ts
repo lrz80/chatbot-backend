@@ -1,142 +1,254 @@
+// src/routes/meta/whatsapp-exchange-code.ts
+
 import express, { Request, Response } from "express";
+import jwt from "jsonwebtoken";
+
 import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
 
 const router = express.Router();
-const GRAPH_VERSION = "v18.0";
 
-/**
- * Env vars
- * - META_APP_ID
- * - META_APP_SECRET
- *
- * NOTA:
- * Para Embedded Signup, lo importante es:
- * 1) Guardar access_token
- * 2) Esperar el webhook (ahí llega WABA_ID y PHONE_NUMBER_ID)
- */
+const GRAPH_VERSION =
+  process.env.META_GRAPH_VERSION || "v26.0";
+
 const META_APP_ID =
-  process.env.META_APP_ID || process.env.NEXT_PUBLIC_META_APP_ID || "";
-const META_APP_SECRET = process.env.META_APP_SECRET || "";
+  process.env.META_APP_ID ||
+  process.env.NEXT_PUBLIC_META_APP_ID ||
+  "";
 
-/**
- * POST /api/meta/whatsapp/exchange-code
- * body: { code, tenantId?, redirectUri?, state? }
- *
- * - NO hacemos /me/businesses (evita Missing Permission)
- * - NO hacemos /{wabaId}/phone_numbers aquí
- * - Guardamos token y dejamos el tenant en "pending_webhook"
- */
+const META_APP_SECRET =
+  process.env.META_APP_SECRET || "";
+
+const JWT_SECRET =
+  process.env.JWT_SECRET || "";
+
+type EmbeddedSignupStatePayload = {
+  tenantId?: string;
+  purpose?: string;
+  iat?: number;
+  exp?: number;
+};
+
 router.post(
   "/whatsapp/exchange-code",
   authenticateUser,
   async (req: Request, res: Response) => {
     try {
-      const tenantId =
-        (req as any).user?.tenant_id || (req as any).user?.tenantId;
+      const authenticatedTenantId: string | undefined =
+        (req as any).user?.tenant_id ||
+        (req as any).user?.tenantId;
 
-      const { code, state, redirectUri } = req.body || {};
+      const { code, state } = req.body || {};
 
-      if (!tenantId) {
-        return res.status(401).json({ ok: false, error: "No autenticado" });
-      }
-      if (!code) {
-        return res.status(400).json({ ok: false, error: "Falta code" });
-      }
-      if (!META_APP_ID || !META_APP_SECRET) {
-        return res.status(500).json({
+      if (!authenticatedTenantId) {
+        return res.status(401).json({
           ok: false,
-          error: "META_APP_ID o META_APP_SECRET faltan",
+          error: "No autenticado.",
         });
       }
 
-      console.log("🧪 [WA EXCHANGE CODE] tenantId:", tenantId);
-      console.log("🧪 [WA EXCHANGE CODE] received:", {
-        hasCode: !!code,
-        hasState: !!state,
-        hasRedirectUri: !!redirectUri,
+      if (!code || typeof code !== "string") {
+        return res.status(400).json({
+          ok: false,
+          error: "Falta code de Meta Embedded Signup.",
+        });
+      }
+
+      if (!state || typeof state !== "string") {
+        return res.status(400).json({
+          ok: false,
+          error: "Falta state de Embedded Signup.",
+        });
+      }
+
+      if (!META_APP_ID || !META_APP_SECRET) {
+        return res.status(500).json({
+          ok: false,
+          error:
+            "Configuración incompleta: falta META_APP_ID o META_APP_SECRET.",
+        });
+      }
+
+      if (!JWT_SECRET) {
+        return res.status(500).json({
+          ok: false,
+          error:
+            "Configuración incompleta: falta JWT_SECRET.",
+        });
+      }
+
+      /**
+       * 1) Validar state.
+       *
+       * El state fue generado por whatsapp-onboard-start.ts.
+       * Evita que un tenant pueda completar el onboarding
+       * utilizando un state generado para otro tenant.
+       */
+      let statePayload: EmbeddedSignupStatePayload;
+
+      try {
+        statePayload = jwt.verify(
+          state,
+          JWT_SECRET
+        ) as EmbeddedSignupStatePayload;
+      } catch (error) {
+        console.error(
+          "[WA EXCHANGE CODE] state inválido:",
+          error
+        );
+
+        return res.status(400).json({
+          ok: false,
+          error:
+            "El estado de Embedded Signup es inválido o expiró.",
+        });
+      }
+
+      if (
+        !statePayload?.tenantId ||
+        String(statePayload.tenantId) !==
+          String(authenticatedTenantId)
+      ) {
+        return res.status(403).json({
+          ok: false,
+          error:
+            "El estado de Embedded Signup no corresponde a este tenant.",
+        });
+      }
+
+      if (
+        statePayload?.purpose !==
+        "whatsapp_embedded_signup"
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error:
+            "El state recibido no corresponde al onboarding de WhatsApp.",
+        });
+      }
+
+      console.log("[WA EXCHANGE CODE] Exchange iniciado:", {
+        tenantId: authenticatedTenantId,
+        graphVersion: GRAPH_VERSION,
       });
 
       /**
-       * 1) Exchange code -> access_token
-       *
-       * IMPORTANTE:
-       * - En OAuth estándar se usa redirect_uri.
-       * - En algunos flujos Embedded Signup, Meta permite el exchange sin redirect_uri.
-       * - Si en tu caso vuelve el 36008, la solución real es enviar EXACTAMENTE el mismo
-       *   redirect_uri que usaste en el dialog. Pero este archivo está preparado
-       *   para NO depender de redirect_uri para evitar el loop que estabas viendo.
+       * 2) Exchange del token code por business token.
        */
       const tokenUrl =
         `https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token` +
         `?client_id=${encodeURIComponent(META_APP_ID)}` +
-        `&client_secret=${encodeURIComponent(META_APP_SECRET)}` +
+        `&client_secret=${encodeURIComponent(
+          META_APP_SECRET
+        )}` +
         `&code=${encodeURIComponent(code)}`;
 
-      const tokenRes = await fetch(tokenUrl, { method: "GET" });
-      const tokenJson: any = await tokenRes.json();
+      const tokenRes = await fetch(tokenUrl, {
+        method: "GET",
+      });
+
+      const tokenJson: any = await tokenRes
+        .json()
+        .catch(() => ({}));
 
       if (!tokenRes.ok) {
-        console.error("❌ [WA EXCHANGE CODE] token exchange failed:", tokenJson);
-        return res.status(500).json({
+        console.error(
+          "[WA EXCHANGE CODE] Meta token exchange falló:",
+          tokenJson
+        );
+
+        return res.status(502).json({
           ok: false,
-          error: "Error exchange code",
+          error:
+            "Meta rechazó el intercambio del código de autorización.",
           detail: tokenJson,
         });
       }
 
-      const accessToken = tokenJson?.access_token as string | undefined;
-      const expiresIn = tokenJson?.expires_in as number | undefined;
+      const accessToken =
+        typeof tokenJson?.access_token === "string"
+          ? tokenJson.access_token.trim()
+          : "";
+
+      const expiresIn =
+        typeof tokenJson?.expires_in === "number"
+          ? tokenJson.expires_in
+          : null;
 
       if (!accessToken) {
-        return res.status(500).json({
+        console.error(
+          "[WA EXCHANGE CODE] Meta no devolvió access_token:",
+          tokenJson
+        );
+
+        return res.status(502).json({
           ok: false,
-          error: "No access_token en respuesta",
+          error:
+            "Meta no devolvió access_token.",
           detail: tokenJson,
         });
       }
 
       /**
-       * 2) Guardar token y marcar estado esperando webhook
+       * 3) Guardar token.
        *
-       * Recomendación:
-       * - whatsapp_status = 'pending_webhook'
-       * - whatsapp_connected = false hasta que llegue webhook con WABA/PHONE
+       * Todavía NO marcamos connected aquí porque falta
+       * confirmar WABA + phone_number_id en onboard-complete.
        */
-      await pool.query(
+      const update = await pool.query(
         `
         UPDATE tenants
         SET
           whatsapp_access_token = $1,
-          whatsapp_status = 'pending_webhook',
-          whatsapp_connected = false,
+          whatsapp_status = 'pending_complete',
+          whatsapp_connected = FALSE,
           whatsapp_connected_at = NULL,
           updated_at = NOW()
         WHERE id::text = $2
+        RETURNING id
         `,
-        [accessToken, tenantId]
+        [
+          accessToken,
+          authenticatedTenantId,
+        ]
       );
 
-      console.log("✅ [WA EXCHANGE CODE] token saved. Waiting webhook.", {
-        tenantId,
-        expiresIn,
-      });
+      if (!update.rowCount) {
+        console.error(
+          "[WA EXCHANGE CODE] Tenant no encontrado:",
+          authenticatedTenantId
+        );
 
-      /**
-       * 3) Responder OK
-       * - El frontend puede recargar y mostrar "Conectado" solo cuando tengas
-       *   whatsapp_phone_number_id y whatsapp_business_id guardados por el webhook.
-       */
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Tenant no encontrado al guardar token de WhatsApp.",
+        });
+      }
+
+      console.log(
+        "[WA EXCHANGE CODE] Token guardado correctamente:",
+        {
+          tenantId: authenticatedTenantId,
+          expiresIn,
+        }
+      );
+
       return res.json({
         ok: true,
-        status: "token_saved_waiting_webhook",
-        expiresIn: expiresIn ?? null,
+        status: "token_saved_pending_complete",
+        expiresIn,
       });
-    } catch (err) {
-      console.error("❌ [WA EXCHANGE CODE] error:", err);
+    } catch (error: any) {
+      console.error(
+        "[WA EXCHANGE CODE] Error inesperado:",
+        error
+      );
+
       return res.status(500).json({
         ok: false,
-        error: "Error en exchange-code",
+        error:
+          "Error interno intercambiando el código de WhatsApp.",
       });
     }
   }
