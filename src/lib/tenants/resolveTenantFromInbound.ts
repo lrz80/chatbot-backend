@@ -1,4 +1,5 @@
 // backend/src/lib/tenants/resolveTenantFromInbound.ts
+
 import type { Pool } from "pg";
 import { normalizeToNumber } from "../whatsapp/normalize";
 
@@ -10,7 +11,9 @@ export type ResolveTenantContext = {
   origen?: Origen;
 };
 
-function extractBookingUrlFromLinks(links: unknown): string | null {
+function extractBookingUrlFromLinks(
+  links: unknown
+): string | null {
   if (!links || typeof links !== "object") {
     return null;
   }
@@ -20,8 +23,8 @@ function extractBookingUrlFromLinks(links: unknown): string | null {
   const direct =
     String(
       obj.booking_url ||
-      obj.bookingUrl ||
-      ""
+        obj.bookingUrl ||
+        ""
     ).trim() || null;
 
   if (direct) {
@@ -36,9 +39,9 @@ function extractBookingUrlFromLinks(links: unknown): string | null {
   const nested =
     String(
       bookingNode?.booking_url ||
-      bookingNode?.bookingUrl ||
-      bookingNode?.url ||
-      ""
+        bookingNode?.bookingUrl ||
+        bookingNode?.url ||
+        ""
     ).trim() || null;
 
   if (nested) {
@@ -48,7 +51,9 @@ function extractBookingUrlFromLinks(links: unknown): string | null {
   return null;
 }
 
-function normalizeResolvedTenant(row: any): any | null {
+function normalizeResolvedTenant(
+  row: any
+): any | null {
   if (!row || typeof row !== "object") {
     return null;
   }
@@ -59,7 +64,8 @@ function normalizeResolvedTenant(row: any): any | null {
       : {};
 
   const settingsBooking =
-    settings.booking && typeof settings.booking === "object"
+    settings.booking &&
+    typeof settings.booking === "object"
       ? settings.booking
       : {};
 
@@ -68,27 +74,32 @@ function normalizeResolvedTenant(row: any): any | null {
       ? row.links
       : {};
 
-  const linksBookingUrl = extractBookingUrlFromLinks(links);
+  const linksBookingUrl =
+    extractBookingUrlFromLinks(links);
 
   const normalizedBookingUrl =
     String(
       row.booking_url ||
-      row.bookingUrl ||
-      settingsBooking.booking_url ||
-      linksBookingUrl ||
-      ""
+        row.bookingUrl ||
+        settingsBooking.booking_url ||
+        linksBookingUrl ||
+        ""
     ).trim() || null;
 
   return {
     ...row,
+
     booking_url: normalizedBookingUrl,
+
     settings: {
       ...settings,
+
       booking: {
         ...settingsBooking,
         booking_url: normalizedBookingUrl,
       },
     },
+
     links,
   };
 }
@@ -99,59 +110,184 @@ export async function resolveTenantFromInbound(opts: {
   origen: Origen;
   context?: ResolveTenantContext;
 }): Promise<any | null> {
-  const { pool, toRaw, origen, context } = opts;
+  const {
+    pool,
+    toRaw,
+    origen,
+    context,
+  } = opts;
 
+  /**
+   * Si el caller ya resolvió el tenant,
+   * usamos ese directamente.
+   */
   const ctxTenant = context?.tenant;
+
   if (ctxTenant) {
     return normalizeResolvedTenant(ctxTenant);
   }
 
-  const { numeroSinMas } = normalizeToNumber(String(toRaw || ""));
-  const toDigits = numeroSinMas;
-
   try {
+    /**
+     * =========================================================
+     * TWILIO
+     * =========================================================
+     *
+     * To:
+     * whatsapp:+1863...
+     */
     if (origen === "twilio") {
-      const tenantRes = await pool.query(
-        `
-        SELECT *
-        FROM tenants
-        WHERE REGEXP_REPLACE(
-                REGEXP_REPLACE(LOWER(COALESCE(twilio_number, '')), '^(whatsapp:|tel:)', ''),
-                '[^0-9]',
-                '',
-                'g'
-              ) = $1
-        LIMIT 1
-        `,
-        [toDigits]
+      const { numeroSinMas } =
+        normalizeToNumber(
+          String(toRaw || "")
+        );
+
+      const toDigits = numeroSinMas;
+
+      if (!toDigits) {
+        console.warn(
+          "[RESOLVE_TENANT_FROM_INBOUND][TWILIO] To inválido:",
+          toRaw
+        );
+
+        return null;
+      }
+
+      const tenantRes =
+        await pool.query(
+          `
+          SELECT *
+          FROM tenants
+          WHERE REGEXP_REPLACE(
+                  REGEXP_REPLACE(
+                    LOWER(COALESCE(twilio_number, '')),
+                    '^(whatsapp:|tel:)',
+                    ''
+                  ),
+                  '[^0-9]',
+                  '',
+                  'g'
+                ) = $1
+          LIMIT 1
+          `,
+          [toDigits]
+        );
+
+      const row =
+        tenantRes.rows[0] || null;
+
+      const tenant =
+        normalizeResolvedTenant(row);
+
+      console.log(
+        "[RESOLVE_TENANT_FROM_INBOUND][TWILIO]",
+        {
+          tenantId:
+            tenant?.id ?? null,
+
+          toRaw,
+
+          twilioNumber:
+            tenant?.twilio_number ??
+            null,
+        }
       );
-
-      const row = tenantRes.rows[0] || null;
-
-      console.log("[RESOLVE_TENANT_FROM_INBOUND][LINKS_DEBUG]", {
-        tenantId: row?.id ?? null,
-        links: row?.links ?? null,
-      });
-
-      const tenant = normalizeResolvedTenant(row);
-
-      console.log("[RESOLVE_TENANT_FROM_INBOUND][TENANT_BOOKING_DEBUG]", {
-        tenantId: tenant?.id ?? null,
-        booking_url: tenant?.booking_url ?? null,
-        settings_booking_url: tenant?.settings?.booking?.booking_url ?? null,
-        links_booking_url: tenant?.links?.booking_url ?? null,
-      });
 
       return tenant;
     }
 
+    /**
+     * =========================================================
+     * META CLOUD API
+     * =========================================================
+     *
+     * whatsapp-cloudapi.ts construye:
+     *
+     * To: whatsapp:{phone_number_id}
+     *
+     * Ejemplo:
+     * whatsapp:553535851181088
+     *
+     * Aquí NO buscamos por teléfono E.164.
+     * Buscamos por el identificador interno
+     * phone_number_id entregado por Meta.
+     */
+    if (origen === "meta") {
+      const raw = String(
+        toRaw || ""
+      ).trim();
+
+      const phoneNumberId =
+        raw
+          .replace(/^whatsapp:/i, "")
+          .trim();
+
+      if (!phoneNumberId) {
+        console.warn(
+          "[RESOLVE_TENANT_FROM_INBOUND][META] Falta phone_number_id.",
+          {
+            toRaw,
+          }
+        );
+
+        return null;
+      }
+
+      const tenantRes =
+        await pool.query(
+          `
+          SELECT *
+          FROM tenants
+          WHERE whatsapp_phone_number_id::text = $1
+          LIMIT 1
+          `,
+          [phoneNumberId]
+        );
+
+      const row =
+        tenantRes.rows[0] || null;
+
+      const tenant =
+        normalizeResolvedTenant(row);
+
+      console.log(
+        "[RESOLVE_TENANT_FROM_INBOUND][META]",
+        {
+          tenantId:
+            tenant?.id ?? null,
+
+          phoneNumberId,
+
+          whatsappMode:
+            tenant?.whatsapp_mode ??
+            null,
+
+          whatsappStatus:
+            tenant?.whatsapp_status ??
+            null,
+        }
+      );
+
+      return tenant;
+    }
+
+    console.warn(
+      "[RESOLVE_TENANT_FROM_INBOUND] Origen desconocido:",
+      origen
+    );
+
     return null;
   } catch (e: any) {
-    console.warn("⚠️ resolveTenantFromInbound failed:", {
-      origen,
-      toRaw,
-      err: e?.message,
-    });
+    console.warn(
+      "⚠️ resolveTenantFromInbound failed:",
+      {
+        origen,
+        toRaw,
+        err:
+          e?.message || e,
+      }
+    );
+
     return null;
   }
 }

@@ -3,6 +3,7 @@ import twilio from "twilio";
 import pool from "../db";
 import fetch from "node-fetch";
 import { splitMessage } from "../messages/splitMessage";
+import { getWhatsAppModeStatus } from "../whatsapp/getWhatsAppModeStatus";
 
 console.log("🔐 TWILIO_ACCOUNT_SID: cargada correctamente");
 console.log("🔐 TWILIO_AUTH_TOKEN: cargada correctamente");
@@ -74,34 +75,6 @@ async function getTwilioClientForTenant(tenantId: string) {
   return client;
 }
 
-// ---------- WhatsApp: modo activo + estado del canal ----------
-async function obtenerModoYEstadoWhatsApp(tenantId: string): Promise<{
-  mode: "twilio" | "cloudapi";
-  status: "enabled" | "disabled";
-}> {
-  const result = await pool.query(
-    `SELECT whatsapp_mode, whatsapp_status
-     FROM tenants
-     WHERE id = $1
-     LIMIT 1`,
-    [tenantId]
-  );
-
-  const row = result.rows[0] || {};
-  const modeRaw = String(row.whatsapp_mode || "twilio").trim().toLowerCase();
-  const statusRaw = String(row.whatsapp_status || "disabled").trim().toLowerCase();
-
-  const mode: "twilio" | "cloudapi" =
-    modeRaw === "cloudapi" ? "cloudapi" : "twilio";
-
-  const status: "enabled" | "disabled" =
-  (statusRaw === "enabled" || statusRaw === "active" || statusRaw === "connected")
-    ? "enabled"
-    : "disabled";
-
-  return { mode, status };
-}
-
 // ---------- Envíos por TEMPLATE (Content API con Twilio) ----------
 export async function sendWhatsApp(
   templateSid: string,
@@ -113,7 +86,7 @@ export async function sendWhatsApp(
 ) {
   if (!Array.isArray(contactos) || contactos.length === 0) return;
 
-    const { mode, status } = await obtenerModoYEstadoWhatsApp(tenantId);
+    const { mode, status } = await getWhatsAppModeStatus(tenantId);
 
   if (status !== "enabled") {
     console.log("⛔ WhatsApp deshabilitado (campaña). tenantId=", tenantId);
@@ -368,7 +341,7 @@ export async function enviarWhatsApp(
   }
 
   // ✅ 1) respetar estado y proveedor activo
-  const { mode, status } = await obtenerModoYEstadoWhatsApp(tenantId);
+  const { mode, status } = await getWhatsAppModeStatus(tenantId);
 
   if (status !== "enabled") {
     console.log("⛔ WhatsApp deshabilitado para tenant. tenantId=", tenantId, "status=", status);

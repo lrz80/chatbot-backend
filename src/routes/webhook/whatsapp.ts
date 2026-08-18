@@ -279,16 +279,61 @@ export async function procesarMensajeWhatsApp(
   const tenant = turn.tenant;
 
   if (!tenant) {
-    console.log("⛔ No se encontró tenant para este inbound (buildTurnContext).");
+    console.log(
+      "⛔ No se encontró tenant para este inbound (buildTurnContext)."
+    );
     return;
   }
 
+  const origen = turn.origen;
+
+  /**
+   * 🛡️ EARLY WHATSAPP CHANNEL GUARD
+   *
+   * Debe ejecutarse inmediatamente después de resolver el tenant,
+   * antes de:
+   * - crear/actualizar clientes
+   * - registrar interacciones
+   * - ejecutar booking
+   * - resolver intents
+   * - llamar modelos
+   * - modificar estado conversacional
+   */
+  if (canal === "whatsapp") {
+    const { mode, status } =
+      await getWhatsAppModeStatus(tenant.id);
+
+    const guard =
+      await whatsappModeMembershipGuard({
+        tenant,
+        tenantId: tenant.id,
+        canal,
+        origen,
+        mode,
+        status,
+      });
+
+    if (!guard.ok) {
+      console.log(
+        "[WHATSAPP][EARLY_CHANNEL_GUARD_BLOCKED]",
+        {
+          tenantId: tenant.id,
+          origen,
+          mode,
+          status,
+        }
+      );
+
+      return;
+    }
+  }
+
   // 👉 idioma base del tenant (fallback)
-  const tenantBase: LangCode = normalizeLangCode(tenant?.idioma) ?? "es";
+  const tenantBase: LangCode =
+    normalizeLangCode(tenant?.idioma) ?? "es";
+
   let idiomaDestino: LangCode = tenantBase;
   let forcedLangThisTurn: LangCode | null = null;
-
-  const origen = turn.origen;
 
   const numero = turn.numero;
   const numeroSinMas = turn.numeroSinMas;
@@ -1043,24 +1088,6 @@ export async function procesarMensajeWhatsApp(
 
   if (selectedChannel) {
     decisionFlags.channelSelected = true;
-  }
-
-  if (canal === "whatsapp") {
-    const { mode, status } =
-      await getWhatsAppModeStatus(tenant.id);
-
-    const guard = await whatsappModeMembershipGuard({
-      tenant,
-      tenantId: tenant.id,
-      canal,
-      origen,
-      mode,
-      status,
-    });
-
-    if (!guard.ok) {
-      return;
-    }
   }
 
   // ===============================

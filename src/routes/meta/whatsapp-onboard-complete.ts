@@ -58,6 +58,8 @@ router.post(
         SET
           whatsapp_business_id       = $1,
           whatsapp_phone_number_id   = $2,
+          whatsapp_mode              = 'cloudapi',
+          whatsapp_sender_sid        = NULL,
           whatsapp_status            = 'connected',
           whatsapp_connected         = TRUE,
           whatsapp_connected_at      = NOW(),
