@@ -164,6 +164,15 @@ export async function resolveSquareServiceWithCatalogContext(
   const catalogEntries = buildCatalogEntries(params.services).slice(0, 80);
   const serviceNames = catalogEntries.map((entry) => entry.name);
 
+  console.log("[VOICE_BOOKING][SQUARE_CONTEXT_CATALOG_ENTRIES]", {
+    tenantId: params.tenantId,
+    input,
+    catalogEntries: catalogEntries.map((entry) => ({
+      name: entry.name,
+      searchText: entry.searchText,
+    })),
+  });
+
   if (catalogEntries.length === 0) {
     return {
       kind: "none",
