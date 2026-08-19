@@ -14,6 +14,7 @@ export type ResolveSquareServiceWithCatalogContextResult =
       candidateNames: string[];
       confidence: number;
       reason: string;
+      clarificationPrompt: string;
     }
   | {
       kind: "none";
@@ -168,7 +169,7 @@ function normalizeCandidateNames(value: unknown, catalogNames: string[]): string
         .filter(Boolean)
         .filter((name) => catalogSet.has(name))
     )
-  ).slice(0, 8);
+  ).slice(0, 20);
 }
 
 export async function resolveSquareServiceWithCatalogContext(
@@ -237,8 +238,18 @@ export async function resolveSquareServiceWithCatalogContext(
               "Do not include services that contradict details explicitly stated by the customer. " +
               "Do not choose one arbitrary variant when the customer has not supplied the distinguishing information. " +
               "Return resolution='none' only when the requested service is genuinely unrelated to every catalog entry. " +
-              "When ambiguous, candidateNames must contain the reasonably compatible entries only, maximum 8. " +
+              "When ambiguous, candidateNames must contain all reasonably compatible catalog entries needed to preserve the customer's valid choices, maximum 20. " +
               "matchedName and candidateNames must use exact catalog entry names. " +
+              "When resolution='ambiguous', also return clarificationPrompt. " +
+              "clarificationPrompt must be one short natural spoken question in the customer's language. " +
+              "It must help the customer provide the missing distinguishing information. " +
+              "Do not read or enumerate the full catalog. " +
+              "Do not use numbered menus. " +
+              "Do not mention internal provider terminology, IDs, or technical metadata. " +
+              "You may mention a few short human-friendly distinctions or examples derived only from the compatible catalog entries, when that helps the customer answer. " +
+              "For example, if compatible entries differ mainly by style, ask which style; if they differ mainly by full service versus refill or maintenance, ask that distinction. " +
+              "If many compatible entries exist, summarize the meaningful distinction instead of listing every exact service name. " +
+              "Never invent a distinction that is not supported by the provided catalog entries. " +
               "Return JSON only.",
           },
           {
@@ -253,6 +264,8 @@ export async function resolveSquareServiceWithCatalogContext(
                 candidateNames: ["exact catalog entry names when ambiguous"],
                 confidence: "number from 0 to 1",
                 reason: "short explanation",
+                clarificationPrompt:
+                  "one short natural question in the customer's language when ambiguous, otherwise empty string",
               },
             }),
           },
@@ -291,6 +304,7 @@ export async function resolveSquareServiceWithCatalogContext(
       candidateNames?: string[];
       confidence?: number;
       reason?: string;
+      clarificationPrompt?: string;
     } | null;
 
     if (!parsed) {
@@ -313,6 +327,10 @@ export async function resolveSquareServiceWithCatalogContext(
       serviceNames
     );
 
+    const clarificationPrompt = String(
+      parsed.clarificationPrompt ?? ""
+    ).trim();
+
     console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_MODEL_OUTPUT]", {
       tenantId: params.tenantId,
       input,
@@ -321,6 +339,7 @@ export async function resolveSquareServiceWithCatalogContext(
       candidateNames,
       confidence,
       reason: parsed.reason,
+      clarificationPrompt,
     });
 
     if (candidateNames.length >= 2 && confidence >= 0.45) {
@@ -337,6 +356,7 @@ export async function resolveSquareServiceWithCatalogContext(
         candidateNames,
         confidence,
         reason: parsed.reason || "MULTIPLE_COMPATIBLE_CATALOG_SERVICES",
+        clarificationPrompt,
       };
     }
 
@@ -346,6 +366,7 @@ export async function resolveSquareServiceWithCatalogContext(
         candidateNames,
         confidence,
         reason: parsed.reason || "AMBIGUOUS_CATALOG_CONTEXT_MATCH",
+        clarificationPrompt,
       };
     }
 
