@@ -1302,9 +1302,21 @@ export async function handleRealtimeToolCall(
       };
     }
 
+    const nextRequiredStepPrompt = clean(
+      (toolResult as any)?.next_required_step?.prompt || ""
+    );
+
+    const nextRequiredStepRetryPrompt = clean(
+      (toolResult as any)?.next_required_step?.retry_prompt || ""
+    );
+
+    const toolError = clean((toolResult as any)?.error || "");
+
     const retryPrompt =
-      clean((toolResult as any)?.next_required_step?.retry_prompt || "") ||
-      clean((toolResult as any)?.next_required_step?.prompt || "");
+      toolError === "AMBIGUOUS_BOOKING_SERVICE" ||
+      toolError === "UNRESOLVED_BOOKING_SERVICE_CHOICE"
+        ? nextRequiredStepPrompt || nextRequiredStepRetryPrompt
+        : nextRequiredStepRetryPrompt || nextRequiredStepPrompt;
 
     const retryStepKey = clean(
       (toolResult as any)?.next_required_step?.step_key || ""

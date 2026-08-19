@@ -5,7 +5,6 @@ import type {
   BookingFlowStepLike,
   BookingState,
 } from "../realtimeBookingFlowUtils";
-import { resolveTenantBookingProvider } from "../../../appointments/booking/providers/resolveTenantBookingProvider";
 import { handleSquareBookingServiceRealtimeStep } from "../../booking/services/square/handleSquareBookingServiceRealtimeStep";
 import { handleDashboardBookingServiceRealtimeStep } from "../../booking/services/dashboard/handleDashboardBookingServiceRealtimeStep";
 import { resolveBookingServiceProvider } from "../../booking/services/resolveBookingServiceProvider";
@@ -36,6 +35,7 @@ type HandleBookingServiceRealtimeStepResult =
   | {
       kind: "return";
       result: any;
+      workingState: CallState;
     }
   | {
       kind: "continue";

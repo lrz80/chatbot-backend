@@ -60,6 +60,7 @@ export type ExecuteRealtimeStepRouteResult =
   | {
       kind: "return";
       result: any;
+      workingState?: CallState;
     };
 
 export async function executeRealtimeStepRoute(
@@ -119,6 +120,7 @@ export async function executeRealtimeStepRoute(
       return {
         kind: "return",
         result: serviceStepResult.result,
+        workingState: serviceStepResult.workingState,
       };
     }
 

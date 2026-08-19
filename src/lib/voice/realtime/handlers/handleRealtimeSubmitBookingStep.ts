@@ -698,6 +698,13 @@ export async function handleRealtimeSubmitBookingStep(
         continue;
       }
 
+      if (routeResult.workingState) {
+        Object.assign(
+          bookingContext.state,
+          routeResult.workingState
+        );
+      }
+
       return routeResult.result;
     }
 

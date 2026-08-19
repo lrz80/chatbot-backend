@@ -34,6 +34,7 @@ export type HandleDashboardBookingServiceRealtimeStepResult =
   | {
       kind: "return";
       result: any;
+      workingState: CallState;
     }
   | {
       kind: "continue";

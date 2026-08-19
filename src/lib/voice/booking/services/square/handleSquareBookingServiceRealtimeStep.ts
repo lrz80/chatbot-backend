@@ -50,6 +50,7 @@ export type HandleSquareBookingServiceRealtimeStepResult =
   | {
       kind: "return";
       result: any;
+      workingState: CallState;
     }
   | {
       kind: "continue";

@@ -30,6 +30,7 @@ export function buildBookingServiceRetryResult(
 ): {
   kind: "return";
   result: any;
+  workingState: CallState;
 } {
   const bookingState = params.buildRealtimeBookingState({
     steps: params.steps,
@@ -47,6 +48,7 @@ export function buildBookingServiceRetryResult(
   if (!nextStepResult.ok) {
     return {
       kind: "return",
+      workingState: params.workingState,
       result: {
         ok: false,
         error: nextStepResult.error,
@@ -63,6 +65,7 @@ export function buildBookingServiceRetryResult(
 
   return {
     kind: "return",
+    workingState: params.workingState,
     result: {
       ok: false,
       error: params.error,
