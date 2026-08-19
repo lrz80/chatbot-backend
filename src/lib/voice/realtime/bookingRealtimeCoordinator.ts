@@ -20,6 +20,7 @@ type BookingRealtimeCoordinatorParams = {
     source: string;
   }) => void;
   requestRealtimeResponse: RequestRealtimeResponse;
+  shouldSubmitServiceDirectly?: () => boolean;
 };
 
 function clean(value: unknown): string {
@@ -363,6 +364,25 @@ export function createBookingRealtimeCoordinator(
     }
 
     if (pendingBookingStepKey === "service") {
+      if (params.shouldSubmitServiceDirectly?.()) {
+        console.warn("[VOICE_REALTIME][SERVICE_STEP_DIRECT_SUBMIT]", {
+          callSid: params.getCallSid(),
+          source,
+          pendingBookingStepKey,
+          lastUserTranscript,
+          lastUserTranscriptSeq,
+          pendingBookingStepPromptAnchorSeq,
+        });
+
+        params.enqueueSubmitBookingStepFromTranscript({
+          stepKey: pendingBookingStepKey,
+          value: lastUserTranscript,
+          source,
+        });
+
+        return;
+      }
+
       requestServiceStepModelResolution({
         callSid: params.getCallSid(),
         source,
@@ -370,7 +390,8 @@ export function createBookingRealtimeCoordinator(
         lastUserTranscript,
         lastUserTranscriptSeq,
         pendingBookingStepPromptAnchorSeq,
-        requestRealtimeResponse: params.requestRealtimeResponse,
+        requestRealtimeResponse:
+          params.requestRealtimeResponse,
       });
 
       return;

@@ -52,6 +52,10 @@ import {
 } from "../returningCustomer";
 import { buildVoiceSpeechIdentity } from "./voiceSpeechIdentity";
 import { resolveFreeConversationBookingIntent } from "../runtime/resolveFreeConversationBookingIntent";
+import {
+  resolveBookingServiceProvider,
+  type BookingServiceProvider,
+} from "../booking/services/resolveBookingServiceProvider";
 
 type BridgeParams = {
   twilioSocket: WebSocket;
@@ -171,6 +175,7 @@ export async function createOpenAiRealtimeBridge({
   let tenantId: string | null = null;
   let realtimeTenant: any = null;
   let realtimeCfg: any = null;
+  let bookingServiceProvider: BookingServiceProvider | null = null;
   let realtimeState: CallState = {};
   let lastUserTranscript = "";
   let lastUserDigits = "";
@@ -351,6 +356,9 @@ export async function createOpenAiRealtimeBridge({
     enqueueSubmitBookingStepFromTranscript:
       toolCallQueue.enqueueSubmitBookingStepFromTranscript,
     requestRealtimeResponse,
+
+    shouldSubmitServiceDirectly: () =>
+      bookingServiceProvider === "square",
   });
 
   function clearHardCallTimeout(): void {
@@ -943,6 +951,25 @@ export async function createOpenAiRealtimeBridge({
     tenantId = context.tenantId;
     realtimeTenant = context.tenant;
     realtimeCfg = context.cfg || {};
+
+    try {
+      bookingServiceProvider =
+        await resolveBookingServiceProvider(context.tenantId);
+
+      console.log("[VOICE_REALTIME][BOOKING_SERVICE_PROVIDER_RESOLVED]", {
+        callSid,
+        tenantId: context.tenantId,
+        bookingServiceProvider,
+      });
+    } catch (error) {
+      bookingServiceProvider = null;
+
+      console.warn("[VOICE_REALTIME][BOOKING_SERVICE_PROVIDER_RESOLUTION_FAILED]", {
+        callSid,
+        tenantId: context.tenantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     realtimeState = {
       ...realtimeState,
