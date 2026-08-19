@@ -157,7 +157,10 @@ function buildCatalogEntries(services: any[]): CatalogEntry[] {
   });
 }
 
-function normalizeCandidateNames(value: unknown, catalogNames: string[]): string[] {
+function normalizeCandidateNames(
+  value: unknown,
+  catalogNames: string[]
+): string[] {
   if (!Array.isArray(value)) return [];
 
   const catalogSet = new Set(catalogNames);
@@ -169,7 +172,7 @@ function normalizeCandidateNames(value: unknown, catalogNames: string[]): string
         .filter(Boolean)
         .filter((name) => catalogSet.has(name))
     )
-  ).slice(0, 20);
+  );
 }
 
 export async function resolveSquareServiceWithCatalogContext(
@@ -223,22 +226,14 @@ export async function resolveSquareServiceWithCatalogContext(
           {
             role: "system",
             content:
-              "You resolve a customer's requested booking service against a provider catalog. " +
-              "The customer may speak any language and may use ordinary consumer terminology instead of the provider's exact catalog terminology. " +
-              "Interpret the customer's intended service semantically. " +
-              "Use general semantic knowledge to understand what catalog service names mean, but use only the provided catalog entries as selectable services. " +
-              "Never invent a catalog service. " +
-              "Catalog entries may represent broad services, specific variants, styles, levels, packages, initial/full services, maintenance/refills, or combinations. " +
-              "A broad customer request can therefore be compatible with multiple more-specific catalog entries even when the exact customer words do not appear in those entry names. " +
-              "Do not require literal word overlap. " +
-              "Infer relationships between catalog entries from their human-readable names and metadata. " +
-              "If exactly one catalog entry clearly satisfies the request, return resolution='resolved'. " +
-              "If the customer's request describes a broader service family and two or more catalog entries are plausible members of that family, return resolution='ambiguous' with those exact catalog entry names in candidateNames. " +
-              "If the customer specifies enough detail to distinguish an initial/full service from a refill, maintenance service, style, level, duration, package, or other variant, use that detail. " +
-              "Do not include services that contradict details explicitly stated by the customer. " +
-              "Do not choose one arbitrary variant when the customer has not supplied the distinguishing information. " +
+              "If the customer's request is compatible with more than one catalog entry, resolution MUST be 'ambiguous'. " +
+              "candidateNames must contain EVERY catalog entry that remains compatible with everything the customer has said so far. " +
+              "Do not return only examples, representative entries, or the best few matches. " +
+              "Evaluate every provided catalog entry independently for compatibility with the customer's request. " +
+              "Do not discard a catalog entry merely because another entry is a stronger semantic match. " +
+              "Return resolution='resolved' only when exactly one catalog entry remains compatible with all information the customer has provided. " +
+              "If multiple compatible entries differ by style, full service versus refill, maintenance interval, level, package, duration, variation, or any other meaningful attribute, keep all of them in candidateNames and ask for the missing distinction. " +
               "Return resolution='none' only when the requested service is genuinely unrelated to every catalog entry. " +
-              "When ambiguous, candidateNames must contain all reasonably compatible catalog entries needed to preserve the customer's valid choices, maximum 20. " +
               "matchedName and candidateNames must use exact catalog entry names. " +
               "When resolution='ambiguous', also return clarificationPrompt. " +
               "clarificationPrompt must be one short natural spoken question in the customer's language. " +
@@ -247,8 +242,9 @@ export async function resolveSquareServiceWithCatalogContext(
               "Do not use numbered menus. " +
               "Do not mention internal provider terminology, IDs, or technical metadata. " +
               "You may mention a few short human-friendly distinctions or examples derived only from the compatible catalog entries, when that helps the customer answer. " +
-              "For example, if compatible entries differ mainly by style, ask which style; if they differ mainly by full service versus refill or maintenance, ask that distinction. " +
-              "If many compatible entries exist, summarize the meaningful distinction instead of listing every exact service name. " +
+              "If compatible entries differ mainly by style, ask which style. " +
+              "If they differ mainly by full service versus refill or maintenance, ask that distinction. " +
+              "If the narrowed subset still contains multiple variants, ask another clarification question instead of resolving prematurely. " +
               "Never invent a distinction that is not supported by the provided catalog entries. " +
               "Return JSON only.",
           },
