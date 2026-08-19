@@ -246,6 +246,16 @@ export async function resolveSquareServiceWithCatalogContext(
               "If they differ mainly by full service versus refill or maintenance, ask that distinction. " +
               "If the narrowed subset still contains multiple variants, ask another clarification question instead of resolving prematurely. " +
               "Never invent a distinction that is not supported by the provided catalog entries. " +
+              "Treat the currently provided catalog entries as the complete pending candidate set from the previous clarification step. " +
+              "The customer's latest answer MUST narrow that pending set; it must never broaden it. " +
+              "Explicit information in the latest customer answer has priority over weaker semantic similarity. " +
+              "If the customer says they want maintenance, refill, touch-up, follow-up, or another non-initial service concept, exclude entries that clearly represent a full, initial, new, or complete service unless the catalog metadata indicates otherwise. " +
+              "If the customer says they want a full, initial, new, or complete service, exclude refill or maintenance entries. " +
+              "If the customer specifies a style, interval, duration, package, level, or other distinguishing attribute, exclude entries that contradict that attribute. " +
+              "Do not keep a candidate merely because it belongs to the same broad service family. " +
+              "candidateNames must contain only entries still compatible with ALL explicit information in the customer's latest answer and the already narrowed pending set. " +
+              "If exactly one compatible entry remains after narrowing, return resolution='resolved'. " +
+              "If two or more compatible entries remain, return resolution='ambiguous' and ask only about the next unresolved distinction. " +
               "Return JSON only.",
           },
           {
