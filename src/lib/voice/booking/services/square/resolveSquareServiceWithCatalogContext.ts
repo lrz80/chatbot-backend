@@ -43,6 +43,26 @@ function safeJsonParse(value: string): any | null {
   }
 }
 
+function looksLikeOpaqueProviderIdentifier(value: string): boolean {
+  const text = String(value ?? "").trim();
+
+  if (!text) return false;
+
+  if (/^\d+$/.test(text)) {
+    return true;
+  }
+
+  if (
+    text.length >= 18 &&
+    /^[A-Z0-9_-]+$/.test(text) &&
+    !/\s/.test(text)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function collectSearchableText(value: unknown, depth = 0): string[] {
   if (depth > 4 || value == null) return [];
 
@@ -53,37 +73,53 @@ function collectSearchableText(value: unknown, depth = 0): string[] {
 
     if (text.length > 180) return [];
 
-    if (text.startsWith("http://") || text.startsWith("https://")) return [];
+    if (
+      text.startsWith("http://") ||
+      text.startsWith("https://")
+    ) {
+      return [];
+    }
+
+    if (looksLikeOpaqueProviderIdentifier(text)) {
+      return [];
+    }
 
     return [text];
   }
 
-  if (typeof value === "number" || typeof value === "boolean") {
-    return [String(value)];
-  }
-
   if (Array.isArray(value)) {
-    return value.flatMap((item) => collectSearchableText(item, depth + 1));
+    return value.flatMap((item) =>
+      collectSearchableText(item, depth + 1)
+    );
   }
 
   if (typeof value === "object") {
     const objectValue = value as Record<string, unknown>;
 
-    return Object.entries(objectValue).flatMap(([key, nestedValue]) => {
-      const normalizedKey = key.toLowerCase();
+    return Object.entries(objectValue).flatMap(
+      ([key, nestedValue]) => {
+        const normalizedKey = key.toLowerCase();
 
-      if (
-        normalizedKey.includes("token") ||
-        normalizedKey.includes("secret") ||
-        normalizedKey.includes("password") ||
-        normalizedKey.includes("authorization") ||
-        normalizedKey.includes("access")
-      ) {
-        return [];
+        if (
+          normalizedKey.includes("token") ||
+          normalizedKey.includes("secret") ||
+          normalizedKey.includes("password") ||
+          normalizedKey.includes("authorization") ||
+          normalizedKey.includes("access") ||
+          normalizedKey.includes("version") ||
+          normalizedKey === "id" ||
+          normalizedKey.endsWith("_id") ||
+          normalizedKey.endsWith("id")
+        ) {
+          return [];
+        }
+
+        return collectSearchableText(
+          nestedValue,
+          depth + 1
+        );
       }
-
-      return collectSearchableText(nestedValue, depth + 1);
-    });
+    );
   }
 
   return [];
@@ -164,15 +200,6 @@ export async function resolveSquareServiceWithCatalogContext(
   const catalogEntries = buildCatalogEntries(params.services).slice(0, 80);
   const serviceNames = catalogEntries.map((entry) => entry.name);
 
-  console.log("[VOICE_BOOKING][SQUARE_CONTEXT_CATALOG_ENTRIES]", {
-    tenantId: params.tenantId,
-    input,
-    catalogEntries: catalogEntries.map((entry) => ({
-      name: entry.name,
-      searchText: entry.searchText,
-    })),
-  });
-
   if (catalogEntries.length === 0) {
     return {
       kind: "none",
@@ -195,23 +222,24 @@ export async function resolveSquareServiceWithCatalogContext(
           {
             role: "system",
             content:
-              "You classify a customer booking request against a provider service catalog. " +
-              "The customer may speak any language. Infer the customer's intended service semantically and compare it against the catalog. " +
-              "Use only the provided catalog entries as the source of truth. " +
-              "Each catalog entry has an exact name and searchable provider metadata. " +
-              "Return JSON only. Never invent services or catalog names. " +
-              "Do not require literal word overlap between the customer request and the catalog. " +
-              "A customer may describe a broad service family while the catalog contains more specific services, variants, packages, levels, styles, or versions of that service. " +
-              "Treat those more specific catalog entries as compatible candidates when their metadata supports that relationship. " +
-              "For example, if the customer requests a general category and several catalog entries are different variants of that category, return resolution='ambiguous' and include the compatible entries in candidateNames. " +
-              "If the customer omits an attribute that is necessary to distinguish between multiple compatible catalog entries, return resolution='ambiguous', not 'none' and not an arbitrary resolved service. " +
-              "If exactly one catalog entry is clearly compatible with the customer's meaning, return resolution='resolved'. " +
-              "If two or more catalog entries are reasonably compatible, return resolution='ambiguous'. " +
-              "If no catalog entry is semantically compatible, return resolution='none'. " +
-              "When returning ambiguous, candidateNames must include every reasonably compatible catalog entry, up to 8 entries. " +
-              "Do not choose one candidate merely because it is the closest lexical match when other catalog entries belong to the same requested service family. " +
-              "matchedName must be exactly one catalog entry name or null. " +
-              "candidateNames must contain only exact catalog entry names.",
+              "You resolve a customer's requested booking service against a provider catalog. " +
+              "The customer may speak any language and may use ordinary consumer terminology instead of the provider's exact catalog terminology. " +
+              "Interpret the customer's intended service semantically. " +
+              "Use general semantic knowledge to understand what catalog service names mean, but use only the provided catalog entries as selectable services. " +
+              "Never invent a catalog service. " +
+              "Catalog entries may represent broad services, specific variants, styles, levels, packages, initial/full services, maintenance/refills, or combinations. " +
+              "A broad customer request can therefore be compatible with multiple more-specific catalog entries even when the exact customer words do not appear in those entry names. " +
+              "Do not require literal word overlap. " +
+              "Infer relationships between catalog entries from their human-readable names and metadata. " +
+              "If exactly one catalog entry clearly satisfies the request, return resolution='resolved'. " +
+              "If the customer's request describes a broader service family and two or more catalog entries are plausible members of that family, return resolution='ambiguous' with those exact catalog entry names in candidateNames. " +
+              "If the customer specifies enough detail to distinguish an initial/full service from a refill, maintenance service, style, level, duration, package, or other variant, use that detail. " +
+              "Do not include services that contradict details explicitly stated by the customer. " +
+              "Do not choose one arbitrary variant when the customer has not supplied the distinguishing information. " +
+              "Return resolution='none' only when the requested service is genuinely unrelated to every catalog entry. " +
+              "When ambiguous, candidateNames must contain the reasonably compatible entries only, maximum 8. " +
+              "matchedName and candidateNames must use exact catalog entry names. " +
+              "Return JSON only.",
           },
           {
             role: "user",
