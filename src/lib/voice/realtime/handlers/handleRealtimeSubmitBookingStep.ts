@@ -383,8 +383,34 @@ function buildCandidateArgs(params: {
 
 function shouldTryNextCandidate(result: any): boolean {
   if (!result) return true;
-  if (result.ok === true) return false;
-  if (result.ok === false) return true;
+
+  if (result.ok === true) {
+    return false;
+  }
+
+  const error = clean(result?.error || "").toUpperCase();
+
+  /**
+   * An ambiguous service result is already a valid semantic result.
+   * Do not discard it and try a weaker transcript candidate.
+   *
+   * Example:
+   * model candidate -> "Pestañas clásica" -> valid ambiguity
+   * transcript      -> "Preguntas clásica" -> ASR error
+   *
+   * Once we have a real ambiguity, the booking flow must ask the
+   * clarification question instead of trying another candidate.
+   */
+  if (
+    error === "AMBIGUOUS_BOOKING_SERVICE"
+  ) {
+    return false;
+  }
+
+  if (result.ok === false) {
+    return true;
+  }
+
   return false;
 }
 
@@ -694,15 +720,15 @@ export async function handleRealtimeSubmitBookingStep(
     if (routeResult.kind === "return") {
       lastRouteReturn = routeResult.result;
 
-      if (shouldTryNextCandidate(routeResult.result)) {
-        continue;
-      }
-
       if (routeResult.workingState) {
         Object.assign(
           bookingContext.state,
           routeResult.workingState
         );
+      }
+
+      if (shouldTryNextCandidate(routeResult.result)) {
+        continue;
       }
 
       return routeResult.result;
