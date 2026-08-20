@@ -40,7 +40,21 @@ router.post("/cloudapi", async (req: Request, res: Response) => {
     const metadata = value?.metadata;
 
     if (!msg || !metadata) {
-      console.log("[WA CLOUDAPI] payload sin messages/metadata");
+      const statuses = value?.statuses;
+
+      if (Array.isArray(statuses) && statuses.length > 0) {
+        console.log("[WA CLOUDAPI][STATUS]", {
+          id: statuses[0]?.id,
+          status: statuses[0]?.status,
+          recipientId: statuses[0]?.recipient_id,
+        });
+        return;
+      }
+
+      console.log("[WA CLOUDAPI] evento ignorado", {
+        field: change?.field,
+      });
+
       return;
     }
 
