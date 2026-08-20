@@ -227,32 +227,53 @@ export async function resolveSquareServiceWithCatalogContext(
             role: "system",
             content:
               "If the customer's request is compatible with more than one catalog entry, resolution MUST be 'ambiguous'. " +
-              "candidateNames must contain EVERY catalog entry that remains compatible with everything the customer has said so far. " +
-              "Do not return only examples, representative entries, or the best few matches. " +
-              "Evaluate every provided catalog entry independently for compatibility with the customer's request. " +
-              "Do not discard a catalog entry merely because another entry is a stronger semantic match. " +
-              "Return resolution='resolved' only when exactly one catalog entry remains compatible with all information the customer has provided. " +
-              "If multiple compatible entries differ by style, full service versus refill, maintenance interval, level, package, duration, variation, or any other meaningful attribute, keep all of them in candidateNames and ask for the missing distinction. " +
-              "Return resolution='none' only when the requested service is genuinely unrelated to every catalog entry. " +
-              "matchedName and candidateNames must use exact catalog entry names. " +
-              "When resolution='ambiguous', also return clarificationPrompt. " +
-              "clarificationPrompt must be one short natural spoken question in the customer's language. " +
-              "It must help the customer provide the missing distinguishing information. " +
-              "Do not read or enumerate the full catalog. " +
-              "Do not use numbered menus. " +
-              "Do not mention internal provider terminology, IDs, or technical metadata. " +
-              "You may mention a few short human-friendly distinctions or examples derived only from the compatible catalog entries, when that helps the customer answer. " +
-              "If compatible entries differ mainly by style, ask which style. " +
-              "If they differ mainly by full service versus refill or maintenance, ask that distinction. " +
-              "If the narrowed subset still contains multiple variants, ask another clarification question instead of resolving prematurely. " +
-              "Never invent a distinction that is not supported by the provided catalog entries. " +
+
+"candidateNames must contain EVERY catalog entry that remains compatible with everything the customer has said so far. " +
+
+"Do not return only examples, representative entries, or the best few matches. " +
+
+"Evaluate every provided catalog entry independently for compatibility with the customer's request. " +
+
+"Do not discard a catalog entry merely because another entry is a stronger semantic match. " +
+
+"Return resolution='resolved' only when exactly one catalog entry remains compatible with all information the customer has provided. " +
+
+"If multiple compatible entries differ in any meaningful customer-relevant attribute, keep all compatible entries in candidateNames and ask for the missing distinction. " +
+
+"Return resolution='none' only when the requested service is genuinely unrelated to every catalog entry. " +
+
+"matchedName and candidateNames must use exact catalog entry names. " +
+
+"When resolution='ambiguous', also return clarificationPrompt. " +
+
+"clarificationPrompt must be one short, natural spoken question in the customer's language. " +
+
+"It must ask only for information that can meaningfully reduce the current compatible candidate set. " +
+
+"Derive every distinction, example, and customer-facing concept exclusively from the currently compatible catalog entries. " +
+
+"Do not rely on predefined service categories, industry assumptions, fixed attribute names, or domain-specific terminology. " +
+
+"Do not invent a distinction that is not supported by the currently compatible catalog entries. " +
+
+"Do not read or enumerate the full catalog. " +
+
+"Do not use numbered menus. " +
+
+"Do not mention internal provider terminology, IDs, technical metadata, or implementation details. " +
+
+"If exactly two distinct meaningful choices remain, clarificationPrompt may mention both choices directly. " +
+
+              "If more than two distinct meaningful choices remain, do not phrase clarificationPrompt as an exhaustive either/or choice. " +
+              "In that case, you may mention at most two short human-friendly examples derived from the compatible entries, but make it clear in natural language that other valid choices may exist. " +
+              "If useful human-friendly examples cannot be derived confidently from the compatible entries, ask a concise generic clarification question without examples. " +
+              "Choose the distinction that is expected to reduce the compatible candidate set most effectively while remaining easy for the customer to answer. " +
+              "If the narrowed subset still contains multiple compatible entries after the customer's answer, ask another clarification question instead of resolving prematurely. " +
               "Treat the currently provided catalog entries as the complete pending candidate set from the previous clarification step. " +
               "The customer's latest answer MUST narrow that pending set; it must never broaden it. " +
-              "Explicit information in the latest customer answer has priority over weaker semantic similarity. " +
-              "If the customer says they want maintenance, refill, touch-up, follow-up, or another non-initial service concept, exclude entries that clearly represent a full, initial, new, or complete service unless the catalog metadata indicates otherwise. " +
-              "If the customer says they want a full, initial, new, or complete service, exclude refill or maintenance entries. " +
-              "If the customer specifies a style, interval, duration, package, level, or other distinguishing attribute, exclude entries that contradict that attribute. " +
-              "Do not keep a candidate merely because it belongs to the same broad service family. " +
+              "Explicit information in the customer's latest answer has priority over weaker semantic similarity. " +
+              "Exclude every candidate that contradicts any explicit information provided by the customer. " +
+              "Do not keep a candidate merely because it belongs to the same broad semantic family as the customer's request. " +
               "candidateNames must contain only entries still compatible with ALL explicit information in the customer's latest answer and the already narrowed pending set. " +
               "If exactly one compatible entry remains after narrowing, return resolution='resolved'. " +
               "If two or more compatible entries remain, return resolution='ambiguous' and ask only about the next unresolved distinction. " +
