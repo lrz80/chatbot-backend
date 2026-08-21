@@ -1,6 +1,10 @@
 //src/routes/meta/whatsapp-cloudapi.ts
 import { Router, Request, Response } from "express";
 import { procesarMensajeWhatsApp } from "../webhook/whatsapp";
+import {
+  activateWhatsAppHumanTakeover,
+  normalizeWhatsAppContactKey,
+} from "../../lib/whatsapp/humanTakeover";
 
 const router = Router();
 
@@ -35,6 +39,91 @@ router.post("/cloudapi", async (req: Request, res: Response) => {
     const entry = body?.entry?.[0];
     const change = entry?.changes?.[0];
     const value = change?.value;
+
+    const field = change?.field;
+
+    /**
+     * COEXISTENCE:
+     *
+     * Un mensaje enviado manualmente desde WhatsApp Business App
+     * llega como smb_message_echoes.
+     *
+     * Esto NO lo genera un mensaje que Aamy envía por Cloud API.
+     */
+    if (field === "smb_message_echoes") {
+      const metadata = value?.metadata;
+
+      const phoneNumberId = String(
+        metadata?.phone_number_id || ""
+      ).trim();
+
+      const echoes = Array.isArray(
+        value?.message_echoes
+      )
+        ? value.message_echoes
+        : [];
+
+      for (const echo of echoes) {
+        /*
+        * En smb_message_echoes:
+        *
+        * from = número del negocio
+        * to   = cliente
+        *
+        * Con las nuevas identidades de WhatsApp,
+        * `to` puede no estar disponible en algunos casos,
+        * por eso dejamos fallbacks.
+        */
+        const rawContactKey =
+          echo?.to ||
+          value?.contacts?.[0]?.wa_id ||
+          echo?.to_user_id ||
+          value?.contacts?.[0]?.user_id ||
+          "";
+
+        const contactKey =
+          normalizeWhatsAppContactKey(rawContactKey);
+
+        if (!phoneNumberId || !contactKey) {
+          console.warn(
+            "[WA CLOUDAPI][HUMAN TAKEOVER] Echo sin identidad suficiente",
+            {
+              phoneNumberId,
+              hasContactKey: !!contactKey,
+              messageId: echo?.id || null,
+            }
+          );
+
+          continue;
+        }
+
+        try {
+          const takeover =
+            await activateWhatsAppHumanTakeover({
+              phoneNumberId,
+              contactKey,
+              messageId: echo?.id || null,
+            });
+
+          console.log(
+            "[WA CLOUDAPI][HUMAN TAKEOVER]",
+            {
+              phoneNumberId,
+              contactKey,
+              messageId: echo?.id || null,
+              result: takeover,
+            }
+          );
+        } catch (error: any) {
+          console.error(
+            "[WA CLOUDAPI][HUMAN TAKEOVER] Error:",
+            error?.message || error
+          );
+        }
+      }
+
+      return;
+    }
 
     const msg = value?.messages?.[0];
     const metadata = value?.metadata;

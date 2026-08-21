@@ -80,6 +80,9 @@ import {
   resolveTenantBookingProvider,
 } from "../../lib/appointments/booking/providers/resolveTenantBookingProvider";
 import { resolveMessagingContact } from "../../lib/crm/resolveMessagingContact";
+import {
+  isWhatsAppHumanTakeoverActive,
+} from "../../lib/whatsapp/humanTakeover";
 
 // Puedes ponerlo debajo de los imports
 export type MessagingChannel =
@@ -344,6 +347,58 @@ export async function procesarMensajeWhatsApp(
   const outboundRecipient =
     String(context?.transportRecipientId || "").trim() ||
     contactoNorm;
+
+    // ===============================
+    // 👤 WHATSAPP HUMAN TAKEOVER
+    // ===============================
+    //
+    // Cuando una persona del negocio responde manualmente
+    // desde WhatsApp Business App mediante Coexistence,
+    // Aamy queda temporalmente en silencio SOLO para
+    // este contacto.
+    //
+    // El takeover se crea/renueva desde smb_message_echoes.
+    // No afecta otros contactos del tenant.
+    if (canal === "whatsapp" && origen === "meta") {
+      try {
+        const humanTakeover =
+          await isWhatsAppHumanTakeoverActive(
+            tenant.id,
+            contactoNorm
+          );
+
+        if (humanTakeover.active) {
+          console.log(
+            "[WHATSAPP][HUMAN_TAKEOVER_ACTIVE]",
+            {
+              tenantId: tenant.id,
+              contactoNorm,
+              expiresAt:
+                humanTakeover.expiresAt || null,
+            }
+          );
+
+          return;
+        }
+      } catch (e: any) {
+        /*
+        * Fail-open:
+        * si la consulta del takeover falla,
+        * no tumbamos todo WhatsApp del tenant.
+        *
+        * Aamy continúa procesando el mensaje
+        * y dejamos evidencia en logs.
+        */
+        console.error(
+          "[WHATSAPP][HUMAN_TAKEOVER_CHECK_FAILED]",
+          {
+            tenantId: tenant.id,
+            contactoNorm,
+            error: e?.message || e,
+          }
+        );
+      }
+    }
 
   if (messageId) {
 
