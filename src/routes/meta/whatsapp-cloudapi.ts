@@ -40,6 +40,18 @@ router.post("/cloudapi", async (req: Request, res: Response) => {
     const change = entry?.changes?.[0];
     const value = change?.value;
 
+    console.log(
+      "[WA CLOUDAPI][RAW CHANGE]",
+      JSON.stringify(
+        {
+          field: change?.field,
+          value,
+        },
+        null,
+        2
+      )
+    );
+
     const field = change?.field;
 
     /**
