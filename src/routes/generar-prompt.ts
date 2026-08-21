@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v22"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v23"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -246,6 +246,30 @@ function classifyLinks(links: string[]) {
   out.soporte = uniq(out.soporte);
   out.otros = uniq(out.otros);
   return out;
+}
+
+function resolveOfficialLinks(
+  infoLinks: string[],
+  functionLinks: string[]
+): string[] {
+  const infoGroups = classifyLinks(infoLinks);
+  const functionGroups = classifyLinks(functionLinks);
+
+  const preferInfo = (
+    fromInfo: string[],
+    fromFunctions: string[]
+  ): string[] => {
+    return fromInfo.length > 0 ? fromInfo : fromFunctions;
+  };
+
+  const resolved = [
+    ...preferInfo(infoGroups.reservas, functionGroups.reservas),
+    ...preferInfo(infoGroups.precios, functionGroups.precios),
+    ...preferInfo(infoGroups.soporte, functionGroups.soporte),
+    ...preferInfo(infoGroups.otros, functionGroups.otros),
+  ];
+
+  return Array.from(new Set(resolved));
 }
 
 function buildIdentity(idioma: Lang, businessName: string): string {
@@ -856,14 +880,37 @@ router.post("/", async (req: Request, res: Response) => {
           ? "pt"
           : "es";
 
-    // (E) Límite de entrada (para evitar prompts kilométricos)
-    const MAX = 14_000; // caracteres
-    const descripcionCapped = (descripcion || "").slice(0, MAX);
-    const informacionCapped = (informacion || "").slice(0, MAX);
+    // (E) Validación de tamaño.
+    // IMPORTANTE: nunca truncar silenciosamente información del tenant.
+    const MAX_DESCRIPCION_CHARS = 20_000;
+    const MAX_INFORMACION_CHARS = 60_000;
 
-    // (F) Normaliza saltos/espacios y compacta antes de mandar al modelo
-    const funciones = compact(descripcionCapped.replace(/\\n/g, "\n").replace(/\r/g, ""));
-    const info      = compact(informacionCapped.replace(/\\n/g, "\n").replace(/\r/g, ""));
+    const descripcionRaw =
+      typeof descripcion === "string" ? descripcion : "";
+
+    const informacionRaw =
+      typeof informacion === "string" ? informacion : "";
+
+    if (descripcionRaw.length > MAX_DESCRIPCION_CHARS) {
+      return res.status(413).json({
+        error: `El campo "Qué debe hacer tu asistente" supera el límite de ${MAX_DESCRIPCION_CHARS} caracteres.`,
+      });
+    }
+
+    if (informacionRaw.length > MAX_INFORMACION_CHARS) {
+      return res.status(413).json({
+        error: `El campo "Información que el asistente debe conocer" supera el límite de ${MAX_INFORMACION_CHARS} caracteres.`,
+      });
+    }
+
+    // (F) Normaliza saltos/espacios sin eliminar contenido.
+    const funciones = compact(
+      descripcionRaw.replace(/\\n/g, "\n").replace(/\r/g, "")
+    );
+
+    const info = compact(
+      informacionRaw.replace(/\\n/g, "\n").replace(/\r/g, "")
+    );
 
     if (!funciones || !info || !idiomaNorm) {
       return res.status(400).json({ error: "Faltan campos requeridos" });
@@ -901,8 +948,17 @@ router.post("/", async (req: Request, res: Response) => {
       info_chars: info.length,
     });
 
-    // (A) URLs oficiales desde el propio contenido
-    const enlacesOficiales = extractAllLinksFromText(`${funciones}\n\n${info}`, 24);
+    // (A) URLs oficiales.
+    // La información del negocio es la fuente prioritaria.
+    // Las instrucciones del asistente se usan únicamente como fallback
+    // para categorías que no tengan enlaces definidos en información.
+    const linksFromInfo = extractAllLinksFromText(info, 24);
+    const linksFromFunciones = extractAllLinksFromText(funciones, 24);
+
+    const enlacesOficiales = resolveOfficialLinks(
+      linksFromInfo,
+      linksFromFunciones
+    );
 
     const linkGroups = classifyLinks(enlacesOficiales);
     const identity = buildIdentity(idiomaNorm, nombreNegocio);
