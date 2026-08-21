@@ -1,6 +1,10 @@
+//src/lib/appointments/booking/providers/providerConnections.repo.ts
 import pool from "../../../../lib/db";
 import type { BookingProvider } from "./types";
-import { encryptToken, decryptToken } from "../../../../services/googleCrypto";
+import {
+  encryptToken,
+  decryptToken,
+} from "../../../../services/googleCrypto";
 
 export type BookingProviderConnection = {
   id: string;
@@ -23,6 +27,21 @@ export type BookingProviderSecrets = {
   tokenExpiresAt: string | null;
 };
 
+/**
+ * Generic encrypted provider credentials.
+ *
+ * Examples:
+ *
+ * Glofox:
+ * {
+ *   apiKey: "...",
+ *   apiToken: "..."
+ * }
+ *
+ * These values are stored encrypted in credentials_encrypted.
+ */
+export type BookingProviderCredentials = Record<string, string>;
+
 export type UpsertBookingProviderConnectionInput = {
   tenantId: string;
   provider: BookingProvider;
@@ -32,6 +51,7 @@ export type UpsertBookingProviderConnectionInput = {
   accessToken?: string | null;
   refreshToken?: string | null;
   tokenExpiresAt?: string | null;
+  credentials?: BookingProviderCredentials | null;
   metadata?: Record<string, unknown>;
 };
 
@@ -96,30 +116,131 @@ export async function getBookingProviderSecrets(
   );
 
   const row = rows[0];
+
   if (!row) {
     return null;
   }
 
   return {
-    accessToken: row.access_token ? decryptToken(String(row.access_token)) : null,
-    refreshToken: row.refresh_token ? decryptToken(String(row.refresh_token)) : null,
+    accessToken: row.access_token
+      ? decryptToken(String(row.access_token))
+      : null,
+
+    refreshToken: row.refresh_token
+      ? decryptToken(String(row.refresh_token))
+      : null,
+
     tokenExpiresAt: row.token_expires_at
       ? new Date(row.token_expires_at).toISOString()
       : null,
   };
 }
 
+/**
+ * Reads provider-specific encrypted credentials.
+ *
+ * Important:
+ * - credentials_encrypted is never returned by getBookingProviderConnection().
+ * - decryption only happens server-side through this function.
+ */
+export async function getBookingProviderCredentials(
+  tenantId: string,
+  provider: BookingProvider
+): Promise<BookingProviderCredentials | null> {
+  const { rows } = await pool.query(
+    `
+      SELECT credentials_encrypted
+      FROM booking_provider_connections
+      WHERE tenant_id = $1
+        AND provider = $2
+      LIMIT 1
+    `,
+    [tenantId, provider]
+  );
+
+  const row = rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  const encryptedValue = row.credentials_encrypted
+    ? String(row.credentials_encrypted)
+    : "";
+
+  if (!encryptedValue) {
+    return null;
+  }
+
+  const decryptedValue = decryptToken(encryptedValue);
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(decryptedValue);
+  } catch {
+    throw new Error("BOOKING_PROVIDER_CREDENTIALS_INVALID_JSON");
+  }
+
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed)
+  ) {
+    throw new Error("BOOKING_PROVIDER_CREDENTIALS_INVALID");
+  }
+
+  const credentials: BookingProviderCredentials = {};
+
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value === "string") {
+      credentials[key] = value;
+    }
+  }
+
+  return credentials;
+}
+
 export async function upsertBookingProviderConnection(
   input: UpsertBookingProviderConnectionInput
 ): Promise<BookingProviderConnection> {
   const encryptedAccessToken =
-    typeof input.accessToken === "string" && input.accessToken.trim()
-      ? encryptToken(input.accessToken)
+    typeof input.accessToken === "string" &&
+    input.accessToken.trim()
+      ? encryptToken(input.accessToken.trim())
       : null;
 
   const encryptedRefreshToken =
-    typeof input.refreshToken === "string" && input.refreshToken.trim()
-      ? encryptToken(input.refreshToken)
+    typeof input.refreshToken === "string" &&
+    input.refreshToken.trim()
+      ? encryptToken(input.refreshToken.trim())
+      : null;
+
+  const normalizedCredentials =
+    input.credentials &&
+    typeof input.credentials === "object"
+      ? Object.fromEntries(
+          Object.entries(input.credentials)
+            .filter(
+              ([key, value]) =>
+                typeof key === "string" &&
+                key.trim().length > 0 &&
+                typeof value === "string" &&
+                value.trim().length > 0
+            )
+            .map(([key, value]) => [
+              key.trim(),
+              value.trim(),
+            ])
+        )
+      : null;
+
+  const encryptedCredentials =
+    normalizedCredentials &&
+    Object.keys(normalizedCredentials).length > 0
+      ? encryptToken(
+          JSON.stringify(normalizedCredentials)
+        )
       : null;
 
   const { rows } = await pool.query(
@@ -133,21 +254,43 @@ export async function upsertBookingProviderConnection(
         access_token,
         refresh_token,
         token_expires_at,
+        credentials_encrypted,
         metadata,
         created_at,
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), NOW()
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10::jsonb,
+        NOW(),
+        NOW()
       )
       ON CONFLICT (tenant_id, provider)
       DO UPDATE SET
         status = EXCLUDED.status,
         external_account_id = EXCLUDED.external_account_id,
         external_location_id = EXCLUDED.external_location_id,
-        access_token = COALESCE(EXCLUDED.access_token, booking_provider_connections.access_token),
-        refresh_token = COALESCE(EXCLUDED.refresh_token, booking_provider_connections.refresh_token),
+        access_token = COALESCE(
+          EXCLUDED.access_token,
+          booking_provider_connections.access_token
+        ),
+        refresh_token = COALESCE(
+          EXCLUDED.refresh_token,
+          booking_provider_connections.refresh_token
+        ),
         token_expires_at = EXCLUDED.token_expires_at,
+        credentials_encrypted = COALESCE(
+          EXCLUDED.credentials_encrypted,
+          booking_provider_connections.credentials_encrypted
+        ),
         metadata = EXCLUDED.metadata,
         updated_at = NOW()
       RETURNING
@@ -173,6 +316,7 @@ export async function upsertBookingProviderConnection(
       encryptedAccessToken,
       encryptedRefreshToken,
       input.tokenExpiresAt ?? null,
+      encryptedCredentials,
       JSON.stringify(input.metadata ?? {}),
     ]
   );
@@ -183,14 +327,20 @@ export async function upsertBookingProviderConnection(
 export async function updateBookingProviderTokens(
   input: UpdateBookingProviderTokensInput
 ): Promise<boolean> {
-  const tenantId = String(input.tenantId || "").trim();
-  const accessToken = String(input.accessToken || "").trim();
+  const tenantId = String(
+    input.tenantId || ""
+  ).trim();
+
+  const accessToken = String(
+    input.accessToken || ""
+  ).trim();
 
   if (!tenantId || !accessToken) {
     return false;
   }
 
-  const encryptedAccessToken = encryptToken(accessToken);
+  const encryptedAccessToken =
+    encryptToken(accessToken);
 
   const refreshToken =
     typeof input.refreshToken === "string"
@@ -206,7 +356,10 @@ export async function updateBookingProviderTokens(
       UPDATE booking_provider_connections
       SET
         access_token = $3,
-        refresh_token = COALESCE($4, refresh_token),
+        refresh_token = COALESCE(
+          $4,
+          refresh_token
+        ),
         token_expires_at = $5,
         status = 'active',
         updated_at = NOW()
@@ -225,24 +378,55 @@ export async function updateBookingProviderTokens(
   return (rowCount ?? 0) > 0;
 }
 
-function mapRow(row: any): BookingProviderConnection {
+function mapRow(
+  row: any
+): BookingProviderConnection {
   return {
     id: String(row.id),
     tenant_id: String(row.tenant_id),
-    provider: row.provider as BookingProvider,
-    status: row.status as "active" | "inactive" | "error",
-    external_account_id: row.external_account_id ?? null,
-    external_location_id: row.external_location_id ?? null,
-    access_token: row.access_token ?? null,
-    refresh_token: row.refresh_token ?? null,
-    token_expires_at: row.token_expires_at
-      ? new Date(row.token_expires_at).toISOString()
-      : null,
+
+    provider:
+      row.provider as BookingProvider,
+
+    status:
+      row.status as
+        | "active"
+        | "inactive"
+        | "error",
+
+    external_account_id:
+      row.external_account_id ?? null,
+
+    external_location_id:
+      row.external_location_id ?? null,
+
+    access_token:
+      row.access_token ?? null,
+
+    refresh_token:
+      row.refresh_token ?? null,
+
+    token_expires_at:
+      row.token_expires_at
+        ? new Date(
+            row.token_expires_at
+          ).toISOString()
+        : null,
+
     metadata:
-      row.metadata && typeof row.metadata === "object"
+      row.metadata &&
+      typeof row.metadata === "object"
         ? row.metadata
         : {},
-    created_at: new Date(row.created_at).toISOString(),
-    updated_at: new Date(row.updated_at).toISOString(),
+
+    created_at:
+      new Date(
+        row.created_at
+      ).toISOString(),
+
+    updated_at:
+      new Date(
+        row.updated_at
+      ).toISOString(),
   };
 }
