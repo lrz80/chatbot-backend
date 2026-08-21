@@ -205,15 +205,13 @@ export async function upsertBookingProviderConnection(
   input: UpsertBookingProviderConnectionInput
 ): Promise<BookingProviderConnection> {
   const encryptedAccessToken =
-    typeof input.accessToken === "string" &&
-    input.accessToken.trim()
-      ? encryptToken(input.accessToken.trim())
+    typeof input.accessToken === "string" && input.accessToken.trim()
+      ? encryptToken(input.accessToken)
       : null;
 
   const encryptedRefreshToken =
-    typeof input.refreshToken === "string" &&
-    input.refreshToken.trim()
-      ? encryptToken(input.refreshToken.trim())
+    typeof input.refreshToken === "string" && input.refreshToken.trim()
+      ? encryptToken(input.refreshToken)
       : null;
 
   const normalizedCredentials =
