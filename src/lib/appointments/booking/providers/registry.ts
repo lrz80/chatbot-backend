@@ -1,10 +1,12 @@
-//src/lib/appointments/booking/providers/registry.ts
+// src/lib/appointments/booking/providers/registry.ts
+
 import type {
   BookingProvider,
   BookingProviderAdapter,
   CreateExternalBookingInput,
   CreateExternalBookingResult,
 } from "./types";
+
 import { GoogleCalendarProvider } from "./googleCalendarProvider";
 import { SquareProvider } from "./squareProvider";
 
@@ -24,17 +26,23 @@ class NotImplementedBookingProvider implements BookingProviderAdapter {
 }
 
 export class BookingProviderRegistry {
-  private readonly adapters: Map<BookingProvider, BookingProviderAdapter>;
+  private readonly adapters: Map<
+    BookingProvider,
+    BookingProviderAdapter
+  >;
 
   constructor() {
     const google = new GoogleCalendarProvider();
     const square = new SquareProvider();
-    const moego = new NotImplementedBookingProvider("moego");
+    const glofox = new NotImplementedBookingProvider("glofox");
 
-    this.adapters = new Map<BookingProvider, BookingProviderAdapter>([
+    this.adapters = new Map<
+      BookingProvider,
+      BookingProviderAdapter
+    >([
       ["google_calendar", google],
       ["square", square],
-      ["moego", moego],
+      ["glofox", glofox],
     ]);
   }
 
@@ -42,7 +50,9 @@ export class BookingProviderRegistry {
     const adapter = this.adapters.get(provider);
 
     if (!adapter) {
-      throw new Error(`Booking provider adapter not found: ${provider}`);
+      throw new Error(
+        `Booking provider adapter not found: ${provider}`
+      );
     }
 
     return adapter;

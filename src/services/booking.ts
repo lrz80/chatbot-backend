@@ -128,6 +128,5 @@ async function syncAppointmentToExternalCalendars(client: any, appointment: any)
 
     // FUTURO:
     // if (cal.provider === "glofox") { ... }
-    // if (cal.provider === "booksy") { ... }
   }
 }

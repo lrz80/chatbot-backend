@@ -1,10 +1,7 @@
-//src/lib/appointments/booking/providers/types.ts
 export type BookingProvider =
   | "google_calendar"
   | "square"
-  | "moego"
-  | "glofox"
-  | "booksy";
+  | "glofox";
 
 export type BookingProviderResultSource = BookingProvider | "system";
 
@@ -14,6 +11,67 @@ export type SquareBookingPayload = {
   teamMemberId?: string | null;
   serviceVariationId?: string | null;
   serviceVariationVersion?: number | string | null;
+};
+
+/**
+ * Glofox supports different booking models.
+ *
+ * event:
+ *   Group classes / scheduled events.
+ *
+ * timeslot:
+ *   Appointments / one-to-one services.
+ *
+ * Do not use the deprecated "trainer" model for new integrations.
+ */
+export type GlofoxBookingModel = "event" | "timeslot";
+
+export type GlofoxBookingPayload = {
+  /**
+   * Glofox Member/User ID.
+   */
+  userId?: string | null;
+
+  /**
+   * Booking resource type in Glofox.
+   */
+  model?: GlofoxBookingModel | null;
+
+  /**
+   * ID of the event or appointment timeslot being booked.
+   */
+  modelId?: string | null;
+
+  /**
+   * Optional payment method expected by Glofox.
+   *
+   * Keep this dynamic because available payment methods
+   * can vary by Glofox configuration.
+   */
+  paymentMethod?: string | null;
+
+  /**
+   * true only when payment will be collected at the gym.
+   */
+  payGym?: boolean | null;
+
+  /**
+   * Number of additional guests attached to the booking.
+   */
+  guestBookings?: number | null;
+
+  /**
+   * Whether Glofox should process the charge.
+   *
+   * Do not default this to false globally.
+   */
+  charge?: boolean | null;
+
+  /**
+   * Used when the selected event is full and the member
+   * explicitly agrees to join the waiting list.
+   */
+  joinWaitingList?: boolean | null;
 };
 
 export type CreateExternalBookingInput = {
@@ -35,6 +93,7 @@ export type CreateExternalBookingInput = {
 
   providerPayload?: {
     square?: SquareBookingPayload;
+    glofox?: GlofoxBookingPayload;
   };
 };
 
