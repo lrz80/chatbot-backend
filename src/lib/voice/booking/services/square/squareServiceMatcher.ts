@@ -23,64 +23,92 @@ type ScoredSquareService = {
   normalizedServiceName: string;
   normalizedSearchText: string;
   score: number;
-  matchedInputTokens: string[];
-  matchedCandidateTokens: string[];
+  matchedTokenCount: number;
   inputCoverage: number;
   candidateCoverage: number;
-  meaningfulOverlapCount: number;
 };
+
+const MATCH_CONFIG = {
+  strongScore: 0.86,
+  closeScoreDelta: 0.08,
+  minimumPartialMatchedTokens: 2,
+} as const;
 
 function clean(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-export function normalizeSquareServiceSearchText(value: unknown): string {
+/**
+ * Normalización puramente estructural.
+ *
+ * No contiene:
+ * - nombres de servicios;
+ * - vocabulario de industrias;
+ * - traducciones;
+ * - nombres de tenants;
+ * - equivalencias semánticas manuales.
+ */
+export function normalizeSquareServiceSearchText(
+  value: unknown
+): string {
   return clean(value)
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/fullset/gi, "full set")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function uniqueStrings(values: string[]): string[] {
-  return Array.from(new Set(values.map(clean).filter(Boolean)));
-}
-
-function uniqueTokens(value: string): string[] {
-  return uniqueStrings(
-    normalizeSquareServiceSearchText(value)
-      .split(" ")
-      .map((token) => token.trim())
-      .filter(Boolean)
+  return Array.from(
+    new Set(
+      values
+        .map(clean)
+        .filter(Boolean)
+    )
   );
 }
 
-function meaningfulTokens(value: string): string[] {
-  return uniqueTokens(value).filter((token) => {
-    if (token.length >= 4) return true;
+function getTokens(value: string): string[] {
+  const normalized = normalizeSquareServiceSearchText(value);
 
-    /**
-     * Tokens cortos pero semánticamente útiles para servicios.
-     * No son tenant-specific ni business-specific.
-     */
-    return ["set", "wax", "spa", "gel"].includes(token);
-  });
+  if (!normalized) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      normalized
+        .split(" ")
+        .map((token) => token.trim())
+        .filter(Boolean)
+    )
+  );
 }
 
-export function getSquareServiceName(service: SquareBookableService): string {
-  const explicitServiceName = clean((service as any).serviceName);
-  if (explicitServiceName) return explicitServiceName;
+export function getSquareServiceName(
+  service: SquareBookableService
+): string {
+  const explicitServiceName = clean(
+    (service as any).serviceName
+  );
+
+  if (explicitServiceName) {
+    return explicitServiceName;
+  }
 
   const itemName = clean(service.itemName);
   const variationName = clean(service.variationName);
 
-  if (!variationName) return itemName;
+  if (!variationName) {
+    return itemName;
+  }
 
-  if (itemName.toLowerCase() === variationName.toLowerCase()) {
+  if (
+    normalizeSquareServiceSearchText(itemName) ===
+    normalizeSquareServiceSearchText(variationName)
+  ) {
     return itemName;
   }
 
@@ -108,175 +136,137 @@ function scoreSquareServiceCandidateDetails(
   | "normalizedServiceName"
   | "normalizedSearchText"
 > {
-  const normalizedInput = normalizeSquareServiceSearchText(input);
-  const normalizedCandidate = normalizeSquareServiceSearchText(candidate);
+  const normalizedInput =
+    normalizeSquareServiceSearchText(input);
+
+  const normalizedCandidate =
+    normalizeSquareServiceSearchText(candidate);
 
   if (!normalizedInput || !normalizedCandidate) {
     return {
       score: 0,
-      matchedInputTokens: [],
-      matchedCandidateTokens: [],
+      matchedTokenCount: 0,
       inputCoverage: 0,
       candidateCoverage: 0,
-      meaningfulOverlapCount: 0,
     };
   }
 
   if (normalizedInput === normalizedCandidate) {
-    const tokens = meaningfulTokens(normalizedInput);
+    const tokenCount = getTokens(normalizedInput).length;
 
     return {
       score: 1,
-      matchedInputTokens: tokens,
-      matchedCandidateTokens: tokens,
+      matchedTokenCount: tokenCount,
       inputCoverage: 1,
       candidateCoverage: 1,
-      meaningfulOverlapCount: tokens.length,
     };
   }
 
-  const inputTokens = meaningfulTokens(normalizedInput);
-  const candidateTokens = meaningfulTokens(normalizedCandidate);
+  const inputTokens = getTokens(normalizedInput);
+  const candidateTokens = getTokens(normalizedCandidate);
 
-  if (inputTokens.length === 0 || candidateTokens.length === 0) {
+  if (
+    inputTokens.length === 0 ||
+    candidateTokens.length === 0
+  ) {
     return {
       score: 0,
-      matchedInputTokens: [],
-      matchedCandidateTokens: [],
+      matchedTokenCount: 0,
       inputCoverage: 0,
       candidateCoverage: 0,
-      meaningfulOverlapCount: 0,
     };
   }
 
-  const candidateTokenSet = new Set(candidateTokens);
   const inputTokenSet = new Set(inputTokens);
+  const candidateTokenSet = new Set(candidateTokens);
 
-  const matchedInputTokens = inputTokens.filter((token) =>
+  const matchedTokens = inputTokens.filter((token) =>
     candidateTokenSet.has(token)
   );
 
-  const matchedCandidateTokens = candidateTokens.filter((token) =>
-    inputTokenSet.has(token)
-  );
+  const matchedTokenCount = matchedTokens.length;
 
-  const inputCoverage = matchedInputTokens.length / inputTokens.length;
+  const inputCoverage =
+    matchedTokenCount / inputTokens.length;
+
   const candidateCoverage =
-    matchedCandidateTokens.length / candidateTokens.length;
+    candidateTokens.filter((token) =>
+      inputTokenSet.has(token)
+    ).length / candidateTokens.length;
 
-  const union = new Set([...inputTokens, ...candidateTokens]);
-  const jaccard = matchedInputTokens.length / Math.max(union.size, 1);
+  const union = new Set([
+    ...inputTokens,
+    ...candidateTokens,
+  ]);
 
-  const containsFullInput = normalizedCandidate.includes(normalizedInput);
-  const containsFullCandidate = normalizedInput.includes(normalizedCandidate);
+  const jaccard =
+    matchedTokenCount / Math.max(union.size, 1);
 
-  if (containsFullInput && inputTokens.length >= 2) {
+  const containsFullInput =
+    normalizedCandidate.includes(normalizedInput);
+
+  const containsFullCandidate =
+    normalizedInput.includes(normalizedCandidate);
+
+  /**
+   * Una inclusión literal completa es evidencia estructural
+   * fuerte y no depende del dominio.
+   */
+  if (containsFullInput) {
     return {
       score: 0.96,
-      matchedInputTokens,
-      matchedCandidateTokens,
+      matchedTokenCount,
       inputCoverage,
       candidateCoverage,
-      meaningfulOverlapCount: matchedInputTokens.length,
     };
   }
 
-  if (containsFullCandidate && candidateTokens.length >= 2) {
+  if (containsFullCandidate) {
     return {
       score: 0.94,
-      matchedInputTokens,
-      matchedCandidateTokens,
+      matchedTokenCount,
       inputCoverage,
       candidateCoverage,
-      meaningfulOverlapCount: matchedInputTokens.length,
     };
   }
 
-  const hasStrongEvidence =
-    matchedInputTokens.length >= 2 ||
+  /**
+   * Para coincidencias parciales necesitamos evidencia
+   * suficiente obtenida exclusivamente del texto real.
+   */
+  const hasUsableEvidence =
+    matchedTokenCount >=
+      MATCH_CONFIG.minimumPartialMatchedTokens ||
     inputCoverage >= 0.8 ||
     candidateCoverage >= 0.8;
 
-  if (!hasStrongEvidence) {
+  if (!hasUsableEvidence) {
     return {
       score: 0,
-      matchedInputTokens,
-      matchedCandidateTokens,
+      matchedTokenCount,
       inputCoverage,
       candidateCoverage,
-      meaningfulOverlapCount: matchedInputTokens.length,
     };
   }
 
   return {
-    score: inputCoverage * 0.5 + candidateCoverage * 0.35 + jaccard * 0.15,
-    matchedInputTokens,
-    matchedCandidateTokens,
+    score:
+      inputCoverage * 0.5 +
+      candidateCoverage * 0.35 +
+      jaccard * 0.15,
+    matchedTokenCount,
     inputCoverage,
     candidateCoverage,
-    meaningfulOverlapCount: matchedInputTokens.length,
   };
 }
 
-function hasUsablePartialEvidence(item: ScoredSquareService): boolean {
-  /**
-   * Esto permite casos como:
-   * input: "pestañas clásicas full set"
-   * candidate: "Classic Full Set Regular"
-   *
-   * Coinciden "full" + "set". No resolvemos ciegamente si hay varios,
-   * pero tampoco devolvemos none.
-   */
-  return item.meaningfulOverlapCount >= 2;
-}
-
-function getChoiceNumberFromInput(value: string): number | null {
-  const normalized = normalizeSquareServiceSearchText(value);
-  const tokens = normalized.split(" ").filter(Boolean);
-
-  const digitToken = tokens.find((token) => /^\d+$/.test(token));
-  if (digitToken) {
-    const parsed = Number(digitToken);
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-  }
-
-  const choiceWords: Record<string, number> = {
-    primero: 1,
-    primera: 1,
-    uno: 1,
-    one: 1,
-    first: 1,
-
-    segundo: 2,
-    segunda: 2,
-    dos: 2,
-    two: 2,
-    second: 2,
-
-    tercero: 3,
-    tercera: 3,
-    tres: 3,
-    three: 3,
-    third: 3,
-
-    cuarto: 4,
-    cuarta: 4,
-    cuatro: 4,
-    four: 4,
-    fourth: 4,
-
-    quinto: 5,
-    quinta: 5,
-    cinco: 5,
-    five: 5,
-    fifth: 5,
-  };
-
-  for (const token of tokens) {
-    if (choiceWords[token]) return choiceWords[token];
-  }
-
-  return null;
+function hasUsablePartialEvidence(
+  item: ScoredSquareService
+): boolean {
+  return (
+    item.matchedTokenCount >=
+    MATCH_CONFIG.minimumPartialMatchedTokens
+  );
 }
 
 export function resolveSquareServiceFromInput(params: {
@@ -285,44 +275,97 @@ export function resolveSquareServiceFromInput(params: {
   debug?: boolean;
 }): SquareServiceMatch {
   const input = clean(params.input);
-  const normalizedInput = normalizeSquareServiceSearchText(input);
 
-  if (!normalizedInput) return { kind: "none" };
+  const normalizedInput =
+    normalizeSquareServiceSearchText(input);
 
-  const scored: ScoredSquareService[] = params.services
-    .map((service) => {
-      const serviceName = getSquareServiceName(service);
-      const searchText = getSquareServiceSearchText(service);
-      const normalizedServiceName = normalizeSquareServiceSearchText(serviceName);
-      const normalizedSearchText = normalizeSquareServiceSearchText(searchText);
+  if (!normalizedInput) {
+    return {
+      kind: "none",
+    };
+  }
 
-      const scoreDetails = scoreSquareServiceCandidateDetails(input, searchText);
+  if (!Array.isArray(params.services)) {
+    return {
+      kind: "none",
+    };
+  }
 
-      return {
-        service,
-        serviceName,
-        normalizedServiceName,
-        normalizedSearchText,
-        ...scoreDetails,
-      };
-    })
-    .filter((item) => item.serviceName && item.score > 0)
-    .sort((a, b) => b.score - a.score);
+  if (params.services.length === 0) {
+    return {
+      kind: "none",
+    };
+  }
+
+  const scored: ScoredSquareService[] =
+    params.services
+      .map((service) => {
+        const serviceName =
+          getSquareServiceName(service);
+
+        const searchText =
+          getSquareServiceSearchText(service);
+
+        const normalizedServiceName =
+          normalizeSquareServiceSearchText(
+            serviceName
+          );
+
+        const normalizedSearchText =
+          normalizeSquareServiceSearchText(
+            searchText
+          );
+
+        const scoreDetails =
+          scoreSquareServiceCandidateDetails(
+            input,
+            searchText
+          );
+
+        return {
+          service,
+          serviceName,
+          normalizedServiceName,
+          normalizedSearchText,
+          ...scoreDetails,
+        };
+      })
+      .filter(
+        (item) =>
+          Boolean(item.serviceName) &&
+          item.score > 0
+      )
+      .sort((a, b) => b.score - a.score);
 
   const best = scored[0];
 
   if (!best) {
-    return { kind: "none" };
+    return {
+      kind: "none",
+    };
   }
 
-  const exactOrContainedMatches = scored.filter((item) => {
-    return (
-      item.normalizedServiceName === normalizedInput ||
-      item.normalizedSearchText === normalizedInput ||
-      item.normalizedServiceName.includes(normalizedInput) ||
-      item.normalizedSearchText.includes(normalizedInput)
-    );
-  });
+  /**
+   * Primero verificamos coincidencias literales.
+   *
+   * Esta comparación utiliza exclusivamente:
+   * - el input real;
+   * - los nombres reales del catálogo;
+   * - searchText real del provider.
+   */
+  const exactOrContainedMatches = scored.filter(
+    (item) =>
+      item.normalizedServiceName ===
+        normalizedInput ||
+      item.normalizedSearchText ===
+        normalizedInput ||
+      item.normalizedServiceName.includes(
+        normalizedInput
+      ) ||
+      item.normalizedSearchText.includes(
+        normalizedInput
+      )
+  );
 
   if (exactOrContainedMatches.length === 1) {
     const only = exactOrContainedMatches[0];
@@ -338,22 +381,30 @@ export function resolveSquareServiceFromInput(params: {
   if (exactOrContainedMatches.length > 1) {
     return {
       kind: "ambiguous",
-      options: exactOrContainedMatches
-        .slice(0, 5)
-        .map((item) => item.service),
+      options: exactOrContainedMatches.map(
+        (item) => item.service
+      ),
     };
   }
 
   /**
-   * Match fuerte normal.
+   * Matching lexical fuerte.
    */
-  if (best.score >= 0.86) {
-    const closeMatches = scored.filter((item) => best.score - item.score < 0.08);
+  if (
+    best.score >= MATCH_CONFIG.strongScore
+  ) {
+    const closeMatches = scored.filter(
+      (item) =>
+        best.score - item.score <
+        MATCH_CONFIG.closeScoreDelta
+    );
 
-    if (closeMatches.length !== 1) {
+    if (closeMatches.length > 1) {
       return {
         kind: "ambiguous",
-        options: closeMatches.slice(0, 5).map((item) => item.service),
+        options: closeMatches.map(
+          (item) => item.service
+        ),
       };
     }
 
@@ -366,12 +417,15 @@ export function resolveSquareServiceFromInput(params: {
   }
 
   /**
-   * Fallback seguro:
-   * Si el input y los servicios tienen evidencia parcial útil, no devolvemos none.
-   * - Si solo hay un candidato parcial, resolvemos.
-   * - Si hay varios, pedimos elección.
+   * Matching parcial conservador.
+   *
+   * Si varios servicios conservan evidencia compatible,
+   * devolvemos todos para que el resolver contextual
+   * pueda hacer narrowing.
    */
-  const partialMatches = scored.filter(hasUsablePartialEvidence);
+  const partialMatches = scored.filter(
+    hasUsablePartialEvidence
+  );
 
   if (partialMatches.length === 1) {
     const only = partialMatches[0];
@@ -387,38 +441,36 @@ export function resolveSquareServiceFromInput(params: {
   if (partialMatches.length > 1) {
     return {
       kind: "ambiguous",
-      options: partialMatches.slice(0, 5).map((item) => item.service),
+      options: partialMatches.map(
+        (item) => item.service
+      ),
     };
   }
 
-  return { kind: "none" };
+  return {
+    kind: "none",
+  };
 }
 
+/**
+ * Compatibilidad con callers existentes.
+ *
+ * No interpreta:
+ * - números;
+ * - ordinales;
+ * - palabras de idiomas;
+ * - nombres de servicios;
+ * - posiciones en una lista.
+ *
+ * Simplemente vuelve a resolver la respuesta contra
+ * el conjunto dinámico de opciones pendientes.
+ */
 export function resolveSquareServiceChoiceFromInput(params: {
   input: string;
   options: SquareBookableService[];
 }): SquareServiceMatch {
-  const input = clean(params.input);
-
-  if (!input) return { kind: "none" };
-
-  const choiceNumber = getChoiceNumberFromInput(input);
-
-  if (choiceNumber) {
-    const selected = params.options[choiceNumber - 1];
-
-    if (selected) {
-      return {
-        kind: "resolved",
-        service: selected,
-        serviceName: getSquareServiceName(selected),
-        score: 1,
-      };
-    }
-  }
-
   return resolveSquareServiceFromInput({
-    input,
+    input: params.input,
     services: params.options,
   });
 }

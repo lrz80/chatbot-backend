@@ -369,34 +369,20 @@ export async function resolveSquareServiceWithCatalogContext(
       clarificationPrompt,
     });
 
-    if (candidateNames.length >= 2 && confidence >= 0.45) {
-      console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_AMBIGUOUS]", {
-        tenantId: params.tenantId,
-        input,
-        candidateNames,
-        confidence,
-        reason: parsed.reason,
-      });
-
-      return {
-        kind: "ambiguous",
-        candidateNames,
-        confidence,
-        reason: parsed.reason || "MULTIPLE_COMPATIBLE_CATALOG_SERVICES",
-        clarificationPrompt,
-      };
-    }
-
-    if (resolution === "ambiguous" && candidateNames.length >= 2) {
-      return {
-        kind: "ambiguous",
-        candidateNames,
-        confidence,
-        reason: parsed.reason || "AMBIGUOUS_CATALOG_CONTEXT_MATCH",
-        clarificationPrompt,
-      };
-    }
-
+        /**
+     * RESOLVED
+     *
+     * La resolución explícita del modelo tiene prioridad sobre
+     * candidateNames residuales, siempre que:
+     *
+     * 1. exista matchedName;
+     * 2. la confianza sea suficiente;
+     * 3. matchedName exista exactamente dentro del catálogo actual.
+     *
+     * Esto evita convertir accidentalmente un resultado resuelto
+     * en ambiguo solo porque el modelo devolvió candidateNames
+     * adicionales.
+     */
     if (resolution === "resolved") {
       if (!matchedName || confidence < 0.72) {
         return {
@@ -409,12 +395,15 @@ export async function resolveSquareServiceWithCatalogContext(
       }
 
       if (!serviceNames.includes(matchedName)) {
-        console.warn("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_REJECTED_NOT_IN_CATALOG]", {
-          tenantId: params.tenantId,
-          input,
-          matchedName,
-          confidence,
-        });
+        console.warn(
+          "[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_REJECTED_NOT_IN_CATALOG]",
+          {
+            tenantId: params.tenantId,
+            input,
+            matchedName,
+            confidence,
+          }
+        );
 
         return {
           kind: "none",
@@ -438,6 +427,43 @@ export async function resolveSquareServiceWithCatalogContext(
         matchedName,
         confidence,
         reason: parsed.reason || "CATALOG_CONTEXT_MATCH",
+      };
+    }
+
+    /**
+     * AMBIGUOUS
+     *
+     * Solo aceptamos ambigüedad cuando el modelo la declaró
+     * explícitamente y todavía existen al menos dos candidatos
+     * válidos dentro del catálogo actual.
+     */
+    if (resolution === "ambiguous") {
+      if (candidateNames.length < 2) {
+        return {
+          kind: "none",
+          reason: parsed.reason || "INVALID_AMBIGUOUS_RESULT",
+          confidence,
+          matchedName: matchedName || null,
+          candidateNames,
+        };
+      }
+
+      console.log("[VOICE_BOOKING][SQUARE_CONTEXT_MATCH_AMBIGUOUS]", {
+        tenantId: params.tenantId,
+        input,
+        candidateNames,
+        confidence,
+        reason: parsed.reason,
+        clarificationPrompt,
+      });
+
+      return {
+        kind: "ambiguous",
+        candidateNames,
+        confidence,
+        reason:
+          parsed.reason || "MULTIPLE_COMPATIBLE_CATALOG_SERVICES",
+        clarificationPrompt,
       };
     }
 

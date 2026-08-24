@@ -9,7 +9,6 @@ import { getSquareConnectionForTenant } from "../../../../integrations/square/ge
 import { getSquareBookableServices } from "../../../../integrations/square/getSquareBookableServices";
 import {
   getSquareServiceName,
-  resolveSquareServiceChoiceFromInput,
   resolveSquareServiceFromInput,
 } from "./squareServiceMatcher";
 import {
@@ -194,33 +193,18 @@ export async function handleSquareBookingServiceRealtimeStep(
 
   const pendingChoice = getPendingSquareServiceChoice(workingState);
 
-  if (pendingChoice) {
-    const selected = resolveSquareServiceChoiceFromInput({
-      input: value,
-      options: pendingChoice.options,
-    });
-
-    if (selected.kind === "resolved") {
-      const nextState = await applyResolvedSquareService({
-        tenantId,
-        connection: connectionResult.connection,
-        currentIndex,
-        rawAnswers,
-        workingState,
-        targetSlot,
-        stepKey,
-        input: value,
-        service: selected.service,
-        serviceName: selected.serviceName,
-        score: selected.score,
-      });
-
-      return {
-        kind: "continue",
-        workingState: nextState,
-      };
-    }
-
+    if (pendingChoice) {
+    /**
+     * Cuando ya existe una selección ambigua pendiente,
+     * el conjunto de opciones guardado es la única fuente
+     * válida de candidatos para este turno.
+     *
+     * No hacemos selección posicional ni interpretamos
+     * palabras/números mediante reglas locales.
+     *
+     * La respuesta del cliente se resuelve semánticamente
+     * exclusivamente contra el subconjunto pendiente.
+     */
     const pendingContextMatch =
       await resolveSquareServiceWithCatalogContext({
         tenantId,
@@ -229,7 +213,10 @@ export async function handleSquareBookingServiceRealtimeStep(
         services: pendingChoice.options,
       });
 
-    if (pendingContextMatch?.kind === "resolved") {
+    /**
+     * Un único servicio quedó compatible.
+     */
+    if (pendingContextMatch.kind === "resolved") {
       const resolvedService = pendingChoice.options.find(
         (service) =>
           String(getSquareServiceName(service) ?? "").trim() ===
@@ -256,9 +243,28 @@ export async function handleSquareBookingServiceRealtimeStep(
           workingState: nextState,
         };
       }
+
+      console.warn(
+        "[VOICE_BOOKING][SQUARE_PENDING_CONTEXT_RESOLVED_SERVICE_NOT_FOUND]",
+        {
+          tenantId,
+          input: value,
+          matchedName: pendingContextMatch.matchedName,
+          pendingOptionNames: pendingChoice.options
+            .map((service) => getSquareServiceName(service))
+            .filter(Boolean),
+        }
+      );
     }
 
-    if (pendingContextMatch?.kind === "ambiguous") {
+    /**
+     * Todavía existen varios servicios compatibles.
+     *
+     * Reducimos el estado únicamente a los candidatos que
+     * sobrevivieron este turno. Nunca volvemos a ampliar
+     * el conjunto utilizando el catálogo completo.
+     */
+    if (pendingContextMatch.kind === "ambiguous") {
       const narrowedOptions = getSquareServicesByExactNames({
         services: pendingChoice.options,
         names: pendingContextMatch.candidateNames,
@@ -295,38 +301,41 @@ export async function handleSquareBookingServiceRealtimeStep(
           buildRealtimeBookingState,
         });
       }
+
+      console.warn(
+        "[VOICE_BOOKING][SQUARE_PENDING_CONTEXT_INVALID_AMBIGUOUS_RESULT]",
+        {
+          tenantId,
+          input: value,
+          candidateNames: pendingContextMatch.candidateNames,
+          validOptionCount: narrowedOptions.length,
+        }
+      );
     }
 
-    const stateForRetry =
-      selected.kind === "ambiguous"
-        ? setPendingSquareServiceChoice({
-            state: workingState,
-            input: value,
-            options: selected.options,
-          })
-        : workingState;
-
+    /**
+     * El turno no pudo reducir de forma segura la selección.
+     *
+     * Conservamos exactamente el conjunto pendiente actual.
+     * No adivinamos y tampoco volvemos al catálogo completo.
+     */
     const prompt = getLocalizedBookingStepPrompt({
       step: currentStep,
       locale: currentLocale,
       field: "retry_prompt",
-    })
+    });
 
     return buildBookingServiceRetryResult({
-      error:
-        selected.kind === "ambiguous"
-          ? "AMBIGUOUS_BOOKING_SERVICE"
-          : "UNRESOLVED_BOOKING_SERVICE_CHOICE",
+      error: "UNRESOLVED_BOOKING_SERVICE_CHOICE",
       prompt,
       currentStep,
       currentIndex,
       currentLocale,
-      workingState: stateForRetry,
+      workingState,
       steps,
-      serviceOptions:
-        selected.kind === "ambiguous"
-          ? selected.options.map((service) => getSquareServiceName(service))
-          : pendingChoice.options.map((service) => getSquareServiceName(service)),
+      serviceOptions: pendingChoice.options
+        .map((service) => getSquareServiceName(service))
+        .filter(Boolean),
       buildRealtimeBookingState,
     });
   }
