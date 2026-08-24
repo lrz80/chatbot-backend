@@ -1,12 +1,11 @@
 // src/routes/generar-prompt.ts
 
-import { Router, Request, Response } from "express";
-import jwt, { JwtPayload } from "jsonwebtoken";
+import { Router, Response } from "express";
 import pool from "../lib/db";
-import crypto from "crypto";                 // (B) Cache por checksum (sha256)
+import crypto from "crypto";
+import { authenticateUser } from "../middleware/auth";
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
@@ -849,13 +848,16 @@ function buildOperationalRules(funcionesClean: string) {
 
 // ———————————————————————————————————————————————————
 
-router.post("/", async (req: Request, res: Response) => {
-  const token = req.cookies.token;
-  if (!token) return res.status(401).json({ error: "Token requerido" });
-
+router.post("/", authenticateUser, async (req: any, res: Response) => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    const tenant_id = decoded.tenant_id;
+    const tenant_id = req.user?.tenant_id;
+
+    if (!tenant_id) {
+      return res.status(401).json({
+        error: "Tenant no encontrado o no asignado",
+      });
+    }
+
     const { descripcion, informacion, idioma, canal } = req.body;
 
     // 🔥 Normalización robusta: solo whatsapp | meta | preview
