@@ -4,6 +4,7 @@ import { Router, Response } from "express";
 import pool from "../lib/db";
 import crypto from "crypto";
 import { authenticateUser } from "../middleware/auth";
+import { resolveTenantMembershipAccess } from "../lib/guards/tenantMembershipAccess";
 
 const router = Router();
 
@@ -922,8 +923,17 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: "Negocio no encontrado" });
 
-    if (!tenant.membresia_activa) {
-      return res.status(403).json({ error: "Membresía inactiva. Actívala para generar prompts." });
+    const isAdmin = req.user?.is_admin === true;
+
+    const membershipAccess = resolveTenantMembershipAccess(
+      tenant,
+      isAdmin
+    );
+
+    if (!membershipAccess.canEdit) {
+      return res.status(403).json({
+        error: "Membresía inactiva o período de prueba vencido.",
+      });
     }
 
     const nombreNegocio = tenant.name || "nuestro negocio";

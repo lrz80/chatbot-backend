@@ -4,6 +4,7 @@ import express from 'express';
 import { Request, Response } from 'express';
 import pool from '../lib/db';
 import { authenticateUser } from '../middleware/auth';
+import { resolveTenantMembershipAccess } from '../lib/guards/tenantMembershipAccess';
 
 const router = express.Router();
 const normalizeEmail = (e?: string | null) => (e || '').trim().toLowerCase();
@@ -154,15 +155,12 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     // Conveniencias: ¿puede editar/usar por canal? (plan lo incluye + plan activo o trial)
     const isAdmin = req.user?.is_admin === true;
 
-    const plan_activo_o_trial = Boolean(
-      isAdmin ||
-      tenant.membresia_activa ||
-      (
-        tenant.es_trial &&
-        tenant.membresia_vigencia &&
-        new Date(tenant.membresia_vigencia) >= new Date()
-      )
+    const membershipAccess = resolveTenantMembershipAccess(
+      tenant,
+      isAdmin
     );
+
+    const plan_activo_o_trial = membershipAccess.planActivoOTrial;
 
     const can_edit_by_channel = {
       whatsapp: isAdmin || (channel_flags.whatsapp && plan_activo_o_trial),
@@ -174,10 +172,13 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
 
     // ====================== BLOQUE MEMBRESÍA / TRIAL ======================
     const hoy = new Date();
-    const vigencia = tenant.membresia_vigencia ? new Date(tenant.membresia_vigencia) : null;
+
+    const vigencia = tenant.membresia_vigencia
+      ? new Date(tenant.membresia_vigencia)
+      : null;
 
     const es_trial = tenant.es_trial === true;
-    const trial_activo = Boolean(es_trial && vigencia && vigencia >= hoy);
+    const trial_activo = membershipAccess.trialActivo;
 
     // Trial disponible SOLO si:
     //  - NUNCA lo usó por email (trial_registry)
@@ -192,11 +193,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
 
     // Admin siempre puede editar.
     // Los demás usuarios requieren membresía o trial vigente.
-    const can_edit = Boolean(
-      isAdmin ||
-      tenant.membresia_activa ||
-      trial_activo
-    );
+    const can_edit = membershipAccess.canEdit;
 
     // Texto UI (prioriza trial aunque membresía_activa sea true)
     let estado_membresia_texto = '🔴 Inactiva';
