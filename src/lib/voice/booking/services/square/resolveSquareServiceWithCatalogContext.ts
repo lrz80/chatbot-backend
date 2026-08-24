@@ -27,6 +27,15 @@ export type ResolveSquareServiceWithCatalogContextResult =
 type ResolveSquareServiceWithCatalogContextParams = {
   tenantId: string;
   input: string;
+
+  /**
+   * Inputs acumulados durante la desambiguación.
+   *
+   * Son texto real del cliente, sin transformación semántica
+   * ni conocimiento específico del negocio.
+   */
+  contextInputs?: string[];
+
   currentLocale: VoiceLocale;
   services: any[];
 };
@@ -194,6 +203,22 @@ export async function resolveSquareServiceWithCatalogContext(
 
   const input = String(params.input ?? "").trim();
 
+  const contextInputs = Array.isArray(
+    params.contextInputs
+  )
+    ? params.contextInputs
+        .map((item) =>
+          String(item ?? "").trim()
+        )
+        .filter(Boolean)
+    : [];
+
+  const customerInputs =
+    contextInputs.length > 0 &&
+    contextInputs[contextInputs.length - 1] === input
+      ? contextInputs
+      : [...contextInputs, input];
+
   if (!input) {
     return {
       kind: "none",
@@ -277,12 +302,21 @@ export async function resolveSquareServiceWithCatalogContext(
               "candidateNames must contain only entries still compatible with ALL explicit information in the customer's latest answer and the already narrowed pending set. " +
               "If exactly one compatible entry remains after narrowing, return resolution='resolved'. " +
               "If two or more compatible entries remain, return resolution='ambiguous' and ask only about the next unresolved distinction. " +
+              "The customerInputs array contains the ordered customer inputs relevant to the current service-resolution sequence. " +
+              "Evaluate compatibility against the combined meaning of customerInputs, not only the latest customerInput. " +
+              "Information established by an earlier customer input remains active unless the customer explicitly corrects or replaces it. " +
+              "The latest customer input should refine, clarify, correct, or add information to the existing context; do not silently discard compatible constraints established earlier. " +
+              "A clarification question must distinguish the remaining compatible catalog entries. " +
+              "Before returning clarificationPrompt, verify that the distinction being asked about can actually eliminate at least one currently compatible candidate depending on the customer's answer. " +
+              "Do not present alternatives as mutually exclusive if the same candidate is compatible with both alternatives. " +
+              "If a proposed distinction does not partition the remaining candidate set, choose another distinction supported by the catalog entries. " +
               "Return JSON only.",
           },
           {
             role: "user",
             content: JSON.stringify({
               customerInput: input,
+              customerInputs,
               locale: params.currentLocale,
               catalogEntries,
               outputShape: {

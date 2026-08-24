@@ -209,6 +209,7 @@ export async function handleSquareBookingServiceRealtimeStep(
       await resolveSquareServiceWithCatalogContext({
         tenantId,
         input: value,
+        contextInputs: pendingChoice.inputs,
         currentLocale,
         services: pendingChoice.options,
       });
