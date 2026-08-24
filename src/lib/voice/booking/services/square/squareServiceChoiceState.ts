@@ -7,21 +7,17 @@ import type { SquareBookableService } from "../../../../integrations/square/getS
 export type PendingSquareServiceChoice = {
   provider: "square";
 
-  /**
-   * Último input recibido.
-   *
-   * Se mantiene por compatibilidad con callers existentes.
-   */
   input: string;
 
-  /**
-   * Historial ordenado de respuestas utilizadas durante
-   * la resolución del servicio.
-   *
-   * No contiene interpretación, categorías ni reglas de negocio.
-   * Son exclusivamente los textos reales recibidos del cliente.
-   */
   inputs: string[];
+
+  /**
+   * Última pregunta que Aamy hizo para distinguir
+   * entre las opciones pendientes.
+   *
+   * No contiene lógica de negocio ni interpretación.
+   */
+  clarificationPrompt: string;
 
   options: SquareBookableService[];
 };
@@ -88,10 +84,6 @@ export function getPendingSquareServiceChoice(
     return null;
   }
 
-  /**
-   * Compatibilidad con estados creados antes de introducir
-   * `inputs`.
-   */
   let inputs = normalizeInputHistory(
     pendingChoice.inputs
   );
@@ -111,6 +103,9 @@ export function getPendingSquareServiceChoice(
     provider: "square",
     input,
     inputs,
+    clarificationPrompt: clean(
+      pendingChoice.clarificationPrompt
+    ),
     options,
   };
 }
@@ -119,6 +114,7 @@ export function setPendingSquareServiceChoice(params: {
   state: CallState;
   input: string;
   options: SquareBookableService[];
+  clarificationPrompt?: string;
 }): CallState {
   const options = params.options.filter(
     isValidSquareServiceOption
@@ -147,6 +143,9 @@ export function setPendingSquareServiceChoice(params: {
       provider: "square",
       input,
       inputs,
+      clarificationPrompt: clean(
+        params.clarificationPrompt
+      ),
       options,
     },
   } as CallState;

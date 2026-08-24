@@ -27,15 +27,8 @@ export type ResolveSquareServiceWithCatalogContextResult =
 type ResolveSquareServiceWithCatalogContextParams = {
   tenantId: string;
   input: string;
-
-  /**
-   * Inputs acumulados durante la desambiguación.
-   *
-   * Son texto real del cliente, sin transformación semántica
-   * ni conocimiento específico del negocio.
-   */
   contextInputs?: string[];
-
+  previousClarificationPrompt?: string;
   currentLocale: VoiceLocale;
   services: any[];
 };
@@ -310,6 +303,12 @@ export async function resolveSquareServiceWithCatalogContext(
               "Before returning clarificationPrompt, verify that the distinction being asked about can actually eliminate at least one currently compatible candidate depending on the customer's answer. " +
               "Do not present alternatives as mutually exclusive if the same candidate is compatible with both alternatives. " +
               "If a proposed distinction does not partition the remaining candidate set, choose another distinction supported by the catalog entries. " +
+              "The previousClarificationPrompt is the exact question the customer is currently answering. " +
+              "When previousClarificationPrompt is present, interpret customerInput primarily as an answer to that question, while remaining consistent with customerInputs and the current candidate set. " +
+              "Do not interpret a short answer in isolation when its meaning is established by previousClarificationPrompt. " +
+              "If the customer selects, rejects, confirms, or describes one of the distinctions presented in previousClarificationPrompt, use that answer to eliminate incompatible candidates. " +
+              "Do not require the customer's answer to repeat the full catalog entry name. " +
+              "Do not invent service attributes or business-specific rules; derive the meaning only from the clarification question, customer inputs, and provided catalog entries. " +
               "Return JSON only.",
           },
           {
@@ -317,12 +316,17 @@ export async function resolveSquareServiceWithCatalogContext(
             content: JSON.stringify({
               customerInput: input,
               customerInputs,
+              previousClarificationPrompt: String(
+                params.previousClarificationPrompt ?? ""
+              ).trim(),
               locale: params.currentLocale,
               catalogEntries,
               outputShape: {
                 resolution: "resolved | ambiguous | none",
                 matchedName: "exact catalog entry name or null",
-                candidateNames: ["exact catalog entry names when ambiguous"],
+                candidateNames: [
+                  "exact catalog entry names when ambiguous",
+                ],
                 confidence: "number from 0 to 1",
                 reason: "short explanation",
                 clarificationPrompt:

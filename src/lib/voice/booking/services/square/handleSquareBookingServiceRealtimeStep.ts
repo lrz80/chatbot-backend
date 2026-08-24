@@ -210,6 +210,8 @@ export async function handleSquareBookingServiceRealtimeStep(
         tenantId,
         input: value,
         contextInputs: pendingChoice.inputs,
+        previousClarificationPrompt:
+          pendingChoice.clarificationPrompt,
         currentLocale,
         services: pendingChoice.options,
       });
@@ -604,6 +606,8 @@ export async function handleSquareBookingServiceRealtimeStep(
           state: workingState,
           input: matchedInput,
           options: match.options,
+          clarificationPrompt:
+            semanticClarificationPrompt,
         })
       : workingState;
 
