@@ -98,7 +98,7 @@ router.post(
 
         state,
 
-        embedded_signup_version: "4",
+        embedded_signup_version: "3",
       });
     } catch (err) {
       console.error(

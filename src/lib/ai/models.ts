@@ -1,8 +1,14 @@
 //src/lib/ai/models.ts
-export const AI_MODELS = {
-  realtime: process.env.OPENAI_REALTIME_MODEL || "gpt-realtime",
+// src/lib/ai/models.ts
 
-  realtimeTranscription: "gpt-live-transcribe",
+export const AI_MODELS = {
+  realtime:
+    process.env.OPENAI_REALTIME_MODEL ||
+    "gpt-realtime",
+
+  realtimeTranscription:
+    process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL ||
+    "gpt-live-transcribe",
 
   fast:
     process.env.OPENAI_MODEL_FAST ||

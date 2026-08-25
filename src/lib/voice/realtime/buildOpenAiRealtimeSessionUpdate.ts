@@ -1,5 +1,7 @@
 // src/lib/voice/realtime/buildOpenAiRealtimeSessionUpdate.ts
 
+import { AI_MODELS } from "../../ai/models";
+
 type BuildOpenAiRealtimeSessionUpdateParams = {
   instructions: string;
   voice: string;
@@ -258,7 +260,7 @@ export function buildOpenAiRealtimeSessionUpdate(
             type: "audio/pcmu",
           },
           transcription: {
-            model: "gpt-live-transcribe",
+            model: AI_MODELS.realtimeTranscription,
           },
           turn_detection: buildRealtimeTurnDetection(),
         },
