@@ -99,6 +99,7 @@ import twilioVoiceSetupRouter from "./routes/twilioVoiceSetup";
 import monthlySummaryReportRouter from "./routes/reports/monthly-summary";
 import fieldOperationsRouter from "./modules/field-operations/routes/fieldOperations.routes";
 import adminTenantsRoutes from "./routes/adminTenants";
+import onboardingRoutes from "./routes/onboarding";
 import conversationsRoutes from "./routes/conversations";
 
 if (process.env.NODE_ENV !== 'production') {
@@ -257,6 +258,7 @@ app.use(
 );
 app.use("/api/reports", monthlySummaryReportRouter);
 app.use("/api/admin/tenants", adminTenantsRoutes);
+app.use("/api/onboarding", onboardingRoutes);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
