@@ -91,11 +91,22 @@ async function assertPublicUrl(raw: string): Promise<URL> {
 
 /* ───────────────────────── Lectura del sitio ───────────────────────── */
 
-async function fetchPage(startUrl: string): Promise<string | null> {
+const BOT_UA = "AamyBot/1.0 (+https://aamy.ai) read-only business scan";
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+type FetchResult = { html: string | null; reason: string };
+
+async function fetchPage(startUrl: string, userAgent: string): Promise<FetchResult> {
   let current = startUrl;
 
   for (let hop = 0; hop < 4; hop++) {
-    const url = await assertPublicUrl(current);
+    let url: URL;
+    try {
+      url = await assertPublicUrl(current);
+    } catch (e: any) {
+      return { html: null, reason: `url bloqueada: ${e?.message}` };
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -105,35 +116,36 @@ async function fetchPage(startUrl: string): Promise<string | null> {
         redirect: "manual",
         signal: controller.signal,
         headers: {
-          "User-Agent": "AamyBot/1.0 (+https://aamy.ai) read-only business scan",
+          "User-Agent": userAgent,
           Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
         },
       });
 
       if ([301, 302, 303, 307, 308].includes(resp.status)) {
         const loc = resp.headers.get("location");
-        if (!loc) return null;
+        if (!loc) return { html: null, reason: `redirect ${resp.status} sin location` };
         current = new URL(loc, url).toString();
         continue;
       }
 
-      if (!resp.ok) return null;
+      if (!resp.ok) return { html: null, reason: `HTTP ${resp.status}` };
 
       const type = resp.headers.get("content-type") || "";
-      if (!type.includes("text/html") && !type.includes("xhtml")) return null;
+      if (!type.includes("text/html") && !type.includes("xhtml")) {
+        return { html: null, reason: `content-type ${type || "vacio"}` };
+      }
 
       const buf = await resp.arrayBuffer();
-      if (buf.byteLength > MAX_BYTES_PER_PAGE) {
-        return Buffer.from(buf).subarray(0, MAX_BYTES_PER_PAGE).toString("utf8");
-      }
-      return Buffer.from(buf).toString("utf8");
-    } catch {
-      return null;
+      const html = Buffer.from(buf).subarray(0, MAX_BYTES_PER_PAGE).toString("utf8");
+      return { html, reason: "ok" };
+    } catch (e: any) {
+      return { html: null, reason: `error de red: ${e?.name || ""} ${e?.message || ""}`.trim() };
     } finally {
       clearTimeout(timer);
     }
   }
-  return null;
+  return { html: null, reason: "demasiadas redirecciones" };
 }
 
 function htmlToText(html: string): string {
@@ -147,6 +159,12 @@ function htmlToText(html: string): string {
     .join("\n")
     .slice(0, 3000);
 
+  const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "").trim();
+  const metaDesc =
+    html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i)?.[1] ||
+    html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)["']/i)?.[1] ||
+    "";
+
   const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -159,6 +177,8 @@ function htmlToText(html: string): string {
     .slice(0, MAX_CHARS_PER_PAGE);
 
   const extras = [
+    title ? `TITULO: ${title}` : "",
+    metaDesc ? `DESCRIPCION META: ${metaDesc}` : "",
     tels.length ? `TELEFONOS EN LINKS: ${[...new Set(tels)].join(", ")}` : "",
     mails.length ? `CORREOS EN LINKS: ${[...new Set(mails)].join(", ")}` : "",
     jsonLd ? `DATOS ESTRUCTURADOS: ${jsonLd}` : "",
@@ -183,10 +203,29 @@ async function readWebsite(rootUrl: URL): Promise<{ text: string; pagesRead: str
 
   for (const pageUrl of candidates) {
     if (pagesRead.length >= MAX_PAGES) break;
-    const html = await fetchPage(pageUrl);
-    if (!html) continue;
-    const text = htmlToText(html);
-    if (text.length < 80) continue;
+
+    let result = await fetchPage(pageUrl, BOT_UA);
+    if (!result.html) {
+      // Algunos sitios bloquean bots: reintentar como navegador normal
+      const retry = await fetchPage(pageUrl, BROWSER_UA);
+      if (retry.html) result = retry;
+    }
+
+    if (!result.html) {
+      console.log("[ONBOARDING][PAGE_SKIPPED]", { pageUrl, reason: result.reason });
+      continue;
+    }
+
+    const text = htmlToText(result.html);
+    if (text.length < 40) {
+      console.log("[ONBOARDING][PAGE_EMPTY]", {
+        pageUrl,
+        htmlBytes: result.html.length,
+        note: "poco texto: el sitio probablemente se arma con JavaScript",
+      });
+      continue;
+    }
+
     pagesRead.push(pageUrl);
     chunks.push(`### PAGINA: ${pageUrl}\n${text}`);
   }
