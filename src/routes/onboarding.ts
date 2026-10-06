@@ -153,8 +153,8 @@ function htmlToText(html: string): string {
   const tels = [...html.matchAll(/href=["']tel:([^"']+)["']/gi)].map((m) => m[1]);
   const mails = [...html.matchAll(/href=["']mailto:([^"'?]+)/gi)].map((m) => m[1]);
   const waNumbers = [
-    ...[...html.matchAll(/wa\.me\/\+?(\d{8,15})/gi)].map((m) => m[1]),
-    ...[...html.matchAll(/whatsapp\.com\/send\/?\?[^"']*phone=\+?(\d{8,15})/gi)].map((m) => m[1]),
+    ...[...html.matchAll(/wa\.me\/\+*(\d{8,15})/gi)].map((m) => m[1]),
+    ...[...html.matchAll(/whatsapp\.com\/send\/?\?[^"']*phone=(?:\+|%2B|\s)*(\d{8,15})/gi)].map((m) => m[1]),
   ];
 
   // Datos estructurados (JSON-LD) suelen traer dirección y horarios limpios
