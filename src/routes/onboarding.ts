@@ -152,6 +152,10 @@ function htmlToText(html: string): string {
   // Teléfonos y correos que viven en links (tel: / mailto:)
   const tels = [...html.matchAll(/href=["']tel:([^"']+)["']/gi)].map((m) => m[1]);
   const mails = [...html.matchAll(/href=["']mailto:([^"'?]+)/gi)].map((m) => m[1]);
+  const waNumbers = [
+    ...[...html.matchAll(/wa\.me\/\+?(\d{8,15})/gi)].map((m) => m[1]),
+    ...[...html.matchAll(/whatsapp\.com\/send\/?\?[^"']*phone=\+?(\d{8,15})/gi)].map((m) => m[1]),
+  ];
 
   // Datos estructurados (JSON-LD) suelen traer dirección y horarios limpios
   const jsonLd = [...html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)]
@@ -180,6 +184,7 @@ function htmlToText(html: string): string {
     title ? `TITULO: ${title}` : "",
     metaDesc ? `DESCRIPCION META: ${metaDesc}` : "",
     tels.length ? `TELEFONOS EN LINKS: ${[...new Set(tels)].join(", ")}` : "",
+    waNumbers.length ? `WHATSAPP EN LINKS: ${[...new Set(waNumbers)].join(", ")}` : "",
     mails.length ? `CORREOS EN LINKS: ${[...new Set(mails)].join(", ")}` : "",
     jsonLd ? `DATOS ESTRUCTURADOS: ${jsonLd}` : "",
   ]
@@ -256,6 +261,8 @@ Reglas:
 - "description": 1 a 3 oraciones, en el mismo idioma del sitio.
 - "services": lista corta y concreta.
 - "policies": garantías, cancelaciones, pagos, cobertura o áreas de servicio si se mencionan.
+- "business_name": usa el nombre comercial tal como aparece en el sitio (título, logo o encabezados), NO el dominio.
+- "phone": si no hay un teléfono explícito pero hay un número de WhatsApp en los links, úsalo en formato +<código país><número>.
 - No incluyas texto fuera del JSON.`;
 
 type Proposal = {
